@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: bde1ad39ca57bef489dff54d3593d827
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Editor/Scripts/ShapEditor.cs
+  uploadId: 729164

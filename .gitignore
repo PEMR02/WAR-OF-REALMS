@@ -1,0 +1,26 @@
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Mm]emoryCaptures/
+
+# User settings
+UserSettings/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Crash reports
+sysinfo.txt
+
+# Unity meta files
+!Assets/**/*.meta
+!Packages/**/*.meta
+!ProjectSettings/**/*.meta

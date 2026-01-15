@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 1ee30020ecc2081458d90d68aff7f88a
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Demo/Shap-E Editor Launcher.unity
+  uploadId: 729164

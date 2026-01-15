@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 10a7bd0e21e66ea449b146d352ac63c4
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Demo/Scripts/CanvasController.cs
+  uploadId: 729164

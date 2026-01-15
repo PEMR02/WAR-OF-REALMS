@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 7c12cb4c07ceebf4fb9f9e6c1c9be55d
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 185377
+  packageName: RTS 3D Select
+  packageVersion: 1.1
+  assetPath: Assets/RTS Selector/Info.txt
+  uploadId: 428606

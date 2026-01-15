@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 77ccaf49895b0d64e87cd4b4faf83c49
+AssemblyDefinitionImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Runtime/Mesh.Runtime.asmdef
+  uploadId: 729164

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 4a635d7901c32294a9c82ac6e86c4b12
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 4300000
+  userData: UnityMeshSimplifierLODAsset
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/LODs/Low_poly_tree/Low_poly_tree/01_unnamed.mesh
+  uploadId: 729164

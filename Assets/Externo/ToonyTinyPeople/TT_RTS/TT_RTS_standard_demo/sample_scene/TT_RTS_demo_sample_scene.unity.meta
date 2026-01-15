@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: f8a018ba0df906c4d91b93f1892f367f
+timeCreated: 1552272460
+licenseType: Store
+DefaultImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 141705
+  packageName: Toony Tiny RTS Demo
+  packageVersion: 1.0
+  assetPath: Assets/ToonyTinyPeople/TT_RTS/TT_RTS_standard_demo/sample_scene/TT_RTS_demo_sample_scene.unity
+  uploadId: 299302

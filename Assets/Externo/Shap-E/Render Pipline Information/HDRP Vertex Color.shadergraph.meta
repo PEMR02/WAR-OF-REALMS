@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 02c479f6e419c824f8e7e42e4b7957ad
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Render Pipline Information/HDRP Vertex Color.shadergraph
+  uploadId: 729164

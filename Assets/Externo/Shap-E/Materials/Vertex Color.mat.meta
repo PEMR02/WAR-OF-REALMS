@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 0b936cbce16e515438047a2675a59692
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Materials/Vertex Color.mat
+  uploadId: 729164

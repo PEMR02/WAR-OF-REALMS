@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: 9c28cdb06c3081f438483c93cf3cb838
+AssetOrigin:
+  serializedVersion: 1
+  productId: 342124
+  packageName: NavMesh From Colliders
+  packageVersion: 1.0
+  assetPath: Assets/NavMeshFromColliders/Sample/Scripts/SampleSceneScript.cs
+  uploadId: 811522

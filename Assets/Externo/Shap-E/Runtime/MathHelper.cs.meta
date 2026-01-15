@@ -1,0 +1,20 @@
+fileFormatVersion: 2
+guid: 357db0e904ae217429ee73402643842b
+timeCreated: 1516803305
+licenseType: Store
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Runtime/MathHelper.cs
+  uploadId: 729164

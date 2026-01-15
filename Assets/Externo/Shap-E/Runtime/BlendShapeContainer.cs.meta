@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: f3c9e5cde78dbf6409253a8e635c54cb
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Runtime/BlendShapeContainer.cs
+  uploadId: 729164

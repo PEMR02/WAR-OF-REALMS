@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 3294e93619ef21548b5276a6fd7c5ad9
+timeCreated: 1552272730
+licenseType: Store
+NativeFormatImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 141705
+  packageName: Toony Tiny RTS Demo
+  packageVersion: 1.0
+  assetPath: Assets/ToonyTinyPeople/TT_RTS/TT_RTS_standard_demo/models/Materials/TT_RTS_Units.mat
+  uploadId: 299302

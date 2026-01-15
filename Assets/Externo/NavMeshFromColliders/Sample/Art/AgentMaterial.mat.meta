@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 166d87f4ab336f446a77a4058cf8f0f9
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 342124
+  packageName: NavMesh From Colliders
+  packageVersion: 1.0
+  assetPath: Assets/NavMeshFromColliders/Sample/Art/AgentMaterial.mat
+  uploadId: 811522

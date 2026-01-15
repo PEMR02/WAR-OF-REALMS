@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: fd1726abc7fa4e74bb63730bbee424c0
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Runtime/MeshSimplifier.cs
+  uploadId: 729164

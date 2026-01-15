@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 5d41729de84583e4d8ffb74a04e292c2
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Runtime/LODGenerator.cs
+  uploadId: 729164

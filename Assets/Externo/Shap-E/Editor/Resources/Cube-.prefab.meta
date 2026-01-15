@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: b6202e75dd40c254bbeea57e6b49fd35
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267180
+  packageName: Shap-E - Text-to-3D
+  packageVersion: 2.0
+  assetPath: Assets/Shap-E/Editor/Resources/Cube.prefab
+  uploadId: 729164

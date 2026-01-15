@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 68f455551d65b484a86a8d619d3825ff
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 185377
+  packageName: RTS 3D Select
+  packageVersion: 1.1
+  assetPath: Assets/RTS Selector/Prefabs/Highlight Ring.prefab
+  uploadId: 428606
