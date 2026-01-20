@@ -49,8 +49,6 @@ namespace Project.UI
             if (build == null) build = FindFirstObjectByType<BuildModeController>();
             if (selection == null) selection = FindFirstObjectByType<RTSSelectionController>();
 
-            Debug.Log($"VillagerBuildHUD Awake: build={build != null}, selection={selection != null}");
-
             // Organizar arrays para facilitar acceso
             _categoryButtons = new Button[] { btnCategoryEcon, btnCategoryMilitary, btnCategoryDefenses, btnCategorySpecial };
             _slotButtons = new Button[] { btnSlot1, btnSlot2, btnSlot3, btnSlot4, btnSlot5, btnSlot6, btnSlot7, btnSlot8, btnSlot9 };
@@ -70,7 +68,7 @@ namespace Project.UI
                     _slotLabels[i] = _slotButtons[i].GetComponentInChildren<TextMeshProUGUI>();
             }
 
-            // CRUCIAL: Agregar CanvasGroup para bloquear raycasts y evitar que clicks atraviesen al mundo
+            // Agregar CanvasGroup para bloquear raycasts y evitar que clicks atraviesen al mundo
             if (rootPanelCategories != null)
             {
                 _categoriesCanvasGroup = rootPanelCategories.GetComponent<CanvasGroup>();
@@ -78,7 +76,6 @@ namespace Project.UI
                     _categoriesCanvasGroup = rootPanelCategories.AddComponent<CanvasGroup>();
                 _categoriesCanvasGroup.blocksRaycasts = true;
                 _categoriesCanvasGroup.interactable = true;
-                Debug.Log("VillagerBuildHUD: CanvasGroup agregado a Panel_Categories");
             }
 
             if (rootPanelSlots != null)
@@ -88,7 +85,6 @@ namespace Project.UI
                     _slotsCanvasGroup = rootPanelSlots.AddComponent<CanvasGroup>();
                 _slotsCanvasGroup.blocksRaycasts = true;
                 _slotsCanvasGroup.interactable = true;
-                Debug.Log("VillagerBuildHUD: CanvasGroup agregado a Panel_Slots");
             }
 
             // Hook category buttons
@@ -129,11 +125,6 @@ namespace Project.UI
                 build.OnStateChanged += OnBuildStateChanged;
                 build.OnCategoryChanged += OnCategoryChanged;
                 build.OnBuildingChanged += OnBuildingChanged;
-                Debug.Log("VillagerBuildHUD: Eventos suscritos correctamente");
-            }
-            else
-            {
-                Debug.LogError("VillagerBuildHUD: build es NULL en OnEnable, eventos NO suscritos!");
             }
         }
 
@@ -154,16 +145,14 @@ namespace Project.UI
             // Si cambió el estado de selección, actúa
             if (hasVillagers != _lastHasVillagers)
             {
-                Debug.Log($"VillagerBuildHUD: Update - Cambió selección: hasVillagers={hasVillagers}, estado={build?.state}");
                 _lastHasVillagers = hasVillagers;
 
                 if (!hasVillagers)
                 {
-                    Debug.LogWarning("VillagerBuildHUD: Aldeanos DESELECCIONADOS - Cancelando build mode");
                     // Si pierdes aldeanos, cerrar HUD (y salir del modo build gradualmente)
                     HideAllPanels();
                     if (build != null && build.state != BuildState.Idle)
-                        build.Cancel(); // se irá cerrando en 1-3 frames
+                        build.Cancel();
                     return;
                 }
                 else
@@ -202,7 +191,6 @@ namespace Project.UI
                     {
                         if (!rootPanelSlots.activeSelf)
                         {
-                            Debug.LogWarning($"VillagerBuildHUD: Update detectó que Panel_Slots está desactivado. Estado: {build.state}, Reactivando...");
                             rootPanelSlots.SetActive(true);
                             rootPanelSlots.transform.SetAsLastSibling();
                         }
@@ -214,14 +202,6 @@ namespace Project.UI
                             {
                                 _slotButtons[i].gameObject.SetActive(true);
                             }
-                        }
-                        
-                        // Verificar que el Canvas esté activo
-                        Canvas canvas = rootPanelSlots.GetComponentInParent<Canvas>();
-                        if (canvas != null && !canvas.gameObject.activeInHierarchy)
-                        {
-                            Debug.LogWarning("VillagerBuildHUD: Canvas está desactivado!");
-                            canvas.gameObject.SetActive(true);
                         }
                     }
                     // Asegurar que Panel_Categories esté completamente desactivado
@@ -235,7 +215,6 @@ namespace Project.UI
 
         void OnBuildStateChanged(BuildState newState)
         {
-            Debug.Log($"VillagerBuildHUD: OnBuildStateChanged llamado - Nuevo estado: {newState}");
             RefreshUI();
         }
 
@@ -251,19 +230,11 @@ namespace Project.UI
 
         void OnCategoryClick(BuildCategory cat)
         {
-            Debug.Log($"VillagerBuildHUD: OnCategoryClick - Categoría: {cat}, build={build != null}, Estado actual: {build?.state}");
-            
             if (build != null)
             {
                 build.EnterCategory(cat);
-                Debug.Log($"VillagerBuildHUD: Después de EnterCategory - Nuevo estado: {build.state}");
-                
                 // Forzar refresh inmediato después del clic
                 StartCoroutine(ForceRefreshAfterClick());
-            }
-            else
-            {
-                Debug.LogError("VillagerBuildHUD: build es NULL en OnCategoryClick!");
             }
         }
         
@@ -272,7 +243,6 @@ namespace Project.UI
             yield return null; // Esperar 1 frame
             if (build != null && build.state == BuildState.Category)
             {
-                Debug.Log($"VillagerBuildHUD: ForceRefreshAfterClick - Estado: {build.state}, Panel_Slots activo: {rootPanelSlots?.activeSelf}");
                 RefreshUI();
             }
         }
@@ -333,13 +303,6 @@ namespace Project.UI
                                     cg.blocksRaycasts = true;
                                 }
                             }
-                        }
-                        
-                        // Verificar tamaño del panel (debe ser suficiente para 9 botones en grid 3x3)
-                        RectTransform rt = rootPanelSlots.GetComponent<RectTransform>();
-                        if (rt != null && rt.sizeDelta.y < 280)
-                        {
-                            Debug.LogWarning($"VillagerBuildHUD: Panel_Slots height ({rt.sizeDelta.y}) es muy pequeño para 9 botones. Recomendado: mínimo 280");
                         }
                     }
                     
