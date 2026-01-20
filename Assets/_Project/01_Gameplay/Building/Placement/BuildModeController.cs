@@ -64,11 +64,24 @@ public class BuildModeController : MonoBehaviour
 
     public void PickSlot(int slot)
 	{
-		if (state != BuildState.Category || currentCategory == null) return;
+		// Permitir en Category O Placing (para cambiar edificio en caliente)
+		if (currentCategory == null) return;
+		if (state != BuildState.Category && state != BuildState.Placing) return;
 		if (catalog == null) return;
 
 		var b = catalog.Get(currentCategory.Value, slot);
-		if (b == null) return;
+		if (b == null) 
+		{
+			Debug.LogWarning($"BuildModeController: No hay edificio en slot {slot} para categoría {currentCategory}");
+			return;
+		}
+
+		// Si estamos en Placing, cancelar el ghost actual primero
+		if (state == BuildState.Placing && placer != null)
+		{
+			Debug.Log($"BuildModeController: Cancelando placing actual para cambiar a {b.name}");
+			placer.Cancel();
+		}
 
 		currentBuilding = b;
 		OnBuildingChanged?.Invoke(b);
@@ -104,18 +117,21 @@ public class BuildModeController : MonoBehaviour
 
     void SetState(BuildState s)
     {
+        Debug.Log($"BuildModeController: SetState({s}) - Estado anterior: {state}");
         state = s;
         OnStateChanged?.Invoke(s);
     }
 
     void SetCategory(BuildCategory? c)
     {
+        Debug.Log($"BuildModeController: SetCategory({c}) - Categoría anterior: {currentCategory}");
         currentCategory = c;
         OnCategoryChanged?.Invoke(c);
     }
 
     void SetBuilding(BuildingSO b)
     {
+        Debug.Log($"BuildModeController: SetBuilding({(b != null ? b.name : "null")})");
         currentBuilding = b;
         OnBuildingChanged?.Invoke(b);
     }

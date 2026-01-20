@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.EventSystems;
 
 namespace Project.Gameplay.Units
 {
@@ -56,6 +57,12 @@ namespace Project.Gameplay.Units
             // LMB pressed -> start drag
             if (mouse.leftButton.wasPressedThisFrame)
             {
+                // CRUCIAL: Ignorar clicks sobre UI (botones, paneles, etc)
+                if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+                {
+                    return; // Hay UI bajo el cursor, no procesar selección
+                }
+
                 _dragStart = mouse.position.ReadValue();
                 _isDragging = true;
 
@@ -77,6 +84,12 @@ namespace Project.Gameplay.Units
 
                 // Ocultar rectángulo al soltar
                 selectionBoxUI?.Hide();
+
+                // CRUCIAL: Si el cursor está sobre UI al soltar, cancelar selección
+                if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+                {
+                    return; // Hay UI bajo el cursor, no procesar selección
+                }
 
                 bool isBox = Vector2.Distance(_dragStart, dragEnd) > 8f;
 
