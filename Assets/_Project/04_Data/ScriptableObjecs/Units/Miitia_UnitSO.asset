@@ -10,17 +10,13 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 76b4b4bbc0baa484d8e426377420dcc4, type: 3}
-  m_Name: Militia_UnitSO
+  m_Name: Miitia_UnitSO
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
-  id: militia
-  displayName: Milicia
-  prefab: {fileID: 7586646631000710113, guid: 8b27da79cbe31744ea59c5e24b93a355, type: 3}
-  costs:
-  - kind: 0
-    amount: 50
-  - kind: 3
-    amount: 20
-  trainingTimeSeconds: 12
+  id: 
+  displayName: 
+  prefab: {fileID: 0}
+  costs: []
+  trainingTimeSeconds: 15
   maxHP: 100
-  attack: 8
+  attack: 10
   moveSpeed: 3.5

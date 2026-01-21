@@ -9,9 +9,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 0, type: 3}
+  m_Script: {fileID: 11500000, guid: 76b4b4bbc0baa484d8e426377420dcc4, type: 3}
   m_Name: Archer_UnitSO
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
   id: archer
   displayName: Arquero
   prefab: {fileID: 0}

@@ -9,16 +9,13 @@ MonoBehaviour:
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 0, type: 3}
+  m_Script: {fileID: 11500000, guid: 5b73f1a381c39f44cb2c80b5e3e80510, type: 3}
   m_Name: ProductionCatalog_Asset
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.ProductionCatalog
   entries:
-  - buildingId: barracks
+  - buildingId: Barracks
     slot: 1
-    unit: {fileID: 11400000, guid: 0, type: 2}
-  - buildingId: barracks
+    unit: {fileID: 11400000, guid: 50f025d25b67e1541a380604240c22be, type: 2}
+  - buildingId: Barracks
     slot: 2
-    unit: {fileID: 11400000, guid: 0, type: 2}
-  - buildingId: archery_range
-    slot: 1
-    unit: {fileID: 11400000, guid: 0, type: 2}
+    unit: {fileID: 11400000, guid: 50f025d25b67e1541a380604240c22be, type: 2}

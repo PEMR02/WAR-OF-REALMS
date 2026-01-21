@@ -23,6 +23,22 @@ namespace Project.Gameplay.Buildings
         public event Action<UnitSO> OnUnitCompleted;
         public event Action OnQueueChanged;
 
+        void Awake()
+        {
+            // Auto-asignar owner si no está asignado
+            if (owner == null)
+                owner = FindFirstObjectByType<PlayerResources>();
+
+            // Auto-crear SpawnPoint si no existe
+            if (spawnPoint == null)
+            {
+                GameObject spawnObj = new GameObject("SpawnPoint");
+                spawnObj.transform.SetParent(transform);
+                spawnObj.transform.localPosition = new Vector3(0, 0, 5); // Delante del edificio
+                spawnPoint = spawnObj.transform;
+            }
+        }
+
         void Update()
         {
             if (queue.IsProducing)

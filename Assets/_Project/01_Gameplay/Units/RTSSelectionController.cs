@@ -251,6 +251,11 @@ namespace Project.Gameplay.Units
         
         public System.Collections.Generic.IReadOnlyList<UnitSelectable> GetSelected() => _selected;
 		
+		/// <summary>
+		/// Obtiene el edificio actualmente seleccionado (si hay uno)
+		/// </summary>
+		public Project.Gameplay.Buildings.BuildingSelectable GetSelectedBuilding() => _selectedBuilding;
+		
 		public int CountSelectedWithComponent<T>() where T : Component
 		{
 			int c = 0;

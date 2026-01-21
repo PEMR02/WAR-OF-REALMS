@@ -1,5 +1,36 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!1 &6052161373069402136
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3455479600430666126}
+  m_Layer: 7
+  m_Name: SpawnPoint
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3455479600430666126
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6052161373069402136}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 5}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 329007711214334050}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &6239120701045057464
 GameObject:
   m_ObjectHideFlags: 0
@@ -15,7 +46,10 @@ GameObject:
   - component: {fileID: 2160804327115725065}
   - component: {fileID: 4200846873403372071}
   - component: {fileID: 1531377365773372521}
-  m_Layer: 11
+  - component: {fileID: 4391590623145872046}
+  - component: {fileID: 4265377889258447250}
+  - component: {fileID: 4151203798115665305}
+  m_Layer: 7
   m_Name: PF_Barracks
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -34,7 +68,8 @@ Transform:
   m_LocalPosition: {x: 22.82, y: 1.78, z: -6.65628}
   m_LocalScale: {x: 5, y: 2.5, z: 3}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 3455479600430666126}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!33 &6043714411112453528
@@ -158,3 +193,49 @@ NavMeshObstacle:
   m_CarveOnlyStationary: 1
   m_Center: {x: 0, y: 0, z: 0}
   m_TimeToStationary: 0.5
+--- !u!114 &4391590623145872046
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6239120701045057464}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e9645bf27f31ff24e928d23b717dadac, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingInstance
+  buildingSO: {fileID: 11400000, guid: 9c2f671def68f8445a72c8883eba8dff, type: 2}
+  constructionProgress: 1
+  isComplete: 1
+--- !u!114 &4265377889258447250
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6239120701045057464}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cc4fb401ac188344b880ceb22dc1f4fa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.ProductionBuilding
+  owner: {fileID: 0}
+  spawnPoint: {fileID: 3455479600430666126}
+  queue:
+    _queue: []
+    _currentProgress: 0
+--- !u!114 &4151203798115665305
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6239120701045057464}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a38f6c166d08fbf4a929d6e5ab552e20, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSelectable
+  renderers: []
+  highlightIntensity: 0.2

@@ -97,6 +97,10 @@ namespace Project.UI
             ProductionBuilding building = GetSelectedProductionBuilding();
             bool hasProductionBuilding = building != null;
 
+            // DEBUG temporal
+            if (hasProductionBuilding && building != _currentBuilding)
+                Debug.Log($"[ProductionHUD] Edificio productor detectado: {building.gameObject.name}");
+
             // Si cambió la selección
             if (hasProductionBuilding != _lastHasProductionBuilding || building != _currentBuilding)
             {
@@ -131,17 +135,26 @@ namespace Project.UI
             if (selection == null)
                 return null;
 
-            var selectedUnits = selection.GetSelected();
-            if (selectedUnits == null || selectedUnits.Count == 0)
-                return null;
-
-            // Revisar si alguna selección tiene ProductionBuilding
-            foreach (var selectable in selectedUnits)
+            // Verificar si hay un edificio seleccionado
+            var selectedBuilding = selection.GetSelectedBuilding();
+            if (selectedBuilding != null)
             {
-                if (selectable == null) continue;
-                var building = selectable.GetComponent<ProductionBuilding>();
-                if (building != null)
-                    return building;
+                var productionBuilding = selectedBuilding.GetComponent<ProductionBuilding>();
+                if (productionBuilding != null)
+                    return productionBuilding;
+            }
+
+            // Fallback: revisar unidades seleccionadas (por si alguna unidad tiene ProductionBuilding)
+            var selectedUnits = selection.GetSelected();
+            if (selectedUnits != null && selectedUnits.Count > 0)
+            {
+                foreach (var selectable in selectedUnits)
+                {
+                    if (selectable == null) continue;
+                    var building = selectable.GetComponent<ProductionBuilding>();
+                    if (building != null)
+                        return building;
+                }
             }
 
             return null;
