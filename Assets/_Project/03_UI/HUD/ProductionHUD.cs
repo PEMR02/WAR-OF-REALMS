@@ -39,6 +39,7 @@ namespace Project.UI
         [Header("Text Labels")]
         public TextMeshProUGUI titleText;           // Nombre del edificio
         public TextMeshProUGUI progressText;        // "Entrenando: Milicia (45%)"
+        public Slider progressBar;                  // Barra de progreso visual
 
         private Button[] _unitButtons;
         private TextMeshProUGUI[] _unitLabels;
@@ -234,7 +235,10 @@ namespace Project.UI
                     if (_unitLabels[arrayIndex] != null)
                     {
                         if (hasUnit)
-                            _unitLabels[arrayIndex].text = $"{slot}. {unit.displayName}";
+                        {
+                            string costString = GetCostString(unit);
+                            _unitLabels[arrayIndex].text = $"{slot}. {unit.displayName}\n{costString}";
+                        }
                         else
                             _unitLabels[arrayIndex].text = $"{slot}.";
                     }
@@ -276,12 +280,34 @@ namespace Project.UI
                 }
                 else
                 {
-                    // Crear item simple de texto
+                    // Crear item simple con botón de cancelar
                     GameObject itemObj = new GameObject($"QueueItem_{i}");
                     itemObj.transform.SetParent(queueContainer);
+                    itemObj.AddComponent<UnityEngine.UI.LayoutElement>().preferredHeight = 25;
+                    
                     var tmp = itemObj.AddComponent<TextMeshProUGUI>();
-                    tmp.text = $"{i + 1}. {unit.displayName}";
-                    tmp.fontSize = 14;
+                    float progress = (i == 0) ? _currentBuilding.queue.CurrentProgress * 100f : 0f;
+                    string progressStr = (i == 0) ? $" ({Mathf.RoundToInt(progress)}%)" : "";
+                    tmp.text = $"{i + 1}. {unit.displayName}{progressStr}";
+                    tmp.fontSize = 12;
+                    tmp.color = (i == 0) ? Color.yellow : Color.white;
+                    
+                    // Agregar evento de click derecho
+                    var eventTrigger = itemObj.AddComponent<UnityEngine.EventSystems.EventTrigger>();
+                    var pointerClick = new UnityEngine.EventSystems.EventTrigger.Entry
+                    {
+                        eventID = UnityEngine.EventSystems.EventTriggerType.PointerClick
+                    };
+                    int index = i;
+                    pointerClick.callback.AddListener((data) =>
+                    {
+                        var pointerData = (UnityEngine.EventSystems.PointerEventData)data;
+                        if (pointerData.button == UnityEngine.EventSystems.PointerEventData.InputButton.Right)
+                        {
+                            OnCancelUnit(index);
+                        }
+                    });
+                    eventTrigger.triggers.Add(pointerClick);
                 }
             }
         }
@@ -291,6 +317,7 @@ namespace Project.UI
             if (_currentBuilding == null || !_currentBuilding.queue.IsProducing)
             {
                 UpdateProgress("");
+                UpdateProgressBar(0f);
                 return;
             }
 
@@ -299,6 +326,7 @@ namespace Project.UI
             int progressPercent = Mathf.RoundToInt(progress * 100f);
 
             UpdateProgress($"Entrenando: {currentUnit.displayName} ({progressPercent}%)");
+            UpdateProgressBar(progress);
         }
 
         void OnUnitButtonClick(int slot)
@@ -346,6 +374,36 @@ namespace Project.UI
             return building.gameObject.name.Replace("(Clone)", "").Trim();
         }
 
+        string GetCostString(UnitSO unit)
+        {
+            if (unit == null || unit.costs == null || unit.costs.Length == 0)
+                return "Gratis";
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            for (int i = 0; i < unit.costs.Length; i++)
+            {
+                var cost = unit.costs[i];
+                string resourceName = GetResourceShortName(cost.kind);
+                sb.Append($"{resourceName}:{cost.amount}");
+                
+                if (i < unit.costs.Length - 1)
+                    sb.Append(" | ");
+            }
+            return sb.ToString();
+        }
+
+        string GetResourceShortName(Project.Gameplay.Resources.ResourceKind kind)
+        {
+            return kind switch
+            {
+                Project.Gameplay.Resources.ResourceKind.Wood => "🪵",
+                Project.Gameplay.Resources.ResourceKind.Stone => "🪨",
+                Project.Gameplay.Resources.ResourceKind.Gold => "🪙",
+                Project.Gameplay.Resources.ResourceKind.Food => "🍖",
+                _ => kind.ToString()
+            };
+        }
+
         void UpdateTitle(string text)
         {
             if (titleText != null)
@@ -356,6 +414,15 @@ namespace Project.UI
         {
             if (progressText != null)
                 progressText.text = text;
+        }
+
+        void UpdateProgressBar(float value)
+        {
+            if (progressBar != null)
+            {
+                progressBar.value = value;
+                progressBar.gameObject.SetActive(value > 0f); // Ocultar si no hay progreso
+            }
         }
 
         /// <summary>

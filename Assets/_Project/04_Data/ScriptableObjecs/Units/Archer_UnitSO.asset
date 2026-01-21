@@ -21,6 +21,7 @@ MonoBehaviour:
   - kind: 2
     amount: 45
   trainingTimeSeconds: 18
+  populationCost: 1
   maxHP: 70
   attack: 12
   moveSpeed: 3

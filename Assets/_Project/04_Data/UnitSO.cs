@@ -24,6 +24,7 @@ namespace Project.Gameplay.Units
         
         [Header("Production")]
         public float trainingTimeSeconds = 15f;  // Tiempo de entrenamiento
+        public int populationCost = 1;          // Cuánta población consume
         
         [Header("Stats (futuro)")]
         public int maxHP = 100;

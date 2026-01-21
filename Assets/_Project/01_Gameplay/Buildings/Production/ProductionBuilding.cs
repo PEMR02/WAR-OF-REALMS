@@ -13,6 +13,7 @@ namespace Project.Gameplay.Buildings
     {
         [Header("Refs")]
         public PlayerResources owner;
+        public PopulationManager populationManager;
         public Transform spawnPoint;  // Punto donde aparecen las unidades
 
         [Header("Production")]
@@ -28,6 +29,10 @@ namespace Project.Gameplay.Buildings
             // Auto-asignar owner si no está asignado
             if (owner == null)
                 owner = FindFirstObjectByType<PlayerResources>();
+
+            // Auto-asignar populationManager si no está asignado
+            if (populationManager == null)
+                populationManager = FindFirstObjectByType<PopulationManager>();
 
             // Auto-crear SpawnPoint si no existe
             if (spawnPoint == null)
@@ -62,9 +67,19 @@ namespace Project.Gameplay.Buildings
         {
             if (unit == null) return false;
             
+            // Verificar límite de población
+            if (populationManager != null && !populationManager.CanAddPopulation(unit.populationCost))
+            {
+                Debug.LogWarning($"ProductionBuilding: No hay espacio de población para {unit.displayName} (requiere {unit.populationCost})");
+                return false;
+            }
+            
             // Verificar recursos
             if (owner != null && !CanAfford(unit))
+            {
+                Debug.LogWarning($"ProductionBuilding: No hay recursos suficientes para {unit.displayName}");
                 return false;
+            }
 
             // Cobrar recursos
             if (owner != null)
@@ -98,12 +113,27 @@ namespace Project.Gameplay.Buildings
 
         void SpawnUnit(UnitSO unit)
         {
-            if (unit == null || unit.prefab == null) return;
+            if (unit == null || unit.prefab == null)
+            {
+                Debug.LogWarning($"ProductionBuilding: No se puede spawnear {unit?.displayName ?? "null"} - prefab faltante");
+                return;
+            }
+
+            // Agregar población
+            if (populationManager != null)
+            {
+                if (!populationManager.TryAddPopulation(unit.populationCost))
+                {
+                    Debug.LogWarning($"ProductionBuilding: No se pudo agregar población al spawnear {unit.displayName}");
+                    // Continuar de todos modos, la unidad ya fue entrenada
+                }
+            }
 
             Vector3 pos = spawnPoint != null ? spawnPoint.position : transform.position;
             GameObject unitObj = Instantiate(unit.prefab, pos, Quaternion.identity);
             
             OnUnitCompleted?.Invoke(unit);
+            Debug.Log($"ProductionBuilding: {unit.displayName} entrenado completamente");
         }
 
         bool CanAfford(UnitSO unit)
