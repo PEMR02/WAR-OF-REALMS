@@ -19,3 +19,5 @@ MonoBehaviour:
   costs:
   - kind: 0
     amount: 25
+  buildTimeSeconds: 10
+  populationProvided: 5

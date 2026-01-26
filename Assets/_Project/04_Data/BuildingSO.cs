@@ -25,6 +25,10 @@ namespace Project.Gameplay.Buildings
         }
 		
 		public float buildTimeSeconds = 10f;
+		
+		[Header("Population")]
+		[Tooltip("Cuántos slots de población proporciona este edificio (ej: Casa = 5)")]
+		public int populationProvided = 0;
 
     }
 }

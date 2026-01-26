@@ -56,7 +56,20 @@ namespace Project.Gameplay.Buildings
             _completed = true;
 
             if (finalPrefab != null)
+            {
                 Instantiate(finalPrefab, transform.position, transform.rotation);
+                
+                // ✅ Aumentar límite de población si el edificio lo proporciona
+                if (buildingSO != null && buildingSO.populationProvided > 0)
+                {
+                    var popManager = FindObjectOfType<Project.Gameplay.Players.PopulationManager>();
+                    if (popManager != null)
+                    {
+                        popManager.AddHousingCapacity(buildingSO.populationProvided);
+                        Debug.Log($"🏠 {buildingSO.id} construido → +{buildingSO.populationProvided} población máxima");
+                    }
+                }
+            }
             else
                 Debug.LogWarning($"BuildSite: finalPrefab null | name={name} | id={GetInstanceID()} | so={(buildingSO?buildingSO.id:"null")}");
 				

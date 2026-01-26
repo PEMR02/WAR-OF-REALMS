@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
   id: archer
   displayName: Arquero
-  prefab: {fileID: 0}
+  prefab: {fileID: 7586646631000710113, guid: a8422e017be8bf34aa401cdac0bfc63d, type: 3}
   costs:
   - kind: 0
     amount: 25

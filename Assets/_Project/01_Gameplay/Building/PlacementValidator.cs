@@ -1,4 +1,5 @@
 using UnityEngine;
+using Project.Gameplay.Map;
 
 namespace Project.Gameplay.Buildings
 {
@@ -15,7 +16,15 @@ namespace Project.Gameplay.Buildings
             Collider[] hits = Physics.OverlapBox(pos, halfExtents, Quaternion.identity, blockingMask);
 
             // Si toca algo bloqueante => inválido
-            return hits == null || hits.Length == 0;
+            if (hits != null && hits.Length > 0) return false;
+
+            // Validación adicional por grilla si existe
+            if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
+            {
+                return MapGrid.Instance.IsWorldAreaFree(pos, size, true);
+            }
+
+            return true;
         }
     }
 }

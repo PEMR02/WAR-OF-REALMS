@@ -55,7 +55,7 @@ namespace Project.UI
                 textColor = Color.yellow; // Casi lleno
 
             populationText.color = textColor;
-            populationText.text = $"👥 {actualCurrent}/{actualMax}";
+            populationText.text = $"Pop: {actualCurrent}/{actualMax}";
         }
     }
 }

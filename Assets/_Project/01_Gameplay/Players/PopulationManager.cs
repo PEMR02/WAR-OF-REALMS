@@ -12,11 +12,13 @@ namespace Project.Gameplay.Players
         [SerializeField] private int _currentPopulation = 0;
         [SerializeField] private int _maxPopulation = 200; // Límite máximo absoluto
         [SerializeField] private int _currentHousingCapacity = 5; // Capacidad inicial (Town Center)
+        [SerializeField] private int _reservedPopulation = 0; // Reservada por colas de producción
 
         public int CurrentPopulation => _currentPopulation;
         public int MaxPopulation => Mathf.Min(_currentHousingCapacity, _maxPopulation);
-        public int AvailablePopulation => MaxPopulation - _currentPopulation;
-        public bool HasPopulationSpace => _currentPopulation < MaxPopulation;
+        public int ReservedPopulation => _reservedPopulation;
+        public int AvailablePopulation => MaxPopulation - (_currentPopulation + _reservedPopulation);
+        public bool HasPopulationSpace => AvailablePopulation > 0;
 
         // Eventos
         public event Action<int, int> OnPopulationChanged; // (current, max)
@@ -32,7 +34,58 @@ namespace Project.Gameplay.Players
         /// </summary>
         public bool CanAddPopulation(int amount)
         {
-            return _currentPopulation + amount <= MaxPopulation;
+            return _currentPopulation + _reservedPopulation + amount <= MaxPopulation;
+        }
+
+        /// <summary>
+        /// Verifica si hay espacio para reservar N población (para colas)
+        /// </summary>
+        public bool CanReservePopulation(int amount)
+        {
+            return _currentPopulation + _reservedPopulation + amount <= MaxPopulation;
+        }
+
+        /// <summary>
+        /// Reserva población para una cola de producción
+        /// </summary>
+        public bool TryReservePopulation(int amount)
+        {
+            if (amount <= 0) return true;
+            if (!CanReservePopulation(amount))
+            {
+                Debug.LogWarning($"PopulationManager: No hay espacio para reservar población. Actual: {_currentPopulation}+{_reservedPopulation}/{MaxPopulation}");
+                return false;
+            }
+
+            _reservedPopulation += amount;
+            OnPopulationChanged?.Invoke(_currentPopulation, MaxPopulation);
+            return true;
+        }
+
+        /// <summary>
+        /// Libera población reservada (al cancelar en cola)
+        /// </summary>
+        public void ReleaseReservedPopulation(int amount)
+        {
+            if (amount <= 0) return;
+            _reservedPopulation = Mathf.Max(0, _reservedPopulation - amount);
+            OnPopulationChanged?.Invoke(_currentPopulation, MaxPopulation);
+        }
+
+        /// <summary>
+        /// Convierte población reservada en población actual (al spawnear)
+        /// </summary>
+        public bool CommitReservedPopulation(int amount)
+        {
+            if (amount <= 0) return true;
+
+            if (_reservedPopulation < amount)
+                return false;
+
+            _reservedPopulation -= amount;
+            _currentPopulation += amount;
+            OnPopulationChanged?.Invoke(_currentPopulation, MaxPopulation);
+            return true;
         }
 
         /// <summary>
@@ -92,6 +145,7 @@ namespace Project.Gameplay.Players
         {
             _currentPopulation = 0;
             _currentHousingCapacity = 5; // Town Center inicial
+            _reservedPopulation = 0;
             OnPopulationChanged?.Invoke(_currentPopulation, MaxPopulation);
         }
     }

@@ -68,7 +68,7 @@ namespace Project.Gameplay.Buildings
             if (unit == null) return false;
             
             // Verificar límite de población
-            if (populationManager != null && !populationManager.CanAddPopulation(unit.populationCost))
+            if (populationManager != null && !populationManager.CanReservePopulation(unit.populationCost))
             {
                 Debug.LogWarning($"ProductionBuilding: No hay espacio de población para {unit.displayName} (requiere {unit.populationCost})");
                 return false;
@@ -84,6 +84,15 @@ namespace Project.Gameplay.Buildings
             // Cobrar recursos
             if (owner != null)
                 PayCost(unit);
+
+            // Reservar población (si aplica)
+            if (populationManager != null && !populationManager.TryReservePopulation(unit.populationCost))
+            {
+                // Revertir pago si no se pudo reservar
+                if (owner != null)
+                    RefundCost(unit, 1f);
+                return false;
+            }
 
             // Agregar a cola
             queue.Enqueue(unit);
@@ -107,6 +116,10 @@ namespace Project.Gameplay.Buildings
             if (owner != null)
                 RefundCost(unit, 0.5f);
 
+            // Liberar población reservada
+            if (populationManager != null)
+                populationManager.ReleaseReservedPopulation(unit.populationCost);
+
             queue.RemoveAt(index);
             OnQueueChanged?.Invoke();
         }
@@ -122,10 +135,13 @@ namespace Project.Gameplay.Buildings
             // Agregar población
             if (populationManager != null)
             {
-                if (!populationManager.TryAddPopulation(unit.populationCost))
+                if (!populationManager.CommitReservedPopulation(unit.populationCost))
                 {
-                    Debug.LogWarning($"ProductionBuilding: No se pudo agregar población al spawnear {unit.displayName}");
-                    // Continuar de todos modos, la unidad ya fue entrenada
+                    if (!populationManager.TryAddPopulation(unit.populationCost))
+                    {
+                        Debug.LogWarning($"ProductionBuilding: No se pudo agregar población al spawnear {unit.displayName}");
+                        // Continuar de todos modos, la unidad ya fue entrenada
+                    }
                 }
             }
 
@@ -192,7 +208,8 @@ namespace Project.Gameplay.Buildings
             UnitSO current = _queue[0];
             if (current == null) return;
 
-            _currentProgress += deltaTime / current.trainingTimeSeconds;
+            float duration = Mathf.Max(0.01f, current.trainingTimeSeconds);
+            _currentProgress += deltaTime / duration;
         }
 
         public void CompleteCurrentUnit()

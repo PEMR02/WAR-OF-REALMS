@@ -53,7 +53,7 @@ namespace Project.UI
             if (infoText != null && placer != null && placer.selectedBuilding != null)
             {
                 bool canAfford = placer.CanAfford(placer.selectedBuilding);
-                string affordText = canAfford ? "✅" : "❌ Sin recursos";
+                string affordText = canAfford ? "[OK]" : "[!] Sin recursos";
                 
                 infoText.text = $"Construyendo: {placer.selectedBuilding.id}\n{CostString(placer.selectedBuilding)}\n{affordText}";
             }
@@ -104,7 +104,7 @@ namespace Project.UI
             }
 
             bool canAfford = placer != null && placer.CanAfford(b);
-            string affordText = canAfford ? "✅ Puedes construir" : "❌ Sin recursos suficientes";
+            string affordText = canAfford ? "[OK] Puedes construir" : "[!] Sin recursos suficientes";
 
             infoText.text = $"Seleccionado: {b.id}\n{CostString(b)}\n{affordText}";
         }

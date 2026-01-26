@@ -36,6 +36,11 @@ namespace Project.UI
         public Transform queueContainer;    // Container para los items de la cola
         public GameObject queueItemPrefab;  // Prefab para cada item en cola
 
+        [Header("Raycast Blockers")]
+        public bool autoDisableNamedRaycastBlockers = true;
+        public string[] namedRaycastBlockers = new[] { "Text_Title" };
+        public Graphic[] extraRaycastBlockers;
+
         [Header("Text Labels")]
         public TextMeshProUGUI titleText;           // Nombre del edificio
         public TextMeshProUGUI progressText;        // "Entrenando: Milicia (45%)"
@@ -98,14 +103,19 @@ namespace Project.UI
             ProductionBuilding building = GetSelectedProductionBuilding();
             bool hasProductionBuilding = building != null;
 
-            // DEBUG temporal
-            if (hasProductionBuilding && building != _currentBuilding)
-                Debug.Log($"[ProductionHUD] Edificio productor detectado: {building.gameObject.name}");
-
             // Si cambió la selección
             if (hasProductionBuilding != _lastHasProductionBuilding || building != _currentBuilding)
             {
                 _lastHasProductionBuilding = hasProductionBuilding;
+                
+                // Desuscribirse del building anterior
+                if (_currentBuilding != null)
+                {
+                    _currentBuilding.OnUnitQueued -= OnUnitQueued;
+                    _currentBuilding.OnUnitCompleted -= OnUnitCompleted;
+                    _currentBuilding.OnQueueChanged -= OnQueueChanged;
+                }
+                
                 _currentBuilding = building;
 
                 if (!hasProductionBuilding)
@@ -115,6 +125,14 @@ namespace Project.UI
                 }
                 else
                 {
+                    // Suscribirse al nuevo building
+                    if (_currentBuilding != null)
+                    {
+                        _currentBuilding.OnUnitQueued += OnUnitQueued;
+                        _currentBuilding.OnUnitCompleted += OnUnitCompleted;
+                        _currentBuilding.OnQueueChanged += OnQueueChanged;
+                    }
+                    
                     // Mostrar panel de producción
                     ShowProductionPanel();
                 }
@@ -127,8 +145,11 @@ namespace Project.UI
                 return;
             }
 
-            // Refrescar UI continuamente si hay edificio seleccionado
-            RefreshUI();
+            // Solo refrescar el progreso continuamente (no toda la UI)
+            if (hasProductionBuilding && _currentBuilding != null)
+            {
+                RefreshProgress();
+            }
         }
 
         ProductionBuilding GetSelectedProductionBuilding()
@@ -195,7 +216,6 @@ namespace Project.UI
 
             RefreshUnitButtons();
             RefreshQueueDisplay();
-            RefreshProgress();
         }
 
         void RefreshUnitButtons()
@@ -230,7 +250,7 @@ namespace Project.UI
                 {
                     bool hasUnit = unit != null;
                     _unitButtons[arrayIndex].gameObject.SetActive(true);
-                    _unitButtons[arrayIndex].interactable = hasUnit && CanAfford(unit);
+                    _unitButtons[arrayIndex].interactable = hasUnit && CanAfford(unit) && HasPopulationSpace(unit);
 
                     if (_unitLabels[arrayIndex] != null)
                     {
@@ -251,12 +271,53 @@ namespace Project.UI
             if (queueContainer == null || _currentBuilding == null)
                 return;
 
+            // Evitar que textos/imagenes del Panel_Queue bloqueen raycasts de la cola
+            DisablePanelQueueRaycastBlockers();
+            DisableExternalRaycastBlockers();
+
             // Limpiar items anteriores
             foreach (Transform child in queueContainer)
-                Destroy(child.gameObject);
+            {
+                if (child != null)
+                    Destroy(child.gameObject);
+            }
 
             // Mostrar unidades en cola
             List<UnitSO> queuedUnits = _currentBuilding.queue.GetAllUnits();
+            
+            // Configurar el padre (Panel_Queue) para que no limite el tamaño
+            if (queueContainer.parent != null)
+            {
+                var parentVlg = queueContainer.parent.GetComponent<VerticalLayoutGroup>();
+                if (parentVlg != null)
+                {
+                    parentVlg.childControlWidth = true;
+                    parentVlg.childControlHeight = false; // ← IMPORTANTE: NO controlar altura
+                    parentVlg.childForceExpandWidth = true;
+                    parentVlg.childForceExpandHeight = false;
+                }
+            }
+            
+            // Asegurar que el contenedor tenga layout adecuado
+            var vlg = queueContainer.GetComponent<VerticalLayoutGroup>();
+            if (vlg != null)
+            {
+                vlg.childControlWidth = true;
+                vlg.childControlHeight = false;
+                vlg.childForceExpandWidth = true;
+                vlg.childForceExpandHeight = false;
+                vlg.spacing = 3;
+                vlg.padding = new RectOffset(4, 4, 4, 4);
+            }
+            
+            // ⚠️ ContentSizeFitter no funciona porque el padre controla el tamaño
+            // Solución: Calcular y asignar el tamaño manualmente
+            
+            // Remover ContentSizeFitter si existe (no funciona)
+            var csf = queueContainer.GetComponent<ContentSizeFitter>();
+            if (csf != null)
+                Destroy(csf);
+            
             for (int i = 0; i < queuedUnits.Count; i++)
             {
                 UnitSO unit = queuedUnits[i];
@@ -270,45 +331,173 @@ namespace Project.UI
                     if (tmp != null)
                         tmp.text = unit.displayName;
 
-                    // Agregar botón de cancelar
+                    // ✅ Click izquierdo o derecho para cancelar (prefab)
+                    int cancelIndex = i;
+                    
+                    // Forzar raycasts aunque haya CanvasGroup padres bloqueando
+                    var itemGroup = itemObj.GetComponent<CanvasGroup>();
+                    if (itemGroup == null)
+                        itemGroup = itemObj.AddComponent<CanvasGroup>();
+                    itemGroup.interactable = true;
+                    itemGroup.blocksRaycasts = true;
+                    itemGroup.ignoreParentGroups = true;
+
+                    // Desactivar raycast en TODOS los gráficos hijos (evita que "se coma" el click)
+                    var graphics = itemObj.GetComponentsInChildren<UnityEngine.UI.Graphic>(true);
+                    for (int g = 0; g < graphics.Length; g++)
+                        graphics[g].raycastTarget = false;
+
+                    // Usar el root como target de raycast
+                    var imgForClick = itemObj.GetComponent<UnityEngine.UI.Image>();
+                    if (imgForClick != null)
+                    {
+                        imgForClick.raycastTarget = true;
+                    }
+                    else
+                    {
+                        // Crear un Image invisible para recibir raycasts
+                        var img = itemObj.AddComponent<UnityEngine.UI.Image>();
+                        img.color = new Color(0f, 0f, 0f, 0f);
+                        img.raycastTarget = true;
+                    }
+
+                    // Limpiar listener del botón si existe (evita doble trigger)
                     var btn = itemObj.GetComponentInChildren<Button>();
+                    GameObject handlerTarget = itemObj;
                     if (btn != null)
                     {
-                        int index = i;
-                        btn.onClick.AddListener(() => OnCancelUnit(index));
+                        btn.onClick.RemoveAllListeners();
+                        handlerTarget = btn.gameObject;
                     }
+
+                    // Asegurar gráfico en el target del handler
+                    var handlerGraphic = handlerTarget.GetComponent<UnityEngine.UI.Graphic>();
+                    if (handlerGraphic != null)
+                        handlerGraphic.raycastTarget = true;
+                    else
+                    {
+                        var img = handlerTarget.AddComponent<UnityEngine.UI.Image>();
+                        img.color = new Color(0f, 0f, 0f, 0f);
+                        img.raycastTarget = true;
+                    }
+
+                    var clickHandler = handlerTarget.GetComponent<QueueItemClickHandler>();
+                    if (clickHandler == null)
+                        clickHandler = handlerTarget.AddComponent<QueueItemClickHandler>();
+                    clickHandler.Setup(cancelIndex, this);
                 }
                 else
                 {
-                    // Crear item simple con botón de cancelar
+                    // Crear contenedor para el item
                     GameObject itemObj = new GameObject($"QueueItem_{i}");
-                    itemObj.transform.SetParent(queueContainer);
-                    itemObj.AddComponent<UnityEngine.UI.LayoutElement>().preferredHeight = 25;
+                    var itemRect = itemObj.AddComponent<RectTransform>();
+                    itemObj.transform.SetParent(queueContainer, false);
                     
-                    var tmp = itemObj.AddComponent<TextMeshProUGUI>();
+                    // LayoutElement para el VerticalLayoutGroup
+                    var layoutElem = itemObj.AddComponent<UnityEngine.UI.LayoutElement>();
+                    layoutElem.minHeight = 24;
+                    layoutElem.preferredHeight = 24;
+                    layoutElem.flexibleHeight = 0;
+                    
+                    // Agregar Image para background
+                    var img = itemObj.AddComponent<UnityEngine.UI.Image>();
+                    img.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+                    img.raycastTarget = true;
+                    
+                    // Crear GameObject hijo para el texto
+                    GameObject textObj = new GameObject("Text");
+                    var textRect = textObj.AddComponent<RectTransform>();
+                    textObj.transform.SetParent(itemObj.transform, false);
+                    
+                    // RectTransform Stretch
+                    textRect.anchorMin = Vector2.zero;
+                    textRect.anchorMax = Vector2.one;
+                    textRect.sizeDelta = Vector2.zero;
+                    textRect.anchoredPosition = Vector2.zero;
+                    textRect.offsetMin = new Vector2(5, 0);
+                    textRect.offsetMax = new Vector2(-5, 0);
+                    
+                    // Agregar TextMeshProUGUI al hijo
+                    var tmp = textObj.AddComponent<TextMeshProUGUI>();
                     float progress = (i == 0) ? _currentBuilding.queue.CurrentProgress * 100f : 0f;
                     string progressStr = (i == 0) ? $" ({Mathf.RoundToInt(progress)}%)" : "";
                     tmp.text = $"{i + 1}. {unit.displayName}{progressStr}";
                     tmp.fontSize = 12;
                     tmp.color = (i == 0) ? Color.yellow : Color.white;
+                    tmp.alignment = TextAlignmentOptions.Left;
+                    tmp.verticalAlignment = VerticalAlignmentOptions.Middle;
+                    tmp.raycastTarget = false;
                     
-                    // Agregar evento de click derecho
-                    var eventTrigger = itemObj.AddComponent<UnityEngine.EventSystems.EventTrigger>();
-                    var pointerClick = new UnityEngine.EventSystems.EventTrigger.Entry
-                    {
-                        eventID = UnityEngine.EventSystems.EventTriggerType.PointerClick
-                    };
+                    // Agregar componente custom para detectar click derecho
                     int index = i;
-                    pointerClick.callback.AddListener((data) =>
-                    {
-                        var pointerData = (UnityEngine.EventSystems.PointerEventData)data;
-                        if (pointerData.button == UnityEngine.EventSystems.PointerEventData.InputButton.Right)
-                        {
-                            OnCancelUnit(index);
-                        }
-                    });
-                    eventTrigger.triggers.Add(pointerClick);
+                    var clickHandler = itemObj.AddComponent<QueueItemClickHandler>();
+                    clickHandler.Setup(index, this);
                 }
+            }
+            
+            // ✅ FORZAR TAMAÑO MANUAL del contenedor
+            if (queueContainer.childCount > 0)
+            {
+                var containerRect = queueContainer.GetComponent<RectTransform>();
+                
+                // Calcular altura necesaria: (items * altura) + (espacios * spacing) + padding
+                float itemHeight = 24f;
+                float spacing = vlg != null ? vlg.spacing : 3f;
+                float padding = vlg != null ? (vlg.padding.top + vlg.padding.bottom) : 8f;
+                float totalHeight = (queueContainer.childCount * itemHeight) + 
+                                  ((queueContainer.childCount - 1) * spacing) + 
+                                  padding;
+                
+                // Asignar el tamaño directamente
+                containerRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, totalHeight);
+                
+                // Forzar recálculo
+                Canvas.ForceUpdateCanvases();
+                UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(containerRect);
+            }
+        }
+
+        void DisablePanelQueueRaycastBlockers()
+        {
+            if (panelQueue == null || queueContainer == null) return;
+
+            var graphics = panelQueue.GetComponentsInChildren<UnityEngine.UI.Graphic>(true);
+            for (int i = 0; i < graphics.Length; i++)
+            {
+                var g = graphics[i];
+                if (g == null) continue;
+
+                // Solo permitir raycasts en elementos de la cola
+                if (g.transform.IsChildOf(queueContainer))
+                    continue;
+
+                g.raycastTarget = false;
+            }
+        }
+
+        void DisableExternalRaycastBlockers()
+        {
+            if (extraRaycastBlockers != null)
+            {
+                for (int i = 0; i < extraRaycastBlockers.Length; i++)
+                {
+                    var g = extraRaycastBlockers[i];
+                    if (g != null) g.raycastTarget = false;
+                }
+            }
+
+            if (!autoDisableNamedRaycastBlockers || namedRaycastBlockers == null) return;
+
+            for (int i = 0; i < namedRaycastBlockers.Length; i++)
+            {
+                string name = namedRaycastBlockers[i];
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                var go = GameObject.Find(name);
+                if (go == null) continue;
+
+                var g = go.GetComponent<Graphic>();
+                if (g != null) g.raycastTarget = false;
             }
         }
 
@@ -324,8 +513,11 @@ namespace Project.UI
             UnitSO currentUnit = _currentBuilding.queue.CurrentUnit;
             float progress = _currentBuilding.queue.CurrentProgress;
             int progressPercent = Mathf.RoundToInt(progress * 100f);
+            int queueCount = _currentBuilding.queue.Count;
 
-            UpdateProgress($"Entrenando: {currentUnit.displayName} ({progressPercent}%)");
+            // Mostrar contador de cola: "Entrenando: Milicia (45%) | Cola: 3"
+            string queueInfo = queueCount > 1 ? $" | Cola: {queueCount}" : "";
+            UpdateProgress($"Entrenando: {currentUnit.displayName} ({progressPercent}%){queueInfo}");
             UpdateProgressBar(progress);
         }
 
@@ -337,13 +529,61 @@ namespace Project.UI
             UnitSO unit = catalog.Get(buildingId, slot);
 
             if (unit != null)
-                _currentBuilding.TryQueueUnit(unit);
+            {
+                bool success = _currentBuilding.TryQueueUnit(unit);
+                
+                // Mostrar mensaje si no se pudo agregar
+                if (!success)
+                {
+                    // Verificar qué falló
+                    if (_currentBuilding.populationManager != null && 
+                        !_currentBuilding.populationManager.CanReservePopulation(unit.populationCost))
+                    {
+                        UpdateProgress($"[!] Sin población (necesitas {unit.populationCost})");
+                    }
+                    else if (_currentBuilding.owner != null)
+                    {
+                        UpdateProgress($"[!] Sin recursos para {unit.displayName}");
+                    }
+                }
+            }
         }
 
         void OnCancelUnit(int index)
         {
-            if (_currentBuilding == null) return;
-            _currentBuilding.CancelUnit(index);
+            if (_currentBuilding != null)
+            {
+                _currentBuilding.CancelUnit(index);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // EVENTOS del ProductionBuilding
+        // ═══════════════════════════════════════════════════════════
+
+        void OnUnitQueued(UnitSO unit)
+        {
+            RefreshQueueDisplay();
+            RefreshProgress();
+        }
+
+        void OnUnitCompleted(UnitSO unit)
+        {
+            RefreshQueueDisplay();
+            RefreshProgress();
+        }
+
+        void OnQueueChanged()
+        {
+            // Delay muy pequeño para que el click derecho se procese completamente
+            StartCoroutine(RefreshQueueDelayed());
+        }
+
+        System.Collections.IEnumerator RefreshQueueDelayed()
+        {
+            yield return null; // Esperar 1 frame
+            RefreshQueueDisplay();
+            RefreshProgress();
         }
 
         bool CanAfford(UnitSO unit)
@@ -361,6 +601,13 @@ namespace Project.UI
             }
 
             return true;
+        }
+
+        bool HasPopulationSpace(UnitSO unit)
+        {
+            if (_currentBuilding == null || _currentBuilding.populationManager == null)
+                return true;
+            return _currentBuilding.populationManager.CanReservePopulation(unit.populationCost);
         }
 
         string GetBuildingId(ProductionBuilding building)
@@ -396,10 +643,10 @@ namespace Project.UI
         {
             return kind switch
             {
-                Project.Gameplay.Resources.ResourceKind.Wood => "🪵",
-                Project.Gameplay.Resources.ResourceKind.Stone => "🪨",
-                Project.Gameplay.Resources.ResourceKind.Gold => "🪙",
-                Project.Gameplay.Resources.ResourceKind.Food => "🍖",
+                Project.Gameplay.Resources.ResourceKind.Wood => "W",
+                Project.Gameplay.Resources.ResourceKind.Stone => "S",
+                Project.Gameplay.Resources.ResourceKind.Gold => "G",
+                Project.Gameplay.Resources.ResourceKind.Food => "F",
                 _ => kind.ToString()
             };
         }
@@ -431,6 +678,68 @@ namespace Project.UI
         public void TrainUnit(int slot)
         {
             OnUnitButtonClick(slot);
+        }
+
+        /// <summary>
+        /// Método público para cancelar unidad desde QueueItemClickHandler
+        /// </summary>
+        public void CancelUnitByIndex(int index)
+        {
+            OnCancelUnit(index);
+        }
+    }
+
+    /// <summary>
+    /// Componente helper para detectar click derecho en items de la cola
+    /// </summary>
+    public class QueueItemClickHandler : MonoBehaviour, 
+        UnityEngine.EventSystems.IPointerClickHandler,
+        UnityEngine.EventSystems.IPointerEnterHandler,
+        UnityEngine.EventSystems.IPointerExitHandler
+    {
+        private int _index;
+        private ProductionHUD _hud;
+        private UnityEngine.UI.Image _image;
+        private bool _isProcessing = false;
+
+        public void Setup(int index, ProductionHUD hud)
+        {
+            _index = index;
+            _hud = hud;
+            _image = GetComponent<UnityEngine.UI.Image>();
+        }
+
+        public void OnPointerClick(UnityEngine.EventSystems.PointerEventData eventData)
+        {
+            if (eventData.button != UnityEngine.EventSystems.PointerEventData.InputButton.Right &&
+                eventData.button != UnityEngine.EventSystems.PointerEventData.InputButton.Left)
+                return;
+
+            if (_isProcessing) return; // Evitar múltiples clicks
+
+            _isProcessing = true;
+
+            // Feedback visual inmediato: color rojo
+            if (_image != null)
+            {
+                _image.color = new Color(0.8f, 0.2f, 0.2f, 0.8f);
+                _image.raycastTarget = false; // Desactivar raycasts inmediatamente
+            }
+
+            // Cancelar la unidad
+            _hud.CancelUnitByIndex(_index);
+        }
+
+        public void OnPointerEnter(UnityEngine.EventSystems.PointerEventData eventData)
+        {
+            if (_image != null)
+                _image.color = new Color(0.3f, 0.3f, 0.3f, 0.8f); // Más claro al hacer hover
+        }
+
+        public void OnPointerExit(UnityEngine.EventSystems.PointerEventData eventData)
+        {
+            if (_image != null)
+                _image.color = new Color(0.2f, 0.2f, 0.2f, 0.8f); // Color normal
         }
     }
 }
