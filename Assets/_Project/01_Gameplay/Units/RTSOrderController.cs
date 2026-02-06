@@ -22,6 +22,8 @@ namespace Project.Gameplay.Units
         public float formationSpacing = 1.5f;
 
         private CommandBus _bus;
+        [Header("Debug")]
+        public bool debugLogs = false;
 
         void Awake()
         {
@@ -51,7 +53,7 @@ namespace Project.Gameplay.Units
                 var site = hitS.collider.GetComponentInParent<BuildSite>();
                 if (site != null)
                 {
-                    Debug.Log("Orden: construir en " + site.name);
+                    if (debugLogs) Debug.Log("Orden: construir en " + site.name);
 
                     for (int i = 0; i < selectedUnits.Count; i++)
                     {
@@ -96,7 +98,7 @@ namespace Project.Gameplay.Units
             {
                 Vector3 target = hitG.point;
 
-                // (opcional) cancelar construcción al mover
+                // Cancelar construcción y recolección para que la orden de mover no se sobrescriba
                 for (int i = 0; i < selectedUnits.Count; i++)
                 {
                     var u = selectedUnits[i];
@@ -104,6 +106,9 @@ namespace Project.Gameplay.Units
 
                     var builder = u.GetComponent<Builder>();
                     if (builder != null) builder.SetBuildTarget(null);
+
+                    var gatherer = u.GetComponent<VillagerGatherer>();
+                    if (gatherer != null) gatherer.PauseGatherKeepCarried();
                 }
 
                 Vector3 forward = cam.transform.forward;

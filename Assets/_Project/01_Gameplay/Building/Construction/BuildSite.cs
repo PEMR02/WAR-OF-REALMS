@@ -62,7 +62,7 @@ namespace Project.Gameplay.Buildings
                 // ✅ Aumentar límite de población si el edificio lo proporciona
                 if (buildingSO != null && buildingSO.populationProvided > 0)
                 {
-                    var popManager = FindObjectOfType<Project.Gameplay.Players.PopulationManager>();
+                    var popManager = Object.FindFirstObjectByType<Project.Gameplay.Players.PopulationManager>();
                     if (popManager != null)
                     {
                         popManager.AddHousingCapacity(buildingSO.populationProvided);

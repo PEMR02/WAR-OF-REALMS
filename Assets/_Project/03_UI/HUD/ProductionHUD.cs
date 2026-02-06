@@ -50,6 +50,10 @@ namespace Project.UI
         private TextMeshProUGUI[] _unitLabels;
         private ProductionBuilding _currentBuilding;
         private bool _lastHasProductionBuilding;
+        [Header("Performance")]
+        [Tooltip("Frecuencia de chequeo de selección (segundos). Evita hacer polling pesado cada frame.")]
+        public float pollSelectionEvery = 0.10f;
+        private float _pollTimer;
 
         void Awake()
         {
@@ -99,8 +103,11 @@ namespace Project.UI
 
         void Update()
         {
+            _pollTimer -= Time.deltaTime;
+
             // Detectar si hay un edificio productor seleccionado
-            ProductionBuilding building = GetSelectedProductionBuilding();
+            ProductionBuilding building = (_pollTimer <= 0f) ? GetSelectedProductionBuilding() : _currentBuilding;
+            if (_pollTimer <= 0f) _pollTimer = Mathf.Max(0.02f, pollSelectionEvery);
             bool hasProductionBuilding = building != null;
 
             // Si cambió la selección

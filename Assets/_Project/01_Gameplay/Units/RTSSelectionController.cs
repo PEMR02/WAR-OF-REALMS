@@ -29,6 +29,7 @@ namespace Project.Gameplay.Units
         private bool _isDragging;
 
         private readonly List<UnitSelectable> _selected = new();
+        private int _selectedVillagerCount;
 
         // Para detectar doble clic
         private float _lastClickTime;
@@ -173,7 +174,7 @@ namespace Project.Gameplay.Units
                 ClearSelection();
 
             // Buscar todas las unidades del mismo tipo que estén visibles
-            var allUnits = FindObjectsOfType<UnitSelectable>();
+            var allUnits = FindObjectsByType<UnitSelectable>(FindObjectsSortMode.None);
             
             for (int i = 0; i < allUnits.Length; i++)
             {
@@ -206,7 +207,7 @@ namespace Project.Gameplay.Units
         {
             Rect r = MakeRect(start, end);
 
-            var all = FindObjectsOfType<UnitSelectable>();
+            var all = FindObjectsByType<UnitSelectable>(FindObjectsSortMode.None);
             for (int i = 0; i < all.Length; i++)
             {
                 var u = all[i];
@@ -223,6 +224,10 @@ namespace Project.Gameplay.Units
             if (_selected.Contains(u)) return;
             _selected.Add(u);
             u.SetSelected(true);
+
+            // Cache: aldeano = VillagerGatherer o Builder.
+            if (u.GetComponent<VillagerGatherer>() != null) _selectedVillagerCount++;
+            else if (u.GetComponent<Builder>() != null) _selectedVillagerCount++;
         }
 
         void ClearSelection()
@@ -237,6 +242,7 @@ namespace Project.Gameplay.Units
                 if (_selected[i] != null) _selected[i].SetSelected(false);
 
             _selected.Clear();
+            _selectedVillagerCount = 0;
         }
 
         static Rect MakeRect(Vector2 a, Vector2 b)
@@ -266,16 +272,7 @@ namespace Project.Gameplay.Units
 		
 		public bool HasSelectedVillagers()
 		{
-			for (int i = 0; i < _selected.Count; i++)
-			{
-				var u = _selected[i];
-				if (u == null) continue;
-
-				// Si tiene VillagerGatherer o Builder, lo consideramos "aldeano"
-				if (u.GetComponent<VillagerGatherer>() != null) return true;
-				if (u.GetComponent<Builder>() != null) return true;
-			}
-			return false;
+			return _selectedVillagerCount > 0;
 		}
 		
 		public void SelectOnly(UnitSelectable u)

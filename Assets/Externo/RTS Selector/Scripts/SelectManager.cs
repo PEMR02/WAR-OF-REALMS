@@ -1,4 +1,4 @@
-﻿/*************************************************************
+/*************************************************************
  * Created by Sun Dryd Studios                               *
  * For the Unity Asset Store                                 *
  * This asset falls under the "Creative Commons License"     *
@@ -37,7 +37,7 @@ public class SelectManager : MonoBehaviour
 
         //Searches for all of the objects with the selectable character script
         //Then converts to list
-        SelectableCharacter[] chars = FindObjectsOfType<SelectableCharacter>();
+        SelectableCharacter[] chars = Object.FindObjectsByType<SelectableCharacter>(FindObjectsSortMode.None);
         for (int i = 0; i <= (chars.Length - 1); i++) {
             selectableChars.Add(chars[i]);
         }

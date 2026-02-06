@@ -12,18 +12,19 @@ namespace Project.Gameplay.Units
 
         NavMeshAgent _agent;
         UnitMover _mover;
+        VillagerGatherer _gatherer;
         BuildSite _target;
 
        void Awake()
 		{
 			_agent = GetComponent<NavMeshAgent>();
 			_mover = GetComponent<UnitMover>();
+            _gatherer = GetComponent<VillagerGatherer>();
 		}
 
         public void SetBuildTarget(BuildSite site)
         {
-            var g = GetComponent<VillagerGatherer>();
-			if (g != null) g.PauseGatherKeepCarried();
+			if (_gatherer != null) _gatherer.PauseGatherKeepCarried();
 
 			if (_target == site) return;
 
@@ -59,7 +60,8 @@ namespace Project.Gameplay.Units
                 return;
             }
 
-            if (_agent.hasPath) _agent.ResetPath();
+            if (_agent != null && _agent.isOnNavMesh && _agent.hasPath)
+                _agent.ResetPath();
             _target.AddWorkSeconds(buildPower * Time.deltaTime);
         }
 

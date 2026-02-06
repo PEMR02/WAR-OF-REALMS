@@ -13,7 +13,7 @@ MonoBehaviour:
   m_Name: House_SO
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSO
   id: House
-  prefab: {fileID: 2776163384418867380, guid: c6614e585f3e4d14d905a01728f312a0, type: 3}
+  prefab: {fileID: 8533508373647130233, guid: 475779ea31876f44a834ac62105c49ab, type: 3}
   size: {x: 3, y: 3}
   requiresFlatGround: 0
   costs:

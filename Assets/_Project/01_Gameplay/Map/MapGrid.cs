@@ -14,6 +14,7 @@ namespace Project.Gameplay.Map
 
         bool[] _blocked;
         bool[] _occupied;
+        bool[] _water;
 
         void Awake()
         {
@@ -34,9 +35,22 @@ namespace Project.Gameplay.Map
 
             _blocked = new bool[width * height];
             _occupied = new bool[width * height];
+            _water = new bool[width * height];
         }
 
         public bool IsReady => _blocked != null && _occupied != null;
+
+        public bool IsWater(Vector2Int c)
+        {
+            if (!IsInBounds(c)) return false;
+            return _water[Index(c)];
+        }
+
+        public void SetWater(Vector2Int c, bool value)
+        {
+            if (!IsInBounds(c)) return;
+            _water[Index(c)] = value;
+        }
 
         public bool IsInBounds(Vector2Int c)
         {
@@ -101,10 +115,11 @@ namespace Project.Gameplay.Map
             return true;
         }
 
-        public bool IsWorldAreaFree(Vector3 centerWorld, Vector2 sizeWorld, bool requirePassable = true)
+        /// <param name="sizeInCells">Tamaño del área en celdas (ej. 3x3).</param>
+        public bool IsWorldAreaFree(Vector3 centerWorld, Vector2 sizeInCells, bool requirePassable = true)
         {
             Vector2Int center = WorldToCell(centerWorld);
-            Vector2Int size = new Vector2Int(Mathf.RoundToInt(sizeWorld.x), Mathf.RoundToInt(sizeWorld.y));
+            Vector2Int size = new Vector2Int(Mathf.RoundToInt(sizeInCells.x), Mathf.RoundToInt(sizeInCells.y));
             Vector2Int min = new Vector2Int(center.x - size.x / 2, center.y - size.y / 2);
             return IsAreaFreeRect(min, size, requirePassable);
         }

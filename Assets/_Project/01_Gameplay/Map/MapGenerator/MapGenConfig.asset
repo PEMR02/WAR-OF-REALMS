@@ -1,0 +1,66 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dd56e3479c472d046a1f8d0fe24bfb98, type: 3}
+  m_Name: MapGenConfig
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Map.Generator.MapGenConfig
+  gridW: 256
+  gridH: 256
+  cellSizeWorld: 1
+  origin: {x: 0, y: 0, z: 0}
+  seed: 12345
+  maxRetries: 5
+  debugLogs: 1
+  regionCount: 8
+  regionNoiseScale: 0.02
+  waterHeight01: 0.25
+  riverCount: 3
+  lakeCount: 2
+  maxLakeCells: 200
+  cityCount: 4
+  minCityDistanceCells: 40
+  cityRadiusCells: 8
+  maxCitySlopeDeg: 15
+  cityWaterBufferCells: 2
+  roadWidthCells: 2
+  roadFlattenStrength: 0.8
+  ringNear: {x: 6, y: 12}
+  ringMid: {x: 12, y: 24}
+  ringFar: {x: 24, y: 50}
+  minWoodPerCity: 10
+  minStonePerCity: 4
+  minGoldPerCity: 4
+  minFoodPerCity: 6
+  maxResourceRetries: 5
+  terrainHeightWorld: 50
+  heightmapResolution: 513
+  paintTerrainByHeight: 1
+  grassLayer: {fileID: 8574412962073106934, guid: 7fcfde19b99458c49955249ce1f9571d, type: 2}
+  dirtLayer: {fileID: 8574412962073106934, guid: af19458d8f1cb71418a617fe396e7b19, type: 2}
+  rockLayer: {fileID: 8574412962073106934, guid: 0210cca0eddd56d4596ca8d5b970f534, type: 2}
+  grassMaxHeight01: 0.4
+  dirtMaxHeight01: 0.65
+  textureBlendWidth: 0.05
+  shoreSmoothRadiusCells: 4
+  shoreSmoothStrength: 1
+  waterChunkSize: 32
+  waterSurfaceOffset: 0.05
+  waterMaterial: {fileID: 2100000, guid: ab163d8c7cdea6c488fcc76d9dec579c, type: 2}
+  waterLayer: -1
+  waterRoundedEdges: 1
+  waterEdgeSubdiv: 3
+  waterEdgeBlurIterations: 2
+  waterEdgeBlurRadius: 1
+  waterIsoLevel: 0.5
+  waterMaskPostProcess: 1
+  waterMaskSmoothIterations: 1
+  waterMaskSmoothThreshold: 5
+  waterMsMaxCornerSamples: 250000

@@ -28,6 +28,9 @@ namespace Project.Gameplay.Units
         [Header("Deposit Retry")]
         public float retryDepositEvery = 0.8f;
 
+        [Header("Debug")]
+        public bool debugLogs = false;
+
         private NavMeshAgent _agent;
         private ResourceNode _targetNode;
         private DropOffPoint _deposit;
@@ -69,7 +72,8 @@ namespace Project.Gameplay.Units
             {
                 _carriedKind = _targetNode.kind;
 
-                Debug.Log($"[{gameObject.name}] Asignado a recolectar: {_carriedKind} (raw value: {(int)_carriedKind})");
+                if (debugLogs)
+                    Debug.Log($"[{gameObject.name}] Asignado a recolectar: {_carriedKind} (raw value: {(int)_carriedKind})");
 
                 SetDestinationSmart(_targetNode.transform.position);
                 _state = State.GoingToNode;
@@ -118,7 +122,8 @@ namespace Project.Gameplay.Units
         {
             if (_state != State.GoingToDrop && _state != State.Depositing)
             {
-                Debug.Log($"[{gameObject.name}] Cambiando a modo dep車sito. Llevando: {_carried} {_carriedKind}");
+                if (debugLogs)
+                    Debug.Log($"[{gameObject.name}] Cambiando a modo dep車sito. Llevando: {_carried} {_carriedKind}");
 
                 _agent.ResetPath();
                 _state = State.GoingToDrop;
@@ -171,17 +176,20 @@ namespace Project.Gameplay.Units
                 {
                     _retryTimer = retryDepositEvery;
 
-                    Debug.Log($"[{gameObject.name}] Buscando dep車sito para: {_carriedKind} (raw: {(int)_carriedKind})");
+                    if (debugLogs)
+                        Debug.Log($"[{gameObject.name}] Buscando dep車sito para: {_carriedKind} (raw: {(int)_carriedKind})");
 
                     _deposit = DropOffFinder.FindNearest(transform.position, _carriedKind);
 
                     if (_deposit == null)
                     {
-                        Debug.LogWarning($"[{gameObject.name}] ? NO se encontr車 dep車sito para {_carriedKind}. Quedando idle con recursos.");
+                        if (debugLogs)
+                            Debug.LogWarning($"[{gameObject.name}] ? NO se encontr車 dep車sito para {_carriedKind}. Quedando idle con recursos.");
                     }
                     else
                     {
-                        Debug.Log($"[{gameObject.name}] ? Dep車sito encontrado: {_deposit.gameObject.name}");
+                        if (debugLogs)
+                            Debug.Log($"[{gameObject.name}] ? Dep車sito encontrado: {_deposit.gameObject.name}");
                     }
 
                     if (_deposit == null)
@@ -216,7 +224,8 @@ namespace Project.Gameplay.Units
             {
                 _state = State.Depositing;
 
-                Debug.Log($"[{gameObject.name}] ? DEPOSITANDO {_carried} {_carriedKind} en {_deposit.gameObject.name}");
+                if (debugLogs)
+                    Debug.Log($"[{gameObject.name}] ? DEPOSITANDO {_carried} {_carriedKind} en {_deposit.gameObject.name}");
 
                 owner.Add(_carriedKind, _carried);
                 _carried = 0;
@@ -256,7 +265,8 @@ namespace Project.Gameplay.Units
 			_gatherTimer = 0f;
 			_retryTimer = 0f;
 
-			_agent.ResetPath();
+			if (_agent != null && _agent.isOnNavMesh)
+				_agent.ResetPath();
 			_state = State.Idle;
 		}
 		public void PauseGatherKeepCarried()
@@ -268,7 +278,8 @@ namespace Project.Gameplay.Units
 			_gatherTimer = 0f;
 			_retryTimer = 0f;
 
-			if (_agent != null) _agent.ResetPath();
+			if (_agent != null && _agent.isOnNavMesh)
+				_agent.ResetPath();
 			_state = State.Idle; // si existe en tu script
 		}
 

@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Project.Gameplay.Players;
+using Project.Gameplay.Map;
 using UnityEngine.EventSystems;
 
 namespace Project.Gameplay.Buildings
@@ -19,6 +20,8 @@ namespace Project.Gameplay.Buildings
         [Header("Refs")]
         public Camera cam;
         public LayerMask groundMask;
+        [Tooltip("Opcional: si el edificio queda en Y=0 o en 0,0, se usa para ponerlo sobre el terreno.")]
+        public Terrain terrain;
 
         [Header("Blocking")]
         public LayerMask blockingMask;
@@ -35,6 +38,7 @@ namespace Project.Gameplay.Buildings
         private GameObject _ghost;
         private GhostPreview _ghostPreview;
         private bool _isPlacing;
+        private float _terrainResolveTimer;
 
         public BuildSite LastPlacedSite { get; private set; }
         public bool IsPlacing => _isPlacing;
@@ -47,15 +51,39 @@ namespace Project.Gameplay.Buildings
             if (cam == null) cam = Camera.main;
             if (owner == null) owner = FindFirstObjectByType<PlayerResources>();
             if (selection == null) selection = FindFirstObjectByType<Project.Gameplay.Units.RTSSelectionController>();
+            if (terrain == null) terrain = FindFirstObjectByType<Terrain>();
 
-            if (gridConfig != null)
+            RefreshGridSize();
+        }
+
+        /// <summary>Usa MapGrid.cellSize si existe (Play), si no gridConfig.gridSize, si no gridSize. Una sola fuente de verdad para el snap.</summary>
+        void RefreshGridSize()
+        {
+            if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
+                gridSize = MapGrid.Instance.cellSize;
+            else if (gridConfig != null)
                 gridSize = gridConfig.gridSize;
         }
 
         void Update()
         {
-            if (gridConfig != null)
-                gridSize = gridConfig.gridSize;
+            // Grid size: actualizar solo si MapGrid está listo y cambió (evita trabajo por frame).
+            if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
+            {
+                float cs = MapGrid.Instance.cellSize;
+                if (Mathf.Abs(gridSize - cs) > 0.001f) gridSize = cs;
+            }
+
+            // Terrain puede crearse en runtime; resolverlo con throttle (no cada frame).
+            if (terrain == null)
+            {
+                _terrainResolveTimer -= Time.unscaledDeltaTime;
+                if (_terrainResolveTimer <= 0f)
+                {
+                    _terrainResolveTimer = 0.75f;
+                    terrain = FindFirstObjectByType<Terrain>();
+                }
+            }
 
             var mouse = Mouse.current;
             var kb = Keyboard.current;
@@ -84,13 +112,46 @@ namespace Project.Gameplay.Buildings
                 return;
 
             Vector3 p = hit.point;
-            p.y = 0f;
+            if (snapToGrid)
+            {
+                Vector3 origin = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.origin : Vector3.zero;
+                int bw = 1, bh = 1;
+                if (selectedBuilding != null)
+                {
+                    // BuildingSO.size puede ser Vector2 (float) o Vector2Int (int). RoundToInt funciona en ambos casos.
+                    bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
+                    bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
+                }
 
-            if (snapToGrid) p = Snap(p, gridSize);
+                // Compatibilidad: 1x1 mantiene el snap clásico a intersección.
+                if (bw == 1 && bh == 1)
+                    p = GridSnapUtil.SnapToGridIntersection(p, origin, gridSize);
+                else
+                    p = GridSnapUtil.SnapToBuildingGrid(p, origin, gridSize, bw, bh);
+            }
+            // Siempre usar altura del Terrain si existe (evita edificios en Y=0 cuando el raycast golpea otro collider)
+            if (terrain != null)
+            {
+                p.y = terrain.SampleHeight(new Vector3(p.x, 0f, p.z)) + terrain.transform.position.y;
+            }
+            else if (p.y < 0.1f)
+            {
+                // Sin Terrain y Y casi 0: probable fallo de raycast; no colocar
+                if (mouse.leftButton.wasPressedThisFrame)
+                    Debug.LogWarning("BuildingPlacer: Terrain no encontrado y altura ~0. ¿Terrain en escena y groundMask correcto?");
+                return;
+            }
+
+            // Rechazar colocación en 0,0 o muy cerca (groundMask debe incluir la capa del Terrain)
+            if (p.sqrMagnitude < 9f)
+            {
+                if (mouse.leftButton.wasPressedThisFrame)
+                    Debug.LogWarning("BuildingPlacer: posición cerca de (0,0,0). ¿Ground Mask incluye la capa del Terrain?");
+                return;
+            }
 
             // Gate: debe haber aldeanos seleccionados
-            bool hasVillagers = selection != null &&
-                                selection.CountSelectedWithComponent<Project.Gameplay.Units.VillagerGatherer>() > 0;
+            bool hasVillagers = selection != null && selection.HasSelectedVillagers();
 
             bool hasSitePrefab = buildSitePrefab != null;
 
@@ -191,6 +252,13 @@ namespace Project.Gameplay.Buildings
 
 			if (selectedBuilding == null || owner == null) return false;
 
+			// Evitar colocar en origen por si algo pasó la validación de Update
+			if (position.sqrMagnitude < 9f)
+			{
+				Debug.LogWarning("BuildingPlacer: TryPlaceBuildSite rechazado (posición cerca de 0,0,0).");
+				return false;
+			}
+
 			if (buildSitePrefab == null)
 			{
 				Debug.LogError("BuildingPlacer: buildSitePrefab no está asignado.");
@@ -256,6 +324,7 @@ namespace Project.Gameplay.Buildings
             return true;
         }
 
+        // Snap legacy (sin origin). Se mantiene por compatibilidad, pero el flujo principal usa GridSnapUtil.
         static Vector3 Snap(Vector3 p, float grid)
         {
             if (grid <= 0.0001f) return p;

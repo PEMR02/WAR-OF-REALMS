@@ -13,6 +13,9 @@ MonoBehaviour:
   m_Name: ProductionCatalog_Asset
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.ProductionCatalog
   entries:
+  - buildingId: town_center
+    slot: 1
+    unit: {fileID: 11400000, guid: 7f3a2c1d9e8b4a56c0d1e2f3a4b5c6d7, type: 2}
   - buildingId: Barracks
     slot: 1
     unit: {fileID: 11400000, guid: 50f025d25b67e1541a380604240c22be, type: 2}

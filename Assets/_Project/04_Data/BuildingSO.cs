@@ -8,7 +8,8 @@ namespace Project.Gameplay.Buildings
         public string id;
         public GameObject prefab;
 
-        [Header("Footprint (meters)")]
+        [Header("Footprint")]
+        [Tooltip("Tamaño en celdas de la grilla (ej. 2x2 = 2 celdas de ancho x 2 de fondo). El tamaño en metros = size × cellSize del MapGrid/GridConfig.")]
         public Vector2 size = new Vector2(4, 4);
 
         [Header("Placement")]

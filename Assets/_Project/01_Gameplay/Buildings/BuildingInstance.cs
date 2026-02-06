@@ -15,13 +15,12 @@ namespace Project.Gameplay.Buildings
         public float constructionProgress = 1f;  // 0-1 (1 = completado)
         public bool isComplete = true;
         
-        void Awake()
+        void Start()
         {
-            // Si no hay BuildingSO asignado, intentar inferir desde el nombre
+            // Comprobado en Start() para que el generador de mapa pueda asignar buildingSO
+            // después de AddComponent<BuildingInstance>() en el mismo frame (p. ej. Town Centers).
             if (buildingSO == null)
-            {
                 Debug.LogWarning($"BuildingInstance en {gameObject.name} no tiene BuildingSO asignado.");
-            }
         }
     }
 }
