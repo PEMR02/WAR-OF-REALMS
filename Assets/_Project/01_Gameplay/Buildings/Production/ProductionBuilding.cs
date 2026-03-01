@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.AI;
 using Project.Gameplay.Units;
 using Project.Gameplay.Players;
+using Project.Gameplay.Combat;
 
 namespace Project.Gameplay.Buildings
 {
@@ -15,6 +17,16 @@ namespace Project.Gameplay.Buildings
         public PlayerResources owner;
         public PopulationManager populationManager;
         public Transform spawnPoint;  // Punto donde aparecen las unidades
+
+        [Header("Spawn")]
+        [Tooltip("Separación en metros desde el borde del edificio al punto de aparición.")]
+        public float spawnClearanceWorld = 1.25f;
+        [Tooltip("Si true, calcula el spawn cerca del borde frontal del edificio (robusto ante escalas grandes).")]
+        public bool useBoundsBasedSpawn = true;
+        [Tooltip("Radio de búsqueda para ajustar el spawn al NavMesh.")]
+        public float navMeshSampleRadius = 4f;
+        [Tooltip("Fallback global si el BuildingSO no define dirección. 1 = forward, -1 = backward.")]
+        [Range(-1f, 1f)] public float defaultSpawnForwardSign = -1f;
 
         [Header("Production")]
         public ProductionQueue queue = new();
@@ -39,7 +51,10 @@ namespace Project.Gameplay.Buildings
             {
                 GameObject spawnObj = new GameObject("SpawnPoint");
                 spawnObj.transform.SetParent(transform);
-                spawnObj.transform.localPosition = new Vector3(0, 0, 5); // Delante del edificio
+                // Distancia en mundo consistente aunque el edificio tenga escala grande.
+                float safeScaleZ = Mathf.Max(0.001f, Mathf.Abs(transform.lossyScale.z));
+                float sign = GetSpawnDirectionSign();
+                spawnObj.transform.localPosition = new Vector3(0f, 0f, (3f * sign) / safeScaleZ);
                 spawnPoint = spawnObj.transform;
             }
         }
@@ -145,11 +160,109 @@ namespace Project.Gameplay.Buildings
                 }
             }
 
-            Vector3 pos = spawnPoint != null ? spawnPoint.position : transform.position;
+            Vector3 pos = ResolveSpawnPosition();
             GameObject unitObj = Instantiate(unit.prefab, pos, Quaternion.identity);
+
+            // Inicializar vida desde UnitSO
+            var health = unitObj.GetComponent<Health>();
+            if (health == null) health = unitObj.AddComponent<Health>();
+            health.InitFromMax(unit.maxHP);
             
             OnUnitCompleted?.Invoke(unit);
             Debug.Log($"ProductionBuilding: {unit.displayName} entrenado completamente");
+        }
+
+        Vector3 ResolveSpawnPosition()
+        {
+            Vector3 fallback = spawnPoint != null ? spawnPoint.position : transform.position;
+            if (!useBoundsBasedSpawn)
+                return TryProjectToNavMesh(fallback);
+
+            Vector3 center = transform.position;
+            if (TryGetBuildingWorldBounds(out Bounds bounds))
+                center = new Vector3(bounds.center.x, transform.position.y, bounds.center.z);
+
+            // 1) Si existe SpawnPoint, su dirección manda (permite afinar por prefab sin código).
+            Vector3 sideDir = Vector3.zero;
+            if (spawnPoint != null)
+            {
+                sideDir = spawnPoint.position - center;
+                sideDir.y = 0f;
+            }
+
+            // 2) Fallback global: lado opuesto al forward (en este proyecto es el frente visual real).
+            if (sideDir.sqrMagnitude < 0.0001f)
+            {
+                sideDir = transform.forward * GetSpawnDirectionSign();
+                sideDir.y = 0f;
+            }
+
+            if (sideDir.sqrMagnitude < 0.0001f)
+                sideDir = Vector3.forward;
+            sideDir.Normalize();
+
+            float edgeDistance = 1.5f;
+            if (TryGetBuildingWorldBounds(out Bounds b))
+                edgeDistance = Mathf.Max(b.extents.x, b.extents.z) + Mathf.Max(0.25f, spawnClearanceWorld);
+
+            Vector3 candidate = center + sideDir * edgeDistance;
+            if (spawnPoint != null)
+                candidate.y = spawnPoint.position.y;
+
+            return TryProjectToNavMesh(candidate);
+        }
+
+        Vector3 TryProjectToNavMesh(Vector3 candidate)
+        {
+            float radius = Mathf.Max(0.5f, navMeshSampleRadius);
+            if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, radius, NavMesh.AllAreas))
+                return hit.position;
+            return candidate;
+        }
+
+        bool TryGetBuildingWorldBounds(out Bounds bounds)
+        {
+            bounds = default;
+            bool hasBounds = false;
+
+            var colliders = GetComponentsInChildren<Collider>(true);
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                var c = colliders[i];
+                if (c == null) continue;
+                string n = c.gameObject.name;
+                if (n.Equals("SpawnPoint", StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("DropAnchor", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!hasBounds) { bounds = c.bounds; hasBounds = true; }
+                else bounds.Encapsulate(c.bounds);
+            }
+
+            if (hasBounds) return true;
+
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                if (r == null || !r.enabled) continue;
+                if (r.GetComponent<Canvas>() != null) continue;
+                if (!hasBounds) { bounds = r.bounds; hasBounds = true; }
+                else bounds.Encapsulate(r.bounds);
+            }
+
+            return hasBounds;
+        }
+
+        float GetSpawnDirectionSign()
+        {
+            float sign = defaultSpawnForwardSign;
+            var bi = GetComponent<BuildingInstance>();
+            if (bi != null && bi.buildingSO != null)
+                sign = bi.buildingSO.unitSpawnForwardSign;
+
+            // Normalizar: valores >= 0 salen por forward, valores < 0 por backward.
+            return sign >= 0f ? 1f : -1f;
         }
 
         bool CanAfford(UnitSO unit)

@@ -26,10 +26,18 @@ namespace Project.Gameplay.Buildings
         }
 		
 		public float buildTimeSeconds = 10f;
+
+		[Header("Combat")]
+		[Tooltip("Vida máxima del edificio. Usado por el componente Health.")]
+		public int maxHP = 300;
 		
 		[Header("Population")]
 		[Tooltip("Cuántos slots de población proporciona este edificio (ej: Casa = 5)")]
 		public int populationProvided = 0;
+
+        [Header("Production")]
+        [Tooltip("Dirección de salida de unidades respecto al forward del edificio. 1 = forward, -1 = backward.")]
+        [Range(-1f, 1f)] public float unitSpawnForwardSign = -1f;
 
     }
 }

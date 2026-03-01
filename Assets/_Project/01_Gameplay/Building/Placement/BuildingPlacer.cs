@@ -10,8 +10,10 @@ namespace Project.Gameplay.Buildings
     {
         [Header("Grid")]
         public bool snapToGrid = true;
+        [Tooltip("Referencia al ScriptableObject con configuración del grid. Se sincroniza automáticamente con MapGrid.")]
         public GridConfig gridConfig;
-        public float gridSize = 1f;
+        [Tooltip("Tamaño de celda en metros (auto-sync con MapGrid si existe). 2.5 es típico para RTS.")]
+        public float gridSize = 2.5f;
 
         [Header("Rotation")]
         public float rotationStep = 90f;
@@ -37,6 +39,7 @@ namespace Project.Gameplay.Buildings
 
         private GameObject _ghost;
         private GhostPreview _ghostPreview;
+        private float _ghostPivotToBottom = 0f;
         private bool _isPlacing;
         private float _terrainResolveTimer;
 
@@ -150,12 +153,10 @@ namespace Project.Gameplay.Buildings
                 return;
             }
 
-            // Gate: debe haber aldeanos seleccionados
+            // Debe haber al menos un aldeano seleccionado para poder construir
             bool hasVillagers = selection != null && selection.HasSelectedVillagers();
-
             bool hasSitePrefab = buildSitePrefab != null;
 
-            // Validar colocación
             bool validPlace = PlacementValidator.IsValidPlacement(p, selectedBuilding.size, blockingMask);
             bool canPay = CanAfford(selectedBuilding);
 
@@ -164,8 +165,11 @@ namespace Project.Gameplay.Buildings
             // Actualizar ghost
             if (_ghost != null)
             {
-                _ghost.transform.position = p;
                 _ghost.transform.rotation = Quaternion.Euler(0f, _currentYaw, 0f);
+                Vector3 ghostPos = p;
+                // Elevar/ajustar el ghost según su base visual para que no se vea enterrado.
+                ghostPos.y += _ghostPivotToBottom;
+                _ghost.transform.position = ghostPos;
             }
 
             _ghostPreview?.SetValid(valid);
@@ -211,6 +215,7 @@ namespace Project.Gameplay.Buildings
             _ghost.name = $"[GHOST] {selectedBuilding.id}";
 
             MakeGhostSafe(_ghost);
+            _ghostPivotToBottom = ComputePivotToBottomOffset(_ghost);
 
             _ghostPreview = _ghost.AddComponent<GhostPreview>();
             _ghostPreview.Initialize();
@@ -228,6 +233,7 @@ namespace Project.Gameplay.Buildings
             _ghost.name = $"[GHOST] {selectedBuilding.id}";
 
             MakeGhostSafe(_ghost);
+            _ghostPivotToBottom = ComputePivotToBottomOffset(_ghost);
 
             _ghostPreview = _ghost.AddComponent<GhostPreview>();
             _ghostPreview.Initialize();
@@ -242,6 +248,7 @@ namespace Project.Gameplay.Buildings
             }
 
             _ghostPreview = null;
+            _ghostPivotToBottom = 0f;
             _isPlacing = false;
             _currentYaw = 0f;
         }
@@ -270,6 +277,7 @@ namespace Project.Gameplay.Buildings
 
 			Quaternion rot = Quaternion.Euler(0f, _currentYaw, 0f);
 			GameObject go = Instantiate(buildSitePrefab, position, rot);
+            AlignBuildSiteToTerrain(go);
 			go.name = $"[SITE] {selectedBuilding.id}";
 
 			site = go.GetComponent<BuildSite>();
@@ -291,7 +299,67 @@ namespace Project.Gameplay.Buildings
 
 			Debug.Log($"SITE CONFIG -> name={go.name} id={go.GetInstanceID()} so={(site.buildingSO ? site.buildingSO.id : "null")} final={(site.finalPrefab != null)} buildTime={site.buildTime}");
 
+			// 🟢 OCUPAR CELDAS EN EL GRID (crítico para RTS)
+			OccupyCells(position, selectedBuilding.size, true);
+
 			return true;
+		}
+
+        void AlignBuildSiteToTerrain(GameObject siteGo)
+        {
+            if (siteGo == null || terrain == null) return;
+
+            Vector3 pivotPos = siteGo.transform.position;
+            float terrainY = terrain.SampleHeight(pivotPos) + terrain.transform.position.y;
+            float bottomY = float.MaxValue;
+            bool foundBounds = false;
+
+            var renderers = siteGo.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                if (r == null || !r.enabled) continue;
+                if (r.gameObject.GetComponent<Canvas>() != null) continue;
+                bottomY = Mathf.Min(bottomY, r.bounds.min.y);
+                foundBounds = true;
+            }
+
+            if (!foundBounds)
+            {
+                var colliders = siteGo.GetComponentsInChildren<Collider>(true);
+                for (int i = 0; i < colliders.Length; i++)
+                {
+                    var c = colliders[i];
+                    if (c == null || !c.enabled) continue;
+                    bottomY = Mathf.Min(bottomY, c.bounds.min.y);
+                    foundBounds = true;
+                }
+            }
+
+            if (!foundBounds) return;
+
+            float delta = terrainY - bottomY;
+            if (Mathf.Abs(delta) < 0.0001f) return;
+            Vector3 p = siteGo.transform.position;
+            p.y += delta;
+            siteGo.transform.position = p;
+        }
+
+		/// <summary>Marca/desmarca celdas ocupadas en MapGrid según footprint del edificio.</summary>
+		void OccupyCells(Vector3 worldPos, Vector2 footprintSize, bool occupy)
+		{
+			if (MapGrid.Instance == null || !MapGrid.Instance.IsReady) return;
+
+			Vector2Int center = MapGrid.Instance.WorldToCell(worldPos);
+			Vector2Int size = new Vector2Int(
+				Mathf.Max(1, Mathf.RoundToInt(footprintSize.x)),
+				Mathf.Max(1, Mathf.RoundToInt(footprintSize.y))
+			);
+			Vector2Int min = new Vector2Int(center.x - size.x / 2, center.y - size.y / 2);
+
+			MapGrid.Instance.SetOccupiedRect(min, size, occupy);
+
+			Debug.Log($"🔲 Grid: {(occupy ? "Ocupado" : "Liberado")} {size.x}×{size.y} en {center}");
 		}
 
 
@@ -366,20 +434,75 @@ namespace Project.Gameplay.Buildings
             for (int i = 0; i < t.childCount; i++)
                 SetLayerRecursive(t.GetChild(i), layer);
         }
+
+        static float ComputePivotToBottomOffset(GameObject go)
+        {
+            if (go == null) return 0f;
+            float bottomY = float.MaxValue;
+            bool found = false;
+
+            var renderers = go.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                if (r == null || !r.enabled) continue;
+                if (r.gameObject.GetComponent<Canvas>() != null) continue;
+                bottomY = Mathf.Min(bottomY, r.bounds.min.y);
+                found = true;
+            }
+
+            if (!found)
+            {
+                var colliders = go.GetComponentsInChildren<Collider>(true);
+                for (int i = 0; i < colliders.Length; i++)
+                {
+                    var c = colliders[i];
+                    if (c == null || !c.enabled) continue;
+                    bottomY = Mathf.Min(bottomY, c.bounds.min.y);
+                    found = true;
+                }
+            }
+
+            if (!found) return 0f;
+            return go.transform.position.y - bottomY;
+        }
 		
 		void AutoAssignBuilders(BuildSite site)
 		{
-			if (selection == null) return;
-
-			var selected = selection.GetSelected();
-			for (int i = 0; i < selected.Count; i++)
+			int assigned = 0;
+			if (selection != null)
 			{
-				var builder = selected[i].GetComponent<Project.Gameplay.Units.Builder>();
-				if (builder != null)
+				var selected = selection.GetSelected();
+				for (int i = 0; i < selected.Count; i++)
 				{
-					// Si tienes UnitMover, perfecto (tu mover expone MoveTo)
-					// Builder actualmente usa NavMeshAgent directo, igual sirve.
-					builder.SetBuildTarget(site);
+					var builder = selected[i].GetComponent<Project.Gameplay.Units.Builder>();
+					if (builder != null)
+					{
+						builder.SetBuildTarget(site);
+						assigned++;
+					}
+				}
+			}
+			// Si no había aldeanos seleccionados, asignar el más cercano al sitio
+			if (assigned == 0 && site != null)
+			{
+				var allBuilders = Object.FindObjectsByType<Project.Gameplay.Units.Builder>(FindObjectsSortMode.None);
+				Vector3 sitePos = site.transform.position;
+				Project.Gameplay.Units.Builder nearest = null;
+				float nearestDist = float.MaxValue;
+				for (int i = 0; i < allBuilders.Length; i++)
+				{
+					float d = (allBuilders[i].transform.position - sitePos).sqrMagnitude;
+					if (d < nearestDist)
+					{
+						nearestDist = d;
+						nearest = allBuilders[i];
+					}
+				}
+				if (nearest != null)
+				{
+					nearest.SetBuildTarget(site);
+					Debug.Log($"BuildingPlacer: sin aldeanos seleccionados, asignado el más cercano a {site.name}");
 				}
 			}
 		}

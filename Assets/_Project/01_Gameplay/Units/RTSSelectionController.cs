@@ -2,6 +2,9 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.EventSystems;
+using Project.Gameplay.Combat;
+using Project.Gameplay.Resources;
+using Project.Gameplay.Buildings;
 
 namespace Project.Gameplay.Units
 {
@@ -19,9 +22,16 @@ namespace Project.Gameplay.Units
         [Header("Double Click")]
         public float doubleClickTime = 0.3f;
 
+        [Header("Hover sobre recursos (con aldeano seleccionado)")]
+        [Tooltip("Tiempo sobre un recurso para mostrar borde de hover (facilita el clic).")]
+        public float resourceHoverDelay = 0.25f;
+
         public LayerMask buildingLayerMask;
-        
+        [Tooltip("Capa de recursos (árboles, piedra, oro). Debe incluir la capa 'Resource' si el generador la usa.")]
+        public LayerMask resourceLayerMask;
+
         private Project.Gameplay.Buildings.BuildingSelectable _selectedBuilding;
+        private ResourceSelectable _selectedResource;
         
         public Project.UI.SelectionBoxUI selectionBoxUI;
 
@@ -29,14 +39,22 @@ namespace Project.Gameplay.Units
         private bool _isDragging;
 
         private readonly List<UnitSelectable> _selected = new();
+        private readonly Dictionary<int, HealthBarWorld> _healthBarCache = new();
         private int _selectedVillagerCount;
 
         // Para detectar doble clic
         private float _lastClickTime;
         private Vector2 _lastClickPos;
+
+        // Hover sobre recursos
+        private ResourceSelectable _hoveredResource;
+        private float _hoveredResourceTime;
 		
 		public Project.Gameplay.Buildings.BuildingPlacer buildingPlacer;
 
+        [Header("Barra de vida (opcional)")]
+        [Tooltip("Prefab con HealthBar (Canvas + HealthBarWorld + Fill). Si la unidad no tiene barra (ej. aldeanos de la escena), se instancia este prefab al seleccionar.")]
+        public GameObject healthBarFallbackPrefab;
 
         void Awake()
         {
@@ -76,6 +94,9 @@ namespace Project.Gameplay.Units
             {
                 selectionBoxUI?.Show(_dragStart, mouse.position.ReadValue());
             }
+
+            // Hover sobre recursos cuando hay aldeano seleccionado
+            UpdateResourceHover();
 
             // LMB released -> select click or box
             if (_isDragging && mouse.leftButton.wasReleasedThisFrame)
@@ -148,6 +169,21 @@ namespace Project.Gameplay.Units
                     ClearSelection();
                     b.SetSelected(true);
                     _selectedBuilding = b;
+                    SetWorldHealthBarVisible(b.gameObject, true);
+                    return;
+                }
+            }
+
+            // 3) Recursos (árboles, piedra, oro, etc.)
+            if (resourceLayerMask != 0 && Physics.Raycast(ray, out RaycastHit hitR, 5000f, resourceLayerMask))
+            {
+                var res = hitR.collider.GetComponentInParent<ResourceSelectable>();
+                if (res != null && res.GetResourceNode() != null)
+                {
+                    ClearSelection();
+                    res.SetSelected(true);
+                    _selectedResource = res;
+                    SetWorldHealthBarVisible(res.gameObject, true);
                 }
             }
         }
@@ -224,6 +260,7 @@ namespace Project.Gameplay.Units
             if (_selected.Contains(u)) return;
             _selected.Add(u);
             u.SetSelected(true);
+            SetWorldHealthBarVisible(u.gameObject, true);
 
             // Cache: aldeano = VillagerGatherer o Builder.
             if (u.GetComponent<VillagerGatherer>() != null) _selectedVillagerCount++;
@@ -232,14 +269,29 @@ namespace Project.Gameplay.Units
 
         void ClearSelection()
         {
+            ClearResourceHover();
             if (_selectedBuilding != null)
             {
+                SetWorldHealthBarVisible(_selectedBuilding.gameObject, false);
                 _selectedBuilding.SetSelected(false);
                 _selectedBuilding = null;
             }
 
+            if (_selectedResource != null)
+            {
+                SetWorldHealthBarVisible(_selectedResource.gameObject, false);
+                _selectedResource.SetSelected(false);
+                _selectedResource = null;
+            }
+
             for (int i = 0; i < _selected.Count; i++)
-                if (_selected[i] != null) _selected[i].SetSelected(false);
+            {
+                if (_selected[i] != null)
+                {
+                    SetWorldHealthBarVisible(_selected[i].gameObject, false);
+                    _selected[i].SetSelected(false);
+                }
+            }
 
             _selected.Clear();
             _selectedVillagerCount = 0;
@@ -261,6 +313,12 @@ namespace Project.Gameplay.Units
 		/// Obtiene el edificio actualmente seleccionado (si hay uno)
 		/// </summary>
 		public Project.Gameplay.Buildings.BuildingSelectable GetSelectedBuilding() => _selectedBuilding;
+
+        /// <summary>Obtiene el recurso actualmente seleccionado (árbol, piedra, oro, etc.).</summary>
+        public ResourceSelectable GetSelectedResource() => _selectedResource;
+
+        /// <summary>Obtiene el nodo del recurso seleccionado (cantidad, tipo). Null si no hay recurso seleccionado.</summary>
+        public ResourceNode GetSelectedResourceNode() => _selectedResource != null ? _selectedResource.GetResourceNode() : null;
 		
 		public int CountSelectedWithComponent<T>() where T : Component
 		{
@@ -282,11 +340,131 @@ namespace Project.Gameplay.Units
 			AddSelection(u);
 		}
 
-		public void AddToSelection(UnitSelectable u)
-		{
-			if (u == null) return;
-			AddSelection(u);
-		}
+        public void AddToSelection(UnitSelectable u)
+        {
+            if (u == null) return;
+            AddSelection(u);
+        }
 
+        void UpdateResourceHover()
+        {
+            if (!HasSelectedVillagers() || resourceLayerMask == 0 || cam == null)
+            {
+                ClearResourceHover();
+                return;
+            }
+
+            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            {
+                ClearResourceHover();
+                return;
+            }
+
+            var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
+            Ray ray = cam.ScreenPointToRay(mousePos);
+            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, resourceLayerMask))
+            {
+                ClearResourceHover();
+                return;
+            }
+
+            var res = hit.collider.GetComponentInParent<ResourceSelectable>();
+            if (res == null || res.GetResourceNode() == null)
+            {
+                ClearResourceHover();
+                return;
+            }
+
+            if (res == _hoveredResource)
+            {
+                _hoveredResourceTime += Time.deltaTime;
+                if (_hoveredResourceTime >= resourceHoverDelay)
+                    res.SetHovered(true);
+            }
+            else
+            {
+                ClearResourceHover();
+                _hoveredResource = res;
+                _hoveredResourceTime = 0f;
+            }
+        }
+
+        void ClearResourceHover()
+        {
+            if (_hoveredResource != null)
+            {
+                _hoveredResource.SetHovered(false);
+                _hoveredResource = null;
+            }
+            _hoveredResourceTime = 0f;
+        }
+
+        void SetWorldHealthBarVisible(GameObject entity, bool visible)
+        {
+            if (entity == null) return;
+            int id = entity.GetInstanceID();
+            _healthBarCache.TryGetValue(id, out var bar);
+            if (bar == null)
+            {
+                bar = entity.GetComponentInChildren<HealthBarWorld>(true);
+                if (bar != null) _healthBarCache[id] = bar;
+            }
+            var source = FindOrCreateWorldBarSource(entity);
+            if (bar != null && !IsUsableBar(bar))
+            {
+                bar = null;
+                _healthBarCache.Remove(id);
+            }
+            // Si la entidad tiene cualquier fuente de barra (vida, recurso) pero no tiene barra, instanciar fallback
+            if (bar == null && visible && healthBarFallbackPrefab != null && source != null)
+            {
+                GameObject clone = Instantiate(healthBarFallbackPrefab, entity.transform);
+                clone.name = "HealthBar";
+                bar = clone.GetComponentInChildren<HealthBarWorld>(true);
+                if (bar != null) _healthBarCache[id] = bar;
+            }
+            if (bar == null) return;
+            if (visible) bar.Show();
+            else bar.Hide();
+        }
+
+        static bool IsUsableBar(HealthBarWorld bar)
+        {
+            if (bar == null) return false;
+            if (bar.GetComponent<Canvas>() == null) return false;
+            return true;
+        }
+
+        IWorldBarSource FindOrCreateWorldBarSource(GameObject entity)
+        {
+            if (entity == null) return null;
+
+            var source = entity.GetComponent<IWorldBarSource>();
+            if (source != null) return source;
+            source = entity.GetComponentInParent<IWorldBarSource>();
+            if (source != null) return source;
+            source = entity.GetComponentInChildren<IWorldBarSource>(true);
+            if (source != null) return source;
+
+            // Fallback para edificios seleccionables sin Health (algunos prefabs viejos).
+            var building = entity.GetComponentInParent<BuildingSelectable>();
+            if (building != null)
+            {
+                var health = building.GetComponent<Health>();
+                if (health == null)
+                {
+                    int hp = 200;
+                    var bi = building.GetComponent<BuildingInstance>();
+                    if (bi != null && bi.buildingSO != null)
+                        hp = Mathf.Max(1, bi.buildingSO.maxHP);
+
+                    health = building.gameObject.AddComponent<Health>();
+                    health.InitFromMax(hp);
+                }
+                return health;
+            }
+
+            return null;
+        }
     }
 }

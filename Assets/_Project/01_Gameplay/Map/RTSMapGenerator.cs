@@ -6,6 +6,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.Rendering;
 using Project.Gameplay.Buildings;
+using Project.Gameplay.Combat;
 using Unity.AI.Navigation;
 using Project.Gameplay.Map.Generator;
 
@@ -22,7 +23,12 @@ namespace Project.Gameplay.Map
     [DefaultExecutionOrder(-200)] // Ejecutar antes que las unidades para desactivar NavMeshAgent y evitar "Failed to create agent"
     public class RTSMapGenerator : MonoBehaviour
     {
+        [Header("Map Preset (Estilo AoE2)")]
+        [Tooltip("Preset del mapa. 'Custom' usa los valores del Inspector. Otros presets sobrescriben configuración automáticamente.")]
+        public MapPresetType mapPreset = MapPresetType.Continental;
+        
         [Header("Grid")]
+        [Tooltip("⚠️ IMPORTANTE: Asigna 'GridConfig.asset' aquí. Es la fuente única de verdad para el tamaño de celda.")]
         public GridConfig gridConfig;
         public int width = 256;
         public int height = 256;
@@ -58,13 +64,29 @@ namespace Project.Gameplay.Map
         public TerrainLayer grassLayer;
         public TerrainLayer dirtLayer;
         public TerrainLayer rockLayer;
-        [Header("Alturas para Grass/Dirt/Rock (0–1, solo con 3 capas)")]
-        [Tooltip("Altura máxima (0–1) para hierba. Por debajo = grass, entre este y Dirt Max = dirt, por encima de Dirt Max = rock.")]
-        [Range(0.2f, 0.6f)] public float grassMaxHeight = 0.4f;
-        [Tooltip("Altura máxima (0–1) para tierra. Por encima = roca.")]
-        [Range(0.45f, 0.85f)] public float dirtMaxHeight = 0.65f;
-        [Tooltip("Ancho de transición entre capas (0 = corte duro, 0.15 = transición suave).")]
-        [Range(0f, 0.25f)] public float textureBlendWidth = 0.05f;
+        [Tooltip("Tamaño de repetición de la textura Grass en unidades mundo (X,Z). Valores mayores = menos repetición. 0 = usar el del Terrain Layer. Si la hierba se ve muy repetitiva, prueba 50–80 en X y Z.")]
+        public Vector2 grassTileSize = new Vector2(0f, 0f);
+        [Tooltip("Igual que Grass; 0 = usar el del layer.")]
+        public Vector2 dirtTileSize = new Vector2(0f, 0f);
+        [Tooltip("Igual que Grass; 0 = usar el del layer.")]
+        public Vector2 rockTileSize = new Vector2(0f, 0f);
+        [Tooltip("Para arena en orillas; 0 = usar el del layer.")]
+        public Vector2 sandTileSize = new Vector2(0f, 0f);
+        [Header("Porcentaje del mapa por textura (grass/dirt/rock) — debe sumar 100")]
+        [Tooltip("% del terreno que será hierba (zonas bajas). Ej: 60 = 60% grass.")]
+        [Range(0, 100)] public int grassPercent = 60;
+        [Tooltip("% del terreno que será tierra/dirt (zonas medias). Ej: 20 = 20% dirt.")]
+        [Range(0, 100)] public int dirtPercent = 20;
+        [Tooltip("% del terreno que será roca (zonas altas). Ej: 20 = 20% rock.")]
+        [Range(0, 100)] public int rockPercent = 20;
+        [Tooltip("Ancho de transición entre capas (0.02–0.15 típico).")]
+        [Range(0.02f, 0.25f)] public float textureBlendWidth = 0.08f;
+
+        [Header("Arena (orillas de lagos y ríos)")]
+        [Tooltip("Terrain Layer para arena/sand en las orillas. Opcional.")]
+        public TerrainLayer sandLayer;
+        [Tooltip("Ancho de la franja de arena desde la orilla (en celdas del grid).")]
+        [Range(1, 6)] public int sandShoreCells = 3;
 
         [Header("NavMesh (opcional)")]
         public NavMeshSurface navMeshSurface;
@@ -79,6 +101,8 @@ namespace Project.Gameplay.Map
         public WaterMeshMode waterMeshMode = WaterMeshMode.FullPlaneIntersect;
         [Tooltip("Material de la malla de agua (ej. MAT_Water, URP Lit o Unlit). Si no asignas, se usa un material por defecto.")]
         public Material waterMaterial;
+        [Tooltip("Transparencia del agua (0.5–1). Valores < 1 permiten ver la arena bajo el agua. Usado por el generador definitivo.")]
+        [Range(0.5f, 1f)] public float waterAlpha = 0.88f;
         [Tooltip("Tamaño de chunk en celdas (solo si waterMeshMode = Chunks). Menor = más meshes, mejor culling.")]
         public int waterChunkSize = 32;
         [Tooltip("Si >= 0, el agua usa esta capa. Por defecto (-1) se usa capa 0 (Default) para que se vea en Game view.")]
@@ -100,6 +124,8 @@ namespace Project.Gameplay.Map
         public BuildingSO townCenterSO;
         public GameObject townCenterPrefabOverride;
         public float tcClearRadius = 6f;
+        [Tooltip("Ajuste vertical extra del Town Center tras alinearlo al terreno (por si el pivot/modelo necesita corrección fina).")]
+        public float townCenterSpawnYOffset = 0f;
 
         [Header("Resources Prefabs")]
         public GameObject treePrefab;
@@ -152,8 +178,28 @@ namespace Project.Gameplay.Map
         public Vector2Int globalStone = new Vector2Int(8, 14);
         [Tooltip("Oro a repartir por el mapa (fuera de spawns).")]
         public Vector2Int globalGold = new Vector2Int(10, 16);
+        [Tooltip("Animales (comida) a repartir por el mapa (fuera de spawns). Requiere Animal Prefab o variantes asignados.")]
+        public Vector2Int globalAnimals = new Vector2Int(8, 20);
         [Tooltip("Radio alrededor de cada spawn dentro del cual NO se colocan recursos globales (para no solapar con los del Town Center).")]
         public float globalExcludeRadius = 55f;
+
+        [Header("Clustering de árboles (bosques)")]
+        [Tooltip("Si está activo, los árboles globales se agrupan en bosques densos + algunos sueltos. Requiere preset o valores manuales debajo.")]
+        public bool forestClustering = true;
+        [Range(0f, 1f), Tooltip("Densidad dentro de cada bosque: 0 = disperso, 1 = muy denso.")]
+        public float clusterDensity = 0.6f;
+        [Tooltip("Mínimo de árboles por bosque.")]
+        public int clusterMinSize = 15;
+        [Tooltip("Máximo de árboles por bosque.")]
+        public int clusterMaxSize = 40;
+
+        [Header("Agua (preset / generador definitivo)")]
+        [Tooltip("Número de ríos (usado por el generador cuando no hay MapGenConfig asignado o se crea desde preset).")]
+        public int riverCount = 3;
+        [Tooltip("Número de lagos.")]
+        public int lakeCount = 2;
+        [Tooltip("Máximo de celdas por lago (flood fill).")]
+        public int maxLakeCells = 800;
 
         [Header("Fairness")]
         [Tooltip("Mínimo deseado de árboles por jugador (solo aviso; los recursos ya colocados no se borran). Con valores por defecto se colocan ~20–32. Pon 15–20 para evitar el aviso.")]
@@ -196,6 +242,17 @@ namespace Project.Gameplay.Map
         System.Random _rng;
         readonly List<Vector3> _spawns = new();
         readonly List<Vector3> _townCenterPositions = new();
+        
+        struct TownCenterReservation
+        {
+            public Vector2 centerWorldXZ;
+            public Vector2Int min;
+            public Vector2Int size;
+        }
+        
+        // Reservas temporales alrededor de TCs para evitar colocar recursos.
+        // Importante: NO deben quedarse como "occupied" permanentemente porque el A* evita occupied y aleja a las unidades.
+        readonly List<TownCenterReservation> _townCenterReservations = new();
         Transform _waterRoot;
 
         public MapGrid GetGrid() => _grid;
@@ -296,8 +353,52 @@ namespace Project.Gameplay.Map
             if (_grid == null)
                 _grid = gameObject.AddComponent<MapGrid>();
 
+            // 🟢 Aplicar preset si no es Custom
+            ApplyMapPreset();
+
             // Pipeline legacy retirado: desde ahora el proyecto usa SOLO el Generador Definitivo.
             RunDefinitiveGenerate();
+        }
+        
+        static Vector2Int ScaleVector2Int(Vector2Int v, float multiplier)
+        {
+            if (multiplier <= 0f) multiplier = 1f;
+            return new Vector2Int(Mathf.RoundToInt(v.x * multiplier), Mathf.RoundToInt(v.y * multiplier));
+        }
+
+        /// <summary>Devuelve el layer o una copia con tileSize aplicado para reducir el efecto de repetición (textura no tileable).</summary>
+        static TerrainLayer GetTerrainLayerWithTiling(TerrainLayer layer, Vector2 tileSize)
+        {
+            if (layer == null) return null;
+            if (tileSize.x <= 0f && tileSize.y <= 0f) return layer;
+            float sx = tileSize.x > 0f ? tileSize.x : layer.tileSize.x;
+            float sy = tileSize.y > 0f ? tileSize.y : layer.tileSize.y;
+            TerrainLayer clone = UnityEngine.Object.Instantiate(layer);
+            clone.tileSize = new Vector2(sx, sy);
+            return clone;
+        }
+
+        /// <summary>Aplica configuración del preset seleccionado (si no es Custom).</summary>
+        void ApplyMapPreset()
+        {
+            if (mapPreset == MapPresetType.Custom) return;
+            
+            MapPreset preset = MapPresets.GetPreset(mapPreset);
+            if (preset == null) return;
+            
+            // Aplicar configuración del preset
+            terrainFlatness = preset.terrainFlatness;
+            heightMultiplier = preset.heightMultiplier;
+            globalTrees = ScaleVector2Int(preset.globalTrees, preset.resourceMultiplier);
+            forestClustering = preset.forestClustering;
+            clusterDensity = preset.clusterDensity;
+            clusterMinSize = preset.clusterMinSize;
+            clusterMaxSize = preset.clusterMaxSize;
+            riverCount = preset.riverCount;
+            lakeCount = preset.lakeCount;
+            maxLakeCells = preset.maxLakeCells;
+
+            Debug.Log($"🗺️ Preset aplicado: {preset.name} - {preset.description}");
         }
 
         void RunDefinitiveGenerate()
@@ -312,6 +413,12 @@ namespace Project.Gameplay.Map
             generator.terrainGrassLayerOverride = grassLayer;
             generator.terrainDirtLayerOverride = dirtLayer;
             generator.terrainRockLayerOverride = rockLayer;
+            generator.terrainGrassTileSize = grassTileSize;
+            generator.terrainDirtTileSize = dirtTileSize;
+            generator.terrainRockTileSize = rockTileSize;
+            generator.terrainSandLayerOverride = sandLayer;
+            generator.terrainSandTileSize = sandTileSize;
+            generator.terrainSandShoreCells = sandShoreCells;
 
             if (!generator.Generate(config, terrain))
             {
@@ -348,6 +455,7 @@ namespace Project.Gameplay.Map
             MapResourcePlacer.PlaceFromDefinitiveGrid(generator.Grid, this);
             // Además: dispersión global (árboles/piedra/oro) fuera de TCs, usando parámetros del RTSMapGenerator.
             MapResourcePlacer.PlaceGlobalOnly(_spawns, this);
+            ReleaseTownCenterReservations();
 
             // Notificar cámara RTS (si existe) para que actualice bounds al tamaño del mapa generado.
             var camCtrl = FindFirstObjectByType<Project.Gameplay.RTSCameraController>();
@@ -360,7 +468,14 @@ namespace Project.Gameplay.Map
         MapGenConfig CreateRuntimeMapGenConfig()
         {
             MapGenConfig c = ScriptableObject.CreateInstance<MapGenConfig>();
-            float cellSize = gridConfig != null ? gridConfig.gridSize : 1f;
+            
+            // 🟢 FUENTE ÚNICA DE VERDAD: GridConfig.gridSize
+            if (gridConfig == null)
+            {
+                Debug.LogWarning("⚠️ RTSMapGenerator: gridConfig NO está asignado. Asigna 'GridConfig.asset' en el Inspector. Usando fallback: cellSize=2.5");
+            }
+            float cellSize = gridConfig != null ? gridConfig.gridSize : 2.5f;
+            
             c.gridW = width;
             c.gridH = height;
             c.cellSizeWorld = cellSize;
@@ -370,9 +485,9 @@ namespace Project.Gameplay.Map
             c.regionCount = 8;
             c.regionNoiseScale = noiseScale;
             c.waterHeight01 = 0.4f;
-            c.riverCount = 3;
-            c.lakeCount = 2;
-            c.maxLakeCells = 200;
+            c.riverCount = Mathf.Clamp(riverCount, 0, 8);
+            c.lakeCount = Mathf.Clamp(lakeCount, 0, 6);
+            c.maxLakeCells = Mathf.Max(100, maxLakeCells);
             c.cityCount = Mathf.Max(2, playerCount);
             c.minCityDistanceCells = 40;
             c.cityRadiusCells = 8;
@@ -394,13 +509,33 @@ namespace Project.Gameplay.Map
             c.grassLayer = grassLayer;
             c.dirtLayer = dirtLayer;
             c.rockLayer = rockLayer;
-            c.grassMaxHeight01 = grassMaxHeight;
-            c.dirtMaxHeight01 = dirtMaxHeight;
+            int totalPct = grassPercent + dirtPercent + rockPercent;
+            if (totalPct < 1) totalPct = 100;
+            c.grassPercent01 = Mathf.Clamp01((float)grassPercent / totalPct);
+            c.dirtPercent01 = Mathf.Clamp01((float)dirtPercent / totalPct);
+            c.rockPercent01 = Mathf.Clamp01((float)rockPercent / totalPct);
+            c.grassMaxHeight01 = c.grassPercent01;
+            c.dirtMaxHeight01 = c.grassPercent01 + c.dirtPercent01;
             c.textureBlendWidth = textureBlendWidth;
+            c.sandLayer = sandLayer;
+            c.sandShoreCells = sandShoreCells;
             c.waterChunkSize = waterChunkSize;
             c.waterSurfaceOffset = waterSurfaceOffset;
             c.waterMaterial = waterMaterial;
+            c.waterAlpha = waterAlpha;
             c.waterLayer = waterLayerOverride >= 0 ? waterLayerOverride : -1;
+            
+            // 🟢 Parámetros de Marching Squares (agua orgánica)
+            c.waterRoundedEdges = true;
+            c.waterEdgeSubdiv = 4;
+            c.waterEdgeBlurIterations = 3;
+            c.waterEdgeBlurRadius = 2;
+            c.waterIsoLevel = 0.5f;
+            c.waterMaskPostProcess = true;
+            c.waterMaskSmoothIterations = 2;
+            c.waterMaskSmoothThreshold = 5;
+            c.waterMsMaxCornerSamples = 250000;
+            
             return c;
         }
 
@@ -458,8 +593,10 @@ namespace Project.Gameplay.Map
                     bool isWater = waterHeight > -998f && h < waterHeight;
                     if (isWater) waterCount++;
                     _grid.SetWater(c, isWater);
-                    bool blocked = isWater || slope > maxSlope;
+                    bool blocked = slope > maxSlope;
                     _grid.SetBlocked(c, blocked);
+                    if (isWater)
+                        _grid.SetTerrainCost(c, 5f);
 
                     if (blocked) blockedCount++;
                 }
@@ -834,10 +971,12 @@ namespace Project.Gameplay.Map
             // Asignar TerrainLayers ANTES del heightmap para que Unity inicialice alphamap correctamente (estilo ChatGPT/AoE2)
             if (paintTerrainByHeight && (grassLayer != null || dirtLayer != null || rockLayer != null))
             {
+                if (grassLayer != null && rockLayer != null && dirtLayer == null)
+                    Debug.LogWarning("RTSMapGenerator: Tienes Grass y Rock pero no Dirt. Asigna también 'Dirt Layer' en Terrain Textures para ver las 3 zonas (hierba / tierra / roca).");
                 var layersList = new List<TerrainLayer>();
-                if (grassLayer != null) layersList.Add(grassLayer);
-                if (dirtLayer != null) layersList.Add(dirtLayer);
-                if (rockLayer != null) layersList.Add(rockLayer);
+                if (grassLayer != null) layersList.Add(GetTerrainLayerWithTiling(grassLayer, grassTileSize));
+                if (dirtLayer != null) layersList.Add(GetTerrainLayerWithTiling(dirtLayer, dirtTileSize));
+                if (rockLayer != null) layersList.Add(GetTerrainLayerWithTiling(rockLayer, rockTileSize));
                 data.terrainLayers = layersList.ToArray();
                 Log($"RTSMapGenerator: TerrainLayers asignados al TerrainData: {data.terrainLayers.Length} (grass/dirt/rock). GrassLayer={((grassLayer != null) ? grassLayer.name : "null")}");
             }
@@ -938,9 +1077,9 @@ namespace Project.Gameplay.Map
         void PaintTerrainByHeight(TerrainData data, float[,] heights, int res)
         {
             var layers = new List<TerrainLayer>();
-            if (grassLayer != null) layers.Add(grassLayer);
-            if (dirtLayer != null) layers.Add(dirtLayer);
-            if (rockLayer != null) layers.Add(rockLayer);
+            if (grassLayer != null) layers.Add(GetTerrainLayerWithTiling(grassLayer, grassTileSize));
+            if (dirtLayer != null) layers.Add(GetTerrainLayerWithTiling(dirtLayer, dirtTileSize));
+            if (rockLayer != null) layers.Add(GetTerrainLayerWithTiling(rockLayer, rockTileSize));
             if (layers.Count == 0) return;
 
             data.terrainLayers = layers.ToArray();
@@ -961,6 +1100,23 @@ namespace Project.Gameplay.Map
 
             int numLayers = layers.Count;
             float[,,] map = new float[alphamapHeight, alphamapWidth, numLayers];
+            float blend = Mathf.Clamp(textureBlendWidth, 0.02f, 0.2f);
+
+            int totalPct = grassPercent + dirtPercent + rockPercent;
+            if (totalPct < 1) totalPct = 100;
+            float grassMax = Mathf.Clamp01((float)grassPercent / totalPct);
+            float dirtMax = Mathf.Clamp01((float)(grassPercent + dirtPercent) / totalPct);
+
+            float minH = float.MaxValue, maxH = float.MinValue;
+            for (int iy = 0; iy < res; iy++)
+                for (int ix = 0; ix < res; ix++)
+                {
+                    float v = heights[iy, ix];
+                    if (v < minH) minH = v;
+                    if (v > maxH) maxH = v;
+                }
+            float rangeH = maxH - minH;
+            if (rangeH < 0.001f) rangeH = 1f;
 
             for (int y = 0; y < alphamapHeight; y++)
             {
@@ -970,7 +1126,8 @@ namespace Project.Gameplay.Map
                     float hy = (alphamapHeight > 1) ? (float)y / (alphamapHeight - 1) * (res - 1) : 0f;
                     int ix = Mathf.Clamp((int)hx, 0, res - 1);
                     int iy = Mathf.Clamp((int)hy, 0, res - 1);
-                    float h = heights[iy, ix];
+                    float hRaw = heights[iy, ix];
+                    float h = Mathf.Clamp01((hRaw - minH) / rangeH);
 
                     if (numLayers == 1)
                     {
@@ -978,12 +1135,12 @@ namespace Project.Gameplay.Map
                     }
                     else if (numLayers == 2)
                     {
-                        map[y, x, 0] = 1f - h; // grass abajo
-                        map[y, x, 1] = h;       // dirt/rock arriba
+                        map[y, x, 0] = 1f - h;
+                        map[y, x, 1] = h;
                     }
                     else
                     {
-                        PaintThreeLayers(h, grassMaxHeight, dirtMaxHeight, textureBlendWidth,
+                        PaintThreeLayers(h, grassMax, dirtMax, blend,
                             out float g, out float d, out float r);
                         map[y, x, 0] = g;
                         map[y, x, 1] = d;
@@ -992,7 +1149,7 @@ namespace Project.Gameplay.Map
                 }
             }
             data.SetAlphamaps(0, 0, map);
-            Log($"Terrain pintado con {numLayers} capa(s), alphamap {alphamapWidth}x{alphamapHeight} (grass<{grassMaxHeight:F2}, dirt<{dirtMaxHeight:F2}, rock).");
+            Log($"Terrain pintado con {numLayers} capa(s), alphamap {alphamapWidth}x{alphamapHeight} (grass {grassPercent}% / dirt {dirtPercent}% / rock {rockPercent}%).");
         }
 
         /// <summary>
@@ -1151,6 +1308,7 @@ namespace Project.Gameplay.Map
         void PlaceTownCenters()
         {
             _townCenterPositions.Clear();
+            _townCenterReservations.Clear();
             
             if (_grid == null || !_grid.IsReady)
             {
@@ -1164,12 +1322,21 @@ namespace Project.Gameplay.Map
                 return;
             }
 
-            GameObject prefab = townCenterPrefabOverride != null ? townCenterPrefabOverride : townCenterSO.prefab;
+            // Consistencia visual/escala:
+            // - El TC construido por aldeano usa BuildingSO.prefab.
+            // - El TC inicial del mapa debe usar el mismo prefab para evitar tamaños distintos.
+            // townCenterPrefabOverride queda como fallback cuando no hay SO/prefab en SO.
+            GameObject prefab = (townCenterSO != null && townCenterSO.prefab != null)
+                ? townCenterSO.prefab
+                : townCenterPrefabOverride;
             if (prefab == null)
             {
                 Debug.LogError("PlaceTownCenters: El prefab del Town Center es null");
                 return;
             }
+
+            if (townCenterSO != null && townCenterSO.prefab != null && townCenterPrefabOverride != null && townCenterPrefabOverride != townCenterSO.prefab)
+                Debug.LogWarning("PlaceTownCenters: townCenterPrefabOverride es distinto a townCenterSO.prefab. Se usará townCenterSO.prefab para mantener consistencia con el TC construido por aldeanos.");
             
             Vector2 size = townCenterSO != null ? townCenterSO.size : new Vector2(4, 4);
             Vector2Int footprint = new Vector2Int(Mathf.RoundToInt(size.x), Mathf.RoundToInt(size.y));
@@ -1208,8 +1375,20 @@ namespace Project.Gameplay.Map
                     Vector3 world = _grid.CellToWorld(cell);
                     world.y = terrain != null ? SampleHeight(world) : 0f;
                     GameObject tc = Instantiate(prefab, world, Quaternion.identity);
+                    AlignTownCenterToTerrain(tc);
+                    EnsureWorldBarAnchor(tc);
+                    SetLayerRecursive(tc.transform, tc.layer);
+                    if (tc.GetComponent<BuildingSelectable>() == null)
+                        tc.AddComponent<BuildingSelectable>();
                     tc.name = $"TownCenter_Player{i + 1}";
-                    _grid.SetOccupiedRect(min, footprint, true);
+                    world = tc.transform.position;
+
+                    // Si el prefab es Static, el bake de NavMesh incluye su collider con margen → las unidades no se acercan.
+                    // Forzar no-static para que solo el NavMeshObstacle tallen en runtime (igual que edificios construidos después).
+                    tc.isStatic = false;
+
+                    // 🟢 NO ocupar celdas manualmente, BuildingInstance lo hará
+                    // _grid.SetOccupiedRect(min, footprint, true);  // REMOVIDO
 
                     // Asegurar que el Town Center pueda crear aldeanos (ProductionBuilding + BuildingInstance)
                     if (townCenterSO != null)
@@ -1217,6 +1396,12 @@ namespace Project.Gameplay.Map
                         var bi = tc.GetComponent<BuildingInstance>();
                         if (bi == null) bi = tc.AddComponent<BuildingInstance>();
                         bi.buildingSO = townCenterSO;
+                        // 🟢 Ocupar celdas inmediatamente (no esperar a Start)
+                        bi.OccupyCellsOnStart();
+
+                        // Aplicar tamaño de obstáculo/collider ya (MapGrid está listo). Así las unidades pueden acercarse.
+                        var buildingCtrl = tc.GetComponent<BuildingController>();
+                        if (buildingCtrl != null) buildingCtrl.RefreshObstacleAndCollider();
 
                         var prod = tc.GetComponent<ProductionBuilding>();
                         if (prod == null)
@@ -1226,13 +1411,21 @@ namespace Project.Gameplay.Map
                             {
                                 var spawnObj = new GameObject("SpawnPoint");
                                 spawnObj.transform.SetParent(tc.transform);
-                                spawnObj.transform.localPosition = new Vector3(0, 0, 5);
+                                float safeScaleZ = Mathf.Max(0.001f, Mathf.Abs(tc.transform.lossyScale.z));
+                                float sign = townCenterSO != null && townCenterSO.unitSpawnForwardSign >= 0f ? 1f : -1f;
+                                spawnObj.transform.localPosition = new Vector3(0f, 0f, (3f * sign) / safeScaleZ);
                                 prod.spawnPoint = spawnObj.transform;
                             }
                         }
                     }
 
                     // Limpiar alrededor del TC
+                    _townCenterReservations.Add(new TownCenterReservation
+                    {
+                        centerWorldXZ = new Vector2(world.x, world.z),
+                        min = min,
+                        size = footprint
+                    });
                     _grid.SetOccupiedCircle(new Vector2(world.x, world.z), tcClearRadius, true);
                     _townCenterPositions.Add(world);
                     placedCount++;
@@ -1245,6 +1438,118 @@ namespace Project.Gameplay.Map
             }
             
             Log($"Town Centers colocados: {placedCount}/{_spawns.Count}");
+        }
+
+        /// <summary>
+        /// Alinea el Town Center al terreno usando la base visual/collider (no solo el pivote).
+        /// Evita que modelos con pivot centrado queden enterrados o flotando.
+        /// </summary>
+        void AlignTownCenterToTerrain(GameObject townCenter)
+        {
+            if (townCenter == null) return;
+            if (terrain == null)
+            {
+                if (Mathf.Abs(townCenterSpawnYOffset) > 0.0001f)
+                {
+                    var p = townCenter.transform.position;
+                    p.y += townCenterSpawnYOffset;
+                    townCenter.transform.position = p;
+                }
+                return;
+            }
+
+            Vector3 pivotPos = townCenter.transform.position;
+            float terrainY = SampleHeight(pivotPos);
+            float bottomY = float.MaxValue;
+            bool foundBounds = false;
+
+            var renderers = townCenter.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer r = renderers[i];
+                if (r == null) continue;
+                string n = r.gameObject.name;
+                if (n.Equals("DropAnchor", StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("SpawnPoint", StringComparison.OrdinalIgnoreCase) ||
+                    r.gameObject.GetComponent<Canvas>() != null)
+                    continue;
+                bottomY = Mathf.Min(bottomY, r.bounds.min.y);
+                foundBounds = true;
+            }
+
+            // Fallback si el prefab no tiene renderers visibles.
+            if (!foundBounds)
+            {
+                var colliders = townCenter.GetComponentsInChildren<Collider>(true);
+                for (int i = 0; i < colliders.Length; i++)
+                {
+                    Collider c = colliders[i];
+                    if (c == null) continue;
+                    bottomY = Mathf.Min(bottomY, c.bounds.min.y);
+                    foundBounds = true;
+                }
+            }
+
+            float delta = terrainY - (foundBounds ? bottomY : pivotPos.y);
+            Vector3 pos = townCenter.transform.position;
+            pos.y += delta + townCenterSpawnYOffset;
+            townCenter.transform.position = pos;
+        }
+
+        void EnsureWorldBarAnchor(GameObject go)
+        {
+            if (go == null) return;
+
+            var settings = go.GetComponent<WorldBarSettings>();
+            if (settings == null) return;
+
+            Transform anchor = go.transform.Find("BarAnchor");
+            if (anchor == null)
+            {
+                var created = new GameObject("BarAnchor");
+                anchor = created.transform;
+                anchor.SetParent(go.transform, false);
+                anchor.localPosition = new Vector3(0f, 2f, 0f);
+            }
+
+            settings.barAnchor = anchor;
+            settings.autoAnchorName = "BarAnchor";
+            settings.useLocalOffsetOverride = true;
+            settings.localOffset = Vector3.zero;
+
+            var bar = go.GetComponentInChildren<HealthBarWorld>(true);
+            if (bar != null)
+            {
+                bar.useLocalOffset = false;
+                bar.barScaleMultiplier = 1.0f;
+                bar.billboardMode = HealthBarWorld.BillboardMode.None;
+                bar.keepConstantWorldSize = true;
+            }
+        }
+
+        static void SetLayerRecursive(Transform t, int layer)
+        {
+            if (t == null) return;
+            t.gameObject.layer = layer;
+            for (int i = 0; i < t.childCount; i++)
+                SetLayerRecursive(t.GetChild(i), layer);
+        }
+
+        /// <summary>
+        /// Libera las reservas circulares usadas solo para evitar colocar recursos cerca de TCs.
+        /// Mantiene la huella real del edificio como occupied.
+        /// </summary>
+        void ReleaseTownCenterReservations()
+        {
+            if (_grid == null || !_grid.IsReady) return;
+            if (_townCenterReservations.Count == 0) return;
+
+            for (int i = 0; i < _townCenterReservations.Count; i++)
+            {
+                var r = _townCenterReservations[i];
+                _grid.SetOccupiedCircle(r.centerWorldXZ, tcClearRadius, false);
+                _grid.SetOccupiedRect(r.min, r.size, true);
+            }
         }
 
         void MoveExistingUnitsToTownCenters()
@@ -1465,6 +1770,19 @@ namespace Project.Gameplay.Map
                 Debug.LogWarning("NavMesh: Construcción completada pero navMeshData es NULL");
             }
 
+            // Re-aplicar obstáculos y forzar re-tallado en la NavMesh recién construida (TCs del mapa quedan con carving correcto).
+            foreach (var ctrl in FindObjectsByType<BuildingController>(FindObjectsSortMode.None))
+            {
+                if (ctrl == null) continue;
+                ctrl.RefreshObstacleAndCollider();
+                var obs = ctrl.GetComponent<NavMeshObstacle>();
+                if (obs != null)
+                {
+                    obs.enabled = false;
+                    obs.enabled = true;
+                }
+            }
+
             StartCoroutine(FixUnitsAfterNavMesh());
         }
 
@@ -1586,6 +1904,14 @@ namespace Project.Gameplay.Map
             
             foreach (var agent in agents)
             {
+                // No tocar unidades que están siguiendo ruta A* (su agente está desactivado a propósito)
+                var mover = agent.GetComponent<Project.Gameplay.Units.UnitMover>();
+                if (mover != null && mover.IsFollowingPath)
+                {
+                    Log($"Unidad {agent.name} está en ruta A*, no tocar.");
+                    continue;
+                }
+
                 // Si el agente está deshabilitado, primero recolocar en NavMesh y LUEGO activar
                 // (activar antes de recolocar provoca "Failed to create agent because it is not close enough to the NavMesh")
                 if (!agent.enabled)
