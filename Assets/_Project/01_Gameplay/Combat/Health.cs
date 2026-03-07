@@ -5,7 +5,7 @@ namespace Project.Gameplay.Combat
     /// <summary>
     /// Componente de vida reutilizable para unidades y edificios.
     /// Inicializar con InitFromMax() al spawnear o desde BuildingSO/UnitSO.
-    /// Implementa IWorldBarSource para que la barra mundial única muestre vida.
+    /// Expone barAnchor y GetBarWorldPosition() para el HealthBarManager (barras en pantalla).
     /// </summary>
     public class Health : MonoBehaviour, IHealth, IWorldBarSource
     {
@@ -15,6 +15,12 @@ namespace Project.Gameplay.Combat
 
         [Header("Runtime")]
         [SerializeField] private int _currentHP;
+
+        [Header("Barra (HealthBarManager)")]
+        [Tooltip("Punto de anclaje en mundo para la barra de vida flotante. Si null, se usa transform.position + fallbackOffset.")]
+        [SerializeField] private Transform barAnchor;
+        [Tooltip("Offset usado cuando barAnchor es null (ej. encima de la cabeza).")]
+        [SerializeField] private Vector3 fallbackOffset = new Vector3(0f, 2f, 0f);
 
         [Header("Debug (solo para probar barra al X%)")]
         [Tooltip("Si activas esto, al iniciar la vida quedará al Start Percent (ej. 50%). Útil para ver los dos colores de la barra.")]
@@ -26,13 +32,48 @@ namespace Project.Gameplay.Combat
         public int MaxHP => maxHP;
         public bool IsAlive => _currentHP > 0;
 
+        /// <summary>Ratio 0-1 para la barra (lleno = 1).</summary>
+        public float Normalized => maxHP > 0 ? Mathf.Clamp01(_currentHP / (float)maxHP) : 0f;
+
+        public Transform BarAnchor => barAnchor;
+
         public event System.Action OnDeath;
+
+        /// <summary>Posición en mundo donde debe dibujarse la barra (HealthBarManager la convierte a pantalla).</summary>
+        public Vector3 GetBarWorldPosition()
+        {
+            if (barAnchor != null)
+                return barAnchor.position;
+            return transform.position + fallbackOffset;
+        }
+
+        /// <summary>Asigna el anchor en runtime (ej. desde BuildSite o MapGenerator al crear BarAnchor).</summary>
+        public void SetBarAnchor(Transform anchor)
+        {
+            barAnchor = anchor;
+        }
+
+        void Awake()
+        {
+            EnsureHPInitialized();
+        }
 
         void Start()
         {
             if (startWithPercentForTesting && maxHP > 0)
                 _currentHP = Mathf.Clamp(Mathf.RoundToInt(maxHP * startPercent / 100f), 1, maxHP);
-            else if (_currentHP <= 0 && maxHP > 0)
+            else
+                EnsureHPInitialized();
+        }
+
+        void OnDestroy()
+        {
+            HealthBarManager.Instance?.Unregister(this);
+        }
+
+        void EnsureHPInitialized()
+        {
+            if (_currentHP <= 0 && maxHP > 0)
                 _currentHP = maxHP;
         }
 
@@ -49,6 +90,7 @@ namespace Project.Gameplay.Combat
         {
             if (amount <= 0 || !IsAlive) return;
 
+            FloatingDamageText.Spawn(transform.position, amount, isHeal: false);
             _currentHP = Mathf.Max(0, _currentHP - amount);
 
             if (_currentHP <= 0)
@@ -64,11 +106,12 @@ namespace Project.Gameplay.Combat
         public void Heal(int amount)
         {
             if (amount <= 0 || !IsAlive) return;
+            if (amount >= 5) FloatingDamageText.Spawn(transform.position, amount, isHeal: true);
             _currentHP = Mathf.Min(maxHP, _currentHP + amount);
         }
 
-        // IWorldBarSource: misma barra para vida
-        public float GetBarRatio01() => maxHP > 0 ? Mathf.Clamp01(_currentHP / (float)maxHP) : 0f;
+        // IWorldBarSource (deprecated: usado por HealthBarWorld legacy)
+        public float GetBarRatio01() => Normalized;
         public Color GetBarFullColor() => new Color(0.2f, 1f, 0.2f);
         public Color GetBarEmptyColor() => new Color(0.9f, 0.1f, 0.1f);
         public bool IsBarVisible() => IsAlive;

@@ -1,8 +1,10 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using System.Collections;
+using UnityEngine.UI;
 using Project.Gameplay.Map;
 using Project.Gameplay.Combat;
+using Project.Gameplay.Players;
 
 namespace Project.Gameplay.Buildings
 {
@@ -14,12 +16,21 @@ namespace Project.Gameplay.Buildings
         public float buildTime = 10f;     // segundos con 1 aldeano
         public float refundOnCancel = 0.75f;
 
+        [Header("Owner (asignado al colocar)")]
+        [Tooltip("Jugador que colocó el edificio; se usa para reembolso al cancelar.")]
+        public PlayerResources owner;
+
         [Header("Runtime")]
         [Range(0f, 1f)] public float progress01;
 
+        [Header("Debug")]
+        public bool debugLogs = false;
+
         readonly HashSet<Project.Gameplay.Units.Builder> _builders = new();
         bool _completed;
-        bool _cellsOccupied;  // 🟢 Para evitar liberar dos veces
+        bool _cellsOccupied;
+        Image _progressFill;
+        const float ProgressBarHeight = 2.5f;
 
         public bool IsCompleted => progress01 >= 1f;
 
@@ -28,9 +39,63 @@ namespace Project.Gameplay.Buildings
 
 		void Start()
 		{
-			// Espera 1 frame para dar tiempo a BuildingPlacer de configurar
+			// Asegurar que el solar sea seleccionable (click para ver panel "Cancelar construcción")
+			if (GetComponent<BuildingSelectable>() == null)
+				gameObject.AddComponent<BuildingSelectable>();
+
 			StartCoroutine(ValidateAfterOneFrame());
-			_cellsOccupied = true;  // 🟢 Asumimos que BuildingPlacer ya ocupó las celdas
+			_cellsOccupied = true;
+			EnsureBuildProgressBar();
+		}
+
+		void LateUpdate()
+		{
+			if (_progressFill != null)
+				_progressFill.fillAmount = progress01;
+		}
+
+		void EnsureBuildProgressBar()
+		{
+			if (_progressFill != null) return;
+
+			var root = new GameObject("BuildProgressBar");
+			root.transform.SetParent(transform);
+			root.transform.localPosition = new Vector3(0f, ProgressBarHeight, 0f);
+			root.transform.localRotation = Quaternion.identity;
+			root.transform.localScale = Vector3.one;
+
+			var canvas = root.AddComponent<Canvas>();
+			canvas.renderMode = RenderMode.WorldSpace;
+			canvas.worldCamera = Camera.main;
+			var rt = root.GetComponent<RectTransform>();
+			if (rt == null) rt = root.AddComponent<RectTransform>();
+			rt.sizeDelta = new Vector2(2f, 0.2f);
+			rt.localScale = Vector3.one * 0.01f;
+
+			var bgGo = new GameObject("Background", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+			bgGo.transform.SetParent(root.transform, false);
+			var bgRt = bgGo.GetComponent<RectTransform>();
+			bgRt.anchorMin = Vector2.zero;
+			bgRt.anchorMax = Vector2.one;
+			bgRt.offsetMin = Vector2.zero;
+			bgRt.offsetMax = Vector2.zero;
+			bgGo.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.2f, 0.9f);
+			bgGo.GetComponent<Image>().raycastTarget = false;
+
+			var fillGo = new GameObject("Fill", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+			fillGo.transform.SetParent(root.transform, false);
+			var fillRt = fillGo.GetComponent<RectTransform>();
+			fillRt.anchorMin = Vector2.zero;
+			fillRt.anchorMax = Vector2.one;
+			fillRt.offsetMin = Vector2.zero;
+			fillRt.offsetMax = Vector2.zero;
+			_progressFill = fillGo.GetComponent<Image>();
+			_progressFill.color = new Color(0.2f, 0.75f, 0.25f, 0.95f);
+			_progressFill.raycastTarget = false;
+			_progressFill.type = Image.Type.Filled;
+			_progressFill.fillMethod = Image.FillMethod.Horizontal;
+			_progressFill.fillOrigin = (int)Image.OriginHorizontal.Left;
+			_progressFill.fillAmount = progress01;
 		}
 
 		IEnumerator ValidateAfterOneFrame()
@@ -51,6 +116,38 @@ namespace Project.Gameplay.Buildings
 			{
 				FreeCells();
 			}
+		}
+
+		/// <summary>Cancela la construcción: reembolso parcial, libera aldeanos y celdas, destruye el solar.</summary>
+		public void CancelConstruction()
+		{
+			if (_completed) return;
+
+			_completed = true;
+			_cellsOccupied = false;
+
+			// Reembolso parcial al jugador
+			if (owner != null && buildingSO != null && buildingSO.costs != null)
+			{
+				foreach (var cost in buildingSO.costs)
+				{
+					int refund = Mathf.RoundToInt(cost.amount * refundOnCancel);
+					if (refund > 0)
+						owner.Add(cost.kind, refund);
+				}
+			}
+
+			FreeCells();
+
+			// Quitar este solar como objetivo de los aldeanos que estaban construyendo
+			var copy = new List<Project.Gameplay.Units.Builder>(_builders);
+			_builders.Clear();
+			foreach (var b in copy)
+			{
+				if (b != null) b.ClearBuildTargetIfThis(this);
+			}
+
+			Destroy(gameObject);
 		}
 
         public void AddWorkSeconds(float workSeconds)
@@ -102,7 +199,7 @@ namespace Project.Gameplay.Buildings
                     if (popManager != null)
                     {
                         popManager.AddHousingCapacity(buildingSO.populationProvided);
-                        Debug.Log($"🏠 {buildingSO.id} construido → +{buildingSO.populationProvided} población máxima");
+                        if (debugLogs) Debug.Log($"🏠 {buildingSO.id} construido → +{buildingSO.populationProvided} población máxima");
                     }
                 }
             }
@@ -121,6 +218,8 @@ namespace Project.Gameplay.Buildings
             }
 
             _cellsOccupied = false;  // 🟢 Ya no somos responsables de las celdas
+            if (buildingSO != null)
+                Project.UI.GameplayNotifications.Show($"Edificio completado: {buildingSO.id}");
             Destroy(gameObject);
         }
 
@@ -178,34 +277,27 @@ namespace Project.Gameplay.Buildings
         {
             if (built == null) return;
 
+            Transform anchor = built.transform.Find("BarAnchor");
+            if (anchor == null)
+            {
+                var go = new GameObject("BarAnchor");
+                anchor = go.transform;
+                anchor.SetParent(built.transform, false);
+                anchor.localPosition = new Vector3(0f, 2f, 0f);
+            }
+
+            var health = built.GetComponent<Health>();
+            if (health == null) health = built.GetComponentInChildren<Health>(true);
+            if (health != null)
+                health.SetBarAnchor(anchor);
+
             var settings = built.GetComponent<WorldBarSettings>();
             if (settings != null)
             {
-                Transform anchor = built.transform.Find("BarAnchor");
-                if (anchor == null)
-                {
-                    var go = new GameObject("BarAnchor");
-                    anchor = go.transform;
-                    anchor.SetParent(built.transform, false);
-                    anchor.localPosition = new Vector3(0f, 2f, 0f);
-                }
-
                 settings.barAnchor = anchor;
                 settings.autoAnchorName = "BarAnchor";
                 settings.useLocalOffsetOverride = true;
                 settings.localOffset = Vector3.zero;
-            }
-
-            var bar = built.GetComponentInChildren<HealthBarWorld>(true);
-            if (bar != null)
-            {
-                bar.useLocalOffset = false;
-                bar.localOffset = Vector3.zero;
-                bar.barScaleMultiplier = 1f;
-                bar.keepConstantWorldSize = true;
-                bar.billboardMode = HealthBarWorld.BillboardMode.None;
-                bar.defaultAnchorName = "BarAnchor";
-                bar.autoUseRendererTopWhenNoAnchor = true;
             }
 
             var prod = built.GetComponent<ProductionBuilding>();
@@ -254,7 +346,7 @@ namespace Project.Gameplay.Buildings
 
 			MapGrid.Instance.SetOccupiedRect(min, size, false);
 
-			Debug.Log($"🔓 Grid: Liberado {size.x}×{size.y} por cancelación de BuildSite");
+			if (debugLogs) Debug.Log($"🔓 Grid: Liberado {size.x}×{size.y} por cancelación de BuildSite");
 		}
     }
 }

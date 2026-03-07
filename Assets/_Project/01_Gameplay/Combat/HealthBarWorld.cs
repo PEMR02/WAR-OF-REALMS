@@ -6,11 +6,11 @@ using UnityEngine.EventSystems;
 namespace Project.Gameplay.Combat
 {
     /// <summary>
-    /// Barra en mundo (vida, recurso restante, etc.). Lee datos de cualquier IWorldBarSource en el padre.
-    /// Solo visible cuando la entidad está seleccionada (RTSSelectionController).
-    /// Sirve para unidades, edificios y recursos con la misma prefab.
+    /// [OBSOLETO] Barra en mundo (World Space). Reemplazado por HealthBarManager + HealthBarUI (Screen Space).
+    /// Se mantiene solo por compatibilidad temporal; no usar en prefabs nuevos.
     /// </summary>
     [RequireComponent(typeof(Canvas))]
+    [System.Obsolete("Usar HealthBarManager + HealthBarUI (Screen Space). Este sistema world-space está deprecado.")]
     public class HealthBarWorld : MonoBehaviour
     {
         [Header("Bar")]
@@ -243,15 +243,23 @@ namespace Project.Gameplay.Combat
                 return;
             }
 
-            _source = ResolveSource();
-            ResolveSourceTransform();
-
+            if (_source == null)
+            {
+                _source = ResolveSource();
+                ResolveSourceTransform();
+            }
             if (_source == null)
             {
                 Hide();
                 return;
             }
-
+            // Refrescar siempre el transform de la fuente para que la barra siga a la unidad al moverse
+            ResolveSourceTransform();
+            if (_sourceTransform == null)
+            {
+                Hide();
+                return;
+            }
             if (_settings == null)
                 _settings = GetComponentInParent<WorldBarSettings>();
 
@@ -262,14 +270,34 @@ namespace Project.Gameplay.Combat
             Vector3 offset = (_settings != null && _settings.useLocalOffsetOverride) ? _settings.localOffset : localOffset;
 
             Vector3 effectiveOffset = useOffset ? offset : Vector3.zero;
-            Vector3 desiredWorldPos = ResolveDesiredWorldPosition(effectiveOffset);
-            if (snapPositionForSharpness)
+            // Si somos hijos de la fuente (ej. barra instanciada bajo la unidad), seguir por jerarquía para que no se quede fija
+            Transform followRoot = null;
+            if (_sourceTransform != null)
             {
-                desiredWorldPos.x = Mathf.Round(desiredWorldPos.x * 100f) / 100f;
-                desiredWorldPos.y = Mathf.Round(desiredWorldPos.y * 100f) / 100f;
-                desiredWorldPos.z = Mathf.Round(desiredWorldPos.z * 100f) / 100f;
+                Transform t = transform;
+                while (t != null && t != _sourceTransform)
+                {
+                    if (t.parent == _sourceTransform) { followRoot = t; break; }
+                    t = t.parent;
+                }
             }
-            transform.position = desiredWorldPos;
+            if (followRoot != null && followRoot.parent != null)
+            {
+                // Posición deseada en mundo; convertir a espacio local del padre real de la barra (unidad) para que siga al moverse
+                Vector3 desiredWorldPos = ResolveDesiredWorldPosition(effectiveOffset);
+                followRoot.localPosition = followRoot.parent.InverseTransformPoint(desiredWorldPos);
+            }
+            else
+            {
+                Vector3 desiredWorldPos = ResolveDesiredWorldPosition(effectiveOffset);
+                if (snapPositionForSharpness)
+                {
+                    desiredWorldPos.x = Mathf.Round(desiredWorldPos.x * 100f) / 100f;
+                    desiredWorldPos.y = Mathf.Round(desiredWorldPos.y * 100f) / 100f;
+                    desiredWorldPos.z = Mathf.Round(desiredWorldPos.z * 100f) / 100f;
+                }
+                transform.position = desiredWorldPos;
+            }
 
             Vector3 baseScale = _initialScale.sqrMagnitude > 0.001f ? _initialScale : Vector3.one * 0.01f;
             Vector3 localScale = Vector3.Scale(baseScale, new Vector3(scaleMultiplier, scaleMultiplier, scaleMultiplier));

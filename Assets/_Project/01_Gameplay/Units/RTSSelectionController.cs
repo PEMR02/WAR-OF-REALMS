@@ -10,6 +10,9 @@ namespace Project.Gameplay.Units
 {
     public class RTSSelectionController : MonoBehaviour
     {
+        /// <summary>Se dispara cada vez que cambia la selección (unidades, edificio o recurso).</summary>
+        public event System.Action OnSelectionChanged;
+
         [Header("Refs")]
         public Camera cam;
         
@@ -39,7 +42,6 @@ namespace Project.Gameplay.Units
         private bool _isDragging;
 
         private readonly List<UnitSelectable> _selected = new();
-        private readonly Dictionary<int, HealthBarWorld> _healthBarCache = new();
         private int _selectedVillagerCount;
 
         // Para detectar doble clic
@@ -51,10 +53,6 @@ namespace Project.Gameplay.Units
         private float _hoveredResourceTime;
 		
 		public Project.Gameplay.Buildings.BuildingPlacer buildingPlacer;
-
-        [Header("Barra de vida (opcional)")]
-        [Tooltip("Prefab con HealthBar (Canvas + HealthBarWorld + Fill). Si la unidad no tiene barra (ej. aldeanos de la escena), se instancia este prefab al seleccionar.")]
-        public GameObject healthBarFallbackPrefab;
 
         void Awake()
         {
@@ -73,11 +71,20 @@ namespace Project.Gameplay.Units
 			var mouse = Mouse.current;
             if (mouse == null || cam == null) return;
 
+            // ESC: deseleccionar todo (cuando no se está colocando un edificio)
+            var kb = Keyboard.current;
+            if (kb != null && kb.escapeKey.wasPressedThisFrame)
+            {
+                ClearSelection();
+                return;
+            }
+
             // LMB pressed -> start drag
             if (mouse.leftButton.wasPressedThisFrame)
             {
-                // CRUCIAL: Ignorar clicks sobre UI (botones, paneles, etc)
-                if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+                // CRUCIAL: Ignorar clicks sobre UI (botones, paneles, etc) o sobre el minimapa
+                if ((EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+                    || Project.UI.RuntimeMinimapBootstrap.IsPointerOverMinimap)
                 {
                     return; // Hay UI bajo el cursor, no procesar selección
                 }
@@ -92,7 +99,16 @@ namespace Project.Gameplay.Units
             // Mientras mantienes presionado -> actualizar rectángulo
             if (_isDragging && mouse.leftButton.isPressed)
             {
-                selectionBoxUI?.Show(_dragStart, mouse.position.ReadValue());
+                if (Project.UI.RuntimeMinimapBootstrap.IsPointerOverMinimap)
+                {
+                    // Si el drag empezó fuera del minimapa pero el cursor llegó a él, cancelar
+                    _isDragging = false;
+                    selectionBoxUI?.Hide();
+                }
+                else
+                {
+                    selectionBoxUI?.Show(_dragStart, mouse.position.ReadValue());
+                }
             }
 
             // Hover sobre recursos cuando hay aldeano seleccionado
@@ -113,7 +129,7 @@ namespace Project.Gameplay.Units
                     return; // Hay UI bajo el cursor, no procesar selección
                 }
 
-                bool isBox = Vector2.Distance(_dragStart, dragEnd) > 8f;
+                bool isBox = Vector2.Distance(_dragStart, dragEnd) > 12f;
 
                 bool additive = addToSelectionWithShift &&
                                 (Keyboard.current != null) &&
@@ -127,10 +143,10 @@ namespace Project.Gameplay.Units
                 }
                 else
                 {
-                    // Detectar doble clic
+                    // Detectar doble clic (tolerancia 24px para que cuente como doble clic aunque el dedo se mueva un poco)
                     float timeSinceLastClick = Time.time - _lastClickTime;
                     bool isDoubleClick = timeSinceLastClick <= doubleClickTime &&
-                                        Vector2.Distance(_lastClickPos, dragEnd) < 10f;
+                                        Vector2.Distance(_lastClickPos, dragEnd) < 24f;
 
                     if (isDoubleClick)
                     {
@@ -169,7 +185,8 @@ namespace Project.Gameplay.Units
                     ClearSelection();
                     b.SetSelected(true);
                     _selectedBuilding = b;
-                    SetWorldHealthBarVisible(b.gameObject, true);
+                    SetHealthBarVisibleForEntity(b.gameObject, true);
+                    OnSelectionChanged?.Invoke();
                     return;
                 }
             }
@@ -183,7 +200,8 @@ namespace Project.Gameplay.Units
                     ClearSelection();
                     res.SetSelected(true);
                     _selectedResource = res;
-                    SetWorldHealthBarVisible(res.gameObject, true);
+                    SetHealthBarVisibleForEntity(res.gameObject, true);
+                    OnSelectionChanged?.Invoke();
                 }
             }
         }
@@ -223,15 +241,16 @@ namespace Project.Gameplay.Units
                 // Verificar que sea del mismo tipo (mismo nombre base)
                 if (uBaseName != baseName) continue;
 
-                // Verificar que esté visible en cámara
+                // Verificar que esté visible en cámara (margen para incluir unidades en el borde)
                 Vector3 screenPoint = cam.WorldToScreenPoint(u.transform.position);
+                const float screenMargin = 20f;
                 
                 // Está detrás de la cámara
                 if (screenPoint.z < 0f) continue;
 
-                // Está fuera de los límites de la pantalla
-                if (screenPoint.x < 0 || screenPoint.x > Screen.width ||
-                    screenPoint.y < 0 || screenPoint.y > Screen.height)
+                // Está fuera de los límites de la pantalla (con margen)
+                if (screenPoint.x < -screenMargin || screenPoint.x > Screen.width + screenMargin ||
+                    screenPoint.y < -screenMargin || screenPoint.y > Screen.height + screenMargin)
                     continue;
 
                 // Seleccionar esta unidad
@@ -260,26 +279,31 @@ namespace Project.Gameplay.Units
             if (_selected.Contains(u)) return;
             _selected.Add(u);
             u.SetSelected(true);
-            SetWorldHealthBarVisible(u.gameObject, true);
+            SetHealthBarVisibleForEntity(u.gameObject, true);
 
             // Cache: aldeano = VillagerGatherer o Builder.
             if (u.GetComponent<VillagerGatherer>() != null) _selectedVillagerCount++;
             else if (u.GetComponent<Builder>() != null) _selectedVillagerCount++;
+
+            OnSelectionChanged?.Invoke();
         }
 
-        void ClearSelection()
+        /// <summary>Limpia la selección actual (unidades, edificio, recurso). Llamable desde UI (ej. al cancelar construcción).</summary>
+        public void ClearSelection()
         {
             ClearResourceHover();
+            bool hadSelection = _selected.Count > 0 || _selectedBuilding != null || _selectedResource != null;
+
             if (_selectedBuilding != null)
             {
-                SetWorldHealthBarVisible(_selectedBuilding.gameObject, false);
+                SetHealthBarVisibleForEntity(_selectedBuilding.gameObject, false);
                 _selectedBuilding.SetSelected(false);
                 _selectedBuilding = null;
             }
 
             if (_selectedResource != null)
             {
-                SetWorldHealthBarVisible(_selectedResource.gameObject, false);
+                SetHealthBarVisibleForEntity(_selectedResource.gameObject, false);
                 _selectedResource.SetSelected(false);
                 _selectedResource = null;
             }
@@ -288,13 +312,14 @@ namespace Project.Gameplay.Units
             {
                 if (_selected[i] != null)
                 {
-                    SetWorldHealthBarVisible(_selected[i].gameObject, false);
+                    SetHealthBarVisibleForEntity(_selected[i].gameObject, false);
                     _selected[i].SetSelected(false);
                 }
             }
 
             _selected.Clear();
             _selectedVillagerCount = 0;
+            if (hadSelection) OnSelectionChanged?.Invoke();
         }
 
         static Rect MakeRect(Vector2 a, Vector2 b)
@@ -399,72 +424,14 @@ namespace Project.Gameplay.Units
             _hoveredResourceTime = 0f;
         }
 
-        void SetWorldHealthBarVisible(GameObject entity, bool visible)
+        /// <summary>Muestra u oculta la barra flotante para la entidad. Usa la API del HealthBarManager; solo entidades con Health muestran barra.</summary>
+        void SetHealthBarVisibleForEntity(GameObject entity, bool visible)
         {
             if (entity == null) return;
-            int id = entity.GetInstanceID();
-            _healthBarCache.TryGetValue(id, out var bar);
-            if (bar == null)
-            {
-                bar = entity.GetComponentInChildren<HealthBarWorld>(true);
-                if (bar != null) _healthBarCache[id] = bar;
-            }
-            var source = FindOrCreateWorldBarSource(entity);
-            if (bar != null && !IsUsableBar(bar))
-            {
-                bar = null;
-                _healthBarCache.Remove(id);
-            }
-            // Si la entidad tiene cualquier fuente de barra (vida, recurso) pero no tiene barra, instanciar fallback
-            if (bar == null && visible && healthBarFallbackPrefab != null && source != null)
-            {
-                GameObject clone = Instantiate(healthBarFallbackPrefab, entity.transform);
-                clone.name = "HealthBar";
-                bar = clone.GetComponentInChildren<HealthBarWorld>(true);
-                if (bar != null) _healthBarCache[id] = bar;
-            }
-            if (bar == null) return;
-            if (visible) bar.Show();
-            else bar.Hide();
-        }
-
-        static bool IsUsableBar(HealthBarWorld bar)
-        {
-            if (bar == null) return false;
-            if (bar.GetComponent<Canvas>() == null) return false;
-            return true;
-        }
-
-        IWorldBarSource FindOrCreateWorldBarSource(GameObject entity)
-        {
-            if (entity == null) return null;
-
-            var source = entity.GetComponent<IWorldBarSource>();
-            if (source != null) return source;
-            source = entity.GetComponentInParent<IWorldBarSource>();
-            if (source != null) return source;
-            source = entity.GetComponentInChildren<IWorldBarSource>(true);
-            if (source != null) return source;
-
-            // Fallback para edificios seleccionables sin Health (algunos prefabs viejos).
-            var building = entity.GetComponentInParent<BuildingSelectable>();
-            if (building != null)
-            {
-                var health = building.GetComponent<Health>();
-                if (health == null)
-                {
-                    int hp = 200;
-                    var bi = building.GetComponent<BuildingInstance>();
-                    if (bi != null && bi.buildingSO != null)
-                        hp = Mathf.Max(1, bi.buildingSO.maxHP);
-
-                    health = building.gameObject.AddComponent<Health>();
-                    health.InitFromMax(hp);
-                }
-                return health;
-            }
-
-            return null;
+            if (visible)
+                HealthBarManager.ShowBarForEntity(entity);
+            else
+                HealthBarManager.HideBarForEntity(entity);
         }
     }
 }

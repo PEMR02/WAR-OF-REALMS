@@ -1500,9 +1500,6 @@ namespace Project.Gameplay.Map
         {
             if (go == null) return;
 
-            var settings = go.GetComponent<WorldBarSettings>();
-            if (settings == null) return;
-
             Transform anchor = go.transform.Find("BarAnchor");
             if (anchor == null)
             {
@@ -1512,18 +1509,18 @@ namespace Project.Gameplay.Map
                 anchor.localPosition = new Vector3(0f, 2f, 0f);
             }
 
-            settings.barAnchor = anchor;
-            settings.autoAnchorName = "BarAnchor";
-            settings.useLocalOffsetOverride = true;
-            settings.localOffset = Vector3.zero;
+            var health = go.GetComponent<Health>();
+            if (health == null) health = go.GetComponentInChildren<Health>(true);
+            if (health != null)
+                health.SetBarAnchor(anchor);
 
-            var bar = go.GetComponentInChildren<HealthBarWorld>(true);
-            if (bar != null)
+            var settings = go.GetComponent<WorldBarSettings>();
+            if (settings != null)
             {
-                bar.useLocalOffset = false;
-                bar.barScaleMultiplier = 1.0f;
-                bar.billboardMode = HealthBarWorld.BillboardMode.None;
-                bar.keepConstantWorldSize = true;
+                settings.barAnchor = anchor;
+                settings.autoAnchorName = "BarAnchor";
+                settings.useLocalOffsetOverride = true;
+                settings.localOffset = Vector3.zero;
             }
         }
 
