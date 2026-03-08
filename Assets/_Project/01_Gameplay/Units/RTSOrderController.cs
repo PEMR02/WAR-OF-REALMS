@@ -118,7 +118,7 @@ namespace Project.Gameplay.Units
             if (debugLogs) Debug.Log("Orden: construir en " + site.name);
             for (int i = 0; i < cached.Count; i++)
             {
-                ref var c = ref cached[i];
+                var c = cached[i];
                 if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
                 if (c.builder != null) c.builder.SetBuildTarget(site);
             }
@@ -129,7 +129,7 @@ namespace Project.Gameplay.Units
             if (node == null) return;
             for (int i = 0; i < cached.Count; i++)
             {
-                ref var c = ref cached[i];
+                var c = cached[i];
                 if (c.builder != null) c.builder.SetBuildTarget(null);
                 if (c.gatherer != null) c.gatherer.Gather(node);
             }
@@ -140,7 +140,7 @@ namespace Project.Gameplay.Units
             bool anyHandled = false;
             for (int i = 0; i < cached.Count; i++)
             {
-                ref var c = ref cached[i];
+                var c = cached[i];
 
                 if (result.dropOffPoint != null && c.gatherer != null && c.gatherer.IsCarrying && c.gatherer.GoDepositAt(result.dropOffPoint))
                 {
@@ -179,7 +179,7 @@ namespace Project.Gameplay.Units
 
             for (int i = 0; i < cached.Count; i++)
             {
-                ref var c = ref cached[i];
+                var c = cached[i];
                 if (c.builder != null) c.builder.SetBuildTarget(null);
                 if (c.repairer != null) c.repairer.SetRepairTarget(null);
                 if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();

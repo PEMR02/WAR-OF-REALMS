@@ -124,17 +124,11 @@ namespace Project.Gameplay.Buildings
                 return;
 
             Vector3 p = hit.point;
+            int bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
+            int bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
             if (snapToGrid)
             {
                 Vector3 origin = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.origin : Vector3.zero;
-                int bw = 1, bh = 1;
-                if (selectedBuilding != null)
-                {
-                    // BuildingSO.size puede ser Vector2 (float) o Vector2Int (int). RoundToInt funciona en ambos casos.
-                    bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
-                    bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
-                }
-
                 // Compatibilidad: 1x1 mantiene el snap clásico a intersección.
                 if (bw == 1 && bh == 1)
                     p = GridSnapUtil.SnapToGridIntersection(p, origin, gridSize);
@@ -142,8 +136,6 @@ namespace Project.Gameplay.Buildings
                     p = GridSnapUtil.SnapToBuildingGrid(p, origin, gridSize, bw, bh);
             }
             // Altura: footprint completo (FootprintTerrainSampler + TerrainPlacementValidator); BuildingAnchorSolver = única fuente de Y para ghost y site
-            int bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
-            int bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
             bool validTerrain = true;
             float ghostPivotY = p.y + _ghostPivotToBottom; // fallback sin terreno
             if (terrain != null)
