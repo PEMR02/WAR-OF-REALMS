@@ -20,6 +20,7 @@ namespace Project.UI
         [Header("Panels")]
         public GameObject panelUnits;       // Panel con botones de unidades (1-9)
         public GameObject panelQueue;       // Panel con cola de producción
+        public GameObject titleHeader;      // Header con nombre del edificio (hijo directo de HUD_Production)
 
         [Header("Unit Buttons (1-9)")]
         public Button btnUnit1;
@@ -36,6 +37,10 @@ namespace Project.UI
         public Transform queueContainer;    // Container para los items de la cola
         public GameObject queueItemPrefab;  // Prefab para cada item en cola
 
+        [Header("Build Site (solar en construcción)")]
+        [Tooltip("Botón para cancelar la construcción cuando está seleccionado un solar. Opcional.")]
+        public Button cancelConstructionButton;
+
         [Header("Raycast Blockers")]
         public bool autoDisableNamedRaycastBlockers = true;
         public string[] namedRaycastBlockers = new[] { "Text_Title" };
@@ -49,7 +54,11 @@ namespace Project.UI
         private Button[] _unitButtons;
         private TextMeshProUGUI[] _unitLabels;
         private ProductionBuilding _currentBuilding;
+        private BuildSite _currentBuildSite;
         private bool _lastHasProductionBuilding;
+        private bool _lastHasBuildSite;
+        private TextMeshProUGUI _firstQueueItemText;
+        private readonly System.Collections.Generic.Dictionary<string, Graphic> _cachedNamedBlockers = new System.Collections.Generic.Dictionary<string, Graphic>();
         [Header("Performance")]
         [Tooltip("Frecuencia de chequeo de selección (segundos). Evita hacer polling pesado cada frame.")]
         public float pollSelectionEvery = 0.10f;
@@ -93,70 +102,84 @@ namespace Project.UI
 
         void OnEnable()
         {
-            // Suscribirse a eventos de edificios cuando cambien
             if (selection != null)
-            {
-                // Nota: RTSSelectionController no tiene evento de selección cambiada aún
-                // Por ahora usaremos Update() para detectar cambios
-            }
+                selection.OnSelectionChanged += OnSelectionChangedHandler;
+        }
+
+        void OnDisable()
+        {
+            if (selection != null)
+                selection.OnSelectionChanged -= OnSelectionChangedHandler;
+        }
+
+        void OnSelectionChangedHandler()
+        {
+            // Fuerza re-evaluación inmediata en el próximo Update (resetea el timer)
+            _pollTimer = 0f;
         }
 
         void Update()
         {
             _pollTimer -= Time.deltaTime;
 
-            // Detectar si hay un edificio productor seleccionado
-            ProductionBuilding building = (_pollTimer <= 0f) ? GetSelectedProductionBuilding() : _currentBuilding;
-            if (_pollTimer <= 0f) _pollTimer = Mathf.Max(0.02f, pollSelectionEvery);
-            bool hasProductionBuilding = building != null;
+            bool pollNow = _pollTimer <= 0f;
+            if (pollNow) _pollTimer = Mathf.Max(0.02f, pollSelectionEvery);
 
-            // Si cambió la selección
-            if (hasProductionBuilding != _lastHasProductionBuilding || building != _currentBuilding)
+            ProductionBuilding building = pollNow ? GetSelectedProductionBuilding() : _currentBuilding;
+            BuildSite buildSite = pollNow ? GetSelectedBuildSite() : _currentBuildSite;
+
+            bool hasProductionBuilding = building != null;
+            bool hasBuildSite = buildSite != null;
+            bool hasAny = hasProductionBuilding || hasBuildSite;
+
+            // Detección de cambio de selección
+            bool buildingChanged = (building != _currentBuilding) || (buildSite != _currentBuildSite);
+            bool modeChanged = (hasProductionBuilding != _lastHasProductionBuilding) || (hasBuildSite != _lastHasBuildSite);
+
+            if (modeChanged || buildingChanged)
             {
                 _lastHasProductionBuilding = hasProductionBuilding;
-                
-                // Desuscribirse del building anterior
+                _lastHasBuildSite = hasBuildSite;
+
                 if (_currentBuilding != null)
                 {
                     _currentBuilding.OnUnitQueued -= OnUnitQueued;
                     _currentBuilding.OnUnitCompleted -= OnUnitCompleted;
                     _currentBuilding.OnQueueChanged -= OnQueueChanged;
                 }
-                
-                _currentBuilding = building;
 
-                if (!hasProductionBuilding)
+                _currentBuilding = building;
+                _currentBuildSite = buildSite;
+
+                if (!hasAny)
                 {
                     HideAllPanels();
                     return;
                 }
-                else
+
+                if (_currentBuilding != null)
                 {
-                    // Suscribirse al nuevo building
-                    if (_currentBuilding != null)
-                    {
-                        _currentBuilding.OnUnitQueued += OnUnitQueued;
-                        _currentBuilding.OnUnitCompleted += OnUnitCompleted;
-                        _currentBuilding.OnQueueChanged += OnQueueChanged;
-                    }
-                    
-                    // Mostrar panel de producción
-                    ShowProductionPanel();
+                    _currentBuilding.OnUnitQueued += OnUnitQueued;
+                    _currentBuilding.OnUnitCompleted += OnUnitCompleted;
+                    _currentBuilding.OnQueueChanged += OnQueueChanged;
                 }
+
+                if (hasBuildSite && !hasProductionBuilding)
+                    ShowBuildSitePanel();
+                else
+                    ShowProductionPanel();
             }
 
-            // Si no hay edificio, ocultar todo
-            if (!hasProductionBuilding)
+            if (!hasAny)
             {
                 HideAllPanels();
                 return;
             }
 
-            // Solo refrescar el progreso continuamente (no toda la UI)
             if (hasProductionBuilding && _currentBuilding != null)
-            {
                 RefreshProgress();
-            }
+            else if (hasBuildSite && _currentBuildSite != null)
+                RefreshBuildSitePanel();
         }
 
         ProductionBuilding GetSelectedProductionBuilding()
@@ -189,26 +212,76 @@ namespace Project.UI
             return null;
         }
 
+        BuildSite GetSelectedBuildSite()
+        {
+            if (selection == null) return null;
+            var selectedBuilding = selection.GetSelectedBuilding();
+            if (selectedBuilding == null) return null;
+            return selectedBuilding.GetComponent<BuildSite>();
+        }
+
         void ShowProductionPanel()
         {
-            if (panelUnits != null)
-                panelUnits.SetActive(true);
-
-            if (panelQueue != null)
-                panelQueue.SetActive(true);
+            if (titleHeader != null) titleHeader.SetActive(true);
+            if (panelUnits != null) panelUnits.SetActive(true);
+            if (panelQueue != null) panelQueue.SetActive(true);
+            if (cancelConstructionButton != null) cancelConstructionButton.gameObject.SetActive(false);
 
             RefreshUnitButtons();
             RefreshQueueDisplay();
         }
 
+        void ShowBuildSitePanel()
+        {
+            if (titleHeader != null) titleHeader.SetActive(true);
+            if (panelUnits != null) panelUnits.SetActive(false);
+            if (panelQueue != null)
+            {
+                panelQueue.SetActive(true);
+                if (queueContainer != null)
+                {
+                    foreach (Transform child in queueContainer)
+                    {
+                        if (child != null) Destroy(child.gameObject);
+                    }
+                }
+            }
+            if (cancelConstructionButton != null)
+            {
+                cancelConstructionButton.gameObject.SetActive(true);
+                cancelConstructionButton.onClick.RemoveAllListeners();
+                cancelConstructionButton.onClick.AddListener(OnCancelConstructionClick);
+            }
+            RefreshBuildSitePanel();
+        }
+
+        void RefreshBuildSitePanel()
+        {
+            if (_currentBuildSite == null) return;
+            string name = _currentBuildSite.buildingSO != null ? _currentBuildSite.buildingSO.id : "Edificio";
+            UpdateTitle($"En construcción: {name}");
+            UpdateProgress($"Progreso: {Mathf.RoundToInt(_currentBuildSite.progress01 * 100)}%");
+        }
+
+        void OnCancelConstructionClick()
+        {
+            if (_currentBuildSite == null) return;
+            _currentBuildSite.CancelConstruction();
+            _currentBuildSite = null;
+            _lastHasBuildSite = false;
+            if (selection != null) selection.ClearSelection();
+            HideAllPanels();
+        }
+
         void HideAllPanels()
         {
-            if (panelUnits != null)
-                panelUnits.SetActive(false);
+            if (titleHeader != null) titleHeader.SetActive(false);
+            if (panelUnits != null) panelUnits.SetActive(false);
+            if (panelQueue != null) panelQueue.SetActive(false);
+            if (cancelConstructionButton != null) cancelConstructionButton.gameObject.SetActive(false);
 
-            if (panelQueue != null)
-                panelQueue.SetActive(false);
-
+            _firstQueueItemText = null;
+            _currentBuildSite = null;
             UpdateTitle("");
             UpdateProgress("");
         }
@@ -269,6 +342,12 @@ namespace Project.UI
                         else
                             _unitLabels[arrayIndex].text = $"{slot}.";
                     }
+
+                    // Tooltip
+                    var trigger = _unitButtons[arrayIndex].GetComponent<TooltipTrigger>();
+                    if (trigger == null)
+                        trigger = _unitButtons[arrayIndex].gameObject.AddComponent<TooltipTrigger>();
+                    trigger.content = hasUnit ? BuildTooltip(unit) : "";
                 }
             }
         }
@@ -325,6 +404,8 @@ namespace Project.UI
             if (csf != null)
                 Destroy(csf);
             
+            _firstQueueItemText = null;
+
             for (int i = 0; i < queuedUnits.Count; i++)
             {
                 UnitSO unit = queuedUnits[i];
@@ -337,6 +418,12 @@ namespace Project.UI
                     var tmp = itemObj.GetComponentInChildren<TextMeshProUGUI>();
                     if (tmp != null)
                         tmp.text = unit.displayName;
+
+                    // Indicador "en construcción": primer ítem con fondo destacado
+                    bool isCurrent = (i == 0);
+                    var itemBg = itemObj.GetComponent<UnityEngine.UI.Image>();
+                    if (itemBg != null)
+                        itemBg.color = isCurrent ? new Color(0.25f, 0.35f, 0.2f, 0.95f) : new Color(0.15f, 0.18f, 0.25f, 0.9f);
 
                     // ✅ Click izquierdo o derecho para cancelar (prefab)
                     int cancelIndex = i;
@@ -370,72 +457,52 @@ namespace Project.UI
 
                     // Limpiar listener del botón si existe (evita doble trigger)
                     var btn = itemObj.GetComponentInChildren<Button>();
-                    GameObject handlerTarget = itemObj;
                     if (btn != null)
-                    {
                         btn.onClick.RemoveAllListeners();
-                        handlerTarget = btn.gameObject;
-                    }
 
-                    // Asegurar gráfico en el target del handler
-                    var handlerGraphic = handlerTarget.GetComponent<UnityEngine.UI.Graphic>();
-                    if (handlerGraphic != null)
-                        handlerGraphic.raycastTarget = true;
-                    else
-                    {
-                        var img = handlerTarget.AddComponent<UnityEngine.UI.Image>();
-                        img.color = new Color(0f, 0f, 0f, 0f);
-                        img.raycastTarget = true;
-                    }
-
-                    var clickHandler = handlerTarget.GetComponent<QueueItemClickHandler>();
+                    // Handler SIEMPRE en el root (itemObj): es quien recibe el raycast y el click
+                    var clickHandler = itemObj.GetComponent<QueueItemClickHandler>();
                     if (clickHandler == null)
-                        clickHandler = handlerTarget.AddComponent<QueueItemClickHandler>();
+                        clickHandler = itemObj.AddComponent<QueueItemClickHandler>();
                     clickHandler.Setup(cancelIndex, this);
                 }
                 else
                 {
-                    // Crear contenedor para el item
                     GameObject itemObj = new GameObject($"QueueItem_{i}");
-                    var itemRect = itemObj.AddComponent<RectTransform>();
+                    itemObj.AddComponent<RectTransform>();
                     itemObj.transform.SetParent(queueContainer, false);
-                    
-                    // LayoutElement para el VerticalLayoutGroup
+
                     var layoutElem = itemObj.AddComponent<UnityEngine.UI.LayoutElement>();
-                    layoutElem.minHeight = 24;
-                    layoutElem.preferredHeight = 24;
+                    layoutElem.minHeight = 22;
+                    layoutElem.preferredHeight = 22;
                     layoutElem.flexibleHeight = 0;
-                    
-                    // Agregar Image para background
+
                     var img = itemObj.AddComponent<UnityEngine.UI.Image>();
-                    img.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+                    img.color = new Color(0.15f, 0.18f, 0.25f, 0.9f);
                     img.raycastTarget = true;
-                    
-                    // Crear GameObject hijo para el texto
+
                     GameObject textObj = new GameObject("Text");
                     var textRect = textObj.AddComponent<RectTransform>();
                     textObj.transform.SetParent(itemObj.transform, false);
-                    
-                    // RectTransform Stretch
                     textRect.anchorMin = Vector2.zero;
                     textRect.anchorMax = Vector2.one;
                     textRect.sizeDelta = Vector2.zero;
-                    textRect.anchoredPosition = Vector2.zero;
-                    textRect.offsetMin = new Vector2(5, 0);
-                    textRect.offsetMax = new Vector2(-5, 0);
-                    
-                    // Agregar TextMeshProUGUI al hijo
+                    textRect.offsetMin = new Vector2(6, 0);
+                    textRect.offsetMax = new Vector2(-6, 0);
+
                     var tmp = textObj.AddComponent<TextMeshProUGUI>();
                     float progress = (i == 0) ? _currentBuilding.queue.CurrentProgress * 100f : 0f;
                     string progressStr = (i == 0) ? $" ({Mathf.RoundToInt(progress)}%)" : "";
                     tmp.text = $"{i + 1}. {unit.displayName}{progressStr}";
-                    tmp.fontSize = 12;
-                    tmp.color = (i == 0) ? Color.yellow : Color.white;
+                    tmp.fontSize = 13;
+                    tmp.color = (i == 0) ? new Color(1f, 0.85f, 0.2f) : Color.white;
                     tmp.alignment = TextAlignmentOptions.Left;
                     tmp.verticalAlignment = VerticalAlignmentOptions.Middle;
                     tmp.raycastTarget = false;
-                    
-                    // Agregar componente custom para detectar click derecho
+
+                    // Guardar ref al primer ítem para actualizar % en vivo
+                    if (i == 0) _firstQueueItemText = tmp;
+
                     int index = i;
                     var clickHandler = itemObj.AddComponent<QueueItemClickHandler>();
                     clickHandler.Setup(index, this);
@@ -500,10 +567,12 @@ namespace Project.UI
                 string name = namedRaycastBlockers[i];
                 if (string.IsNullOrWhiteSpace(name)) continue;
 
-                var go = GameObject.Find(name);
-                if (go == null) continue;
-
-                var g = go.GetComponent<Graphic>();
+                if (!_cachedNamedBlockers.TryGetValue(name, out Graphic g))
+                {
+                    var go = GameObject.Find(name);
+                    if (go != null) g = go.GetComponent<Graphic>();
+                    if (g != null) _cachedNamedBlockers[name] = g;
+                }
                 if (g != null) g.raycastTarget = false;
             }
         }
@@ -522,10 +591,13 @@ namespace Project.UI
             int progressPercent = Mathf.RoundToInt(progress * 100f);
             int queueCount = _currentBuilding.queue.Count;
 
-            // Mostrar contador de cola: "Entrenando: Milicia (45%) | Cola: 3"
             string queueInfo = queueCount > 1 ? $" | Cola: {queueCount}" : "";
             UpdateProgress($"Entrenando: {currentUnit.displayName} ({progressPercent}%){queueInfo}");
             UpdateProgressBar(progress);
+
+            // Actualizar texto del primer ítem de cola en tiempo real
+            if (_firstQueueItemText != null)
+                _firstQueueItemText.text = $"1. {currentUnit.displayName} ({progressPercent}%)";
         }
 
         void OnUnitButtonClick(int slot)
@@ -656,6 +728,42 @@ namespace Project.UI
                 Project.Gameplay.Resources.ResourceKind.Food => "F",
                 _ => kind.ToString()
             };
+        }
+
+        string BuildTooltip(UnitSO unit)
+        {
+            if (unit == null) return "";
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine(unit.displayName);
+
+            if (unit.costs != null && unit.costs.Length > 0)
+            {
+                sb.Append("Costo: ");
+                for (int i = 0; i < unit.costs.Length; i++)
+                {
+                    var c = unit.costs[i];
+                    string rName = c.kind switch
+                    {
+                        Project.Gameplay.Resources.ResourceKind.Wood  => "Madera",
+                        Project.Gameplay.Resources.ResourceKind.Stone => "Piedra",
+                        Project.Gameplay.Resources.ResourceKind.Gold  => "Oro",
+                        Project.Gameplay.Resources.ResourceKind.Food  => "Comida",
+                        _ => c.kind.ToString()
+                    };
+                    sb.Append($"{rName} {c.amount}");
+                    if (i < unit.costs.Length - 1) sb.Append(" | ");
+                }
+                sb.AppendLine();
+            }
+
+            if (unit.populationCost > 0)
+                sb.AppendLine($"Poblacion: {unit.populationCost}");
+
+            if (unit.trainingTimeSeconds > 0f)
+                sb.Append($"Tiempo: {unit.trainingTimeSeconds:F0}s");
+
+            return sb.ToString().TrimEnd();
         }
 
         void UpdateTitle(string text)

@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Map.Generator.MapGenConfig
   gridW: 256
   gridH: 256
-  cellSizeWorld: 1
+  cellSizeWorld: 10
   origin: {x: 0, y: 0, z: 0}
   seed: 12345
   maxRetries: 5
@@ -22,9 +22,9 @@ MonoBehaviour:
   regionCount: 8
   regionNoiseScale: 0.02
   waterHeight01: 0.25
-  riverCount: 3
-  lakeCount: 2
-  maxLakeCells: 200
+  riverCount: 5
+  lakeCount: 5
+  maxLakeCells: 300
   cityCount: 4
   minCityDistanceCells: 40
   cityRadiusCells: 8
@@ -56,11 +56,11 @@ MonoBehaviour:
   waterMaterial: {fileID: 2100000, guid: ab163d8c7cdea6c488fcc76d9dec579c, type: 2}
   waterLayer: -1
   waterRoundedEdges: 1
-  waterEdgeSubdiv: 3
-  waterEdgeBlurIterations: 2
-  waterEdgeBlurRadius: 1
+  waterEdgeSubdiv: 4
+  waterEdgeBlurIterations: 3
+  waterEdgeBlurRadius: 2
   waterIsoLevel: 0.5
   waterMaskPostProcess: 1
-  waterMaskSmoothIterations: 1
+  waterMaskSmoothIterations: 2
   waterMaskSmoothThreshold: 5
   waterMsMaxCornerSamples: 250000

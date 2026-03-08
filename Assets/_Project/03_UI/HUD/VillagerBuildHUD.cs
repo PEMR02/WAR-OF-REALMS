@@ -140,6 +140,7 @@ namespace Project.UI
 
         void Update()
         {
+            if (selection == null) selection = FindFirstObjectByType<RTSSelectionController>();
             bool hasVillagers = selection != null && selection.HasSelectedVillagers();
 
             // Si cambió el estado de selección, actúa

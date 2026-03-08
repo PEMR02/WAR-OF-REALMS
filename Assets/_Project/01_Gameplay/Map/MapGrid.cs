@@ -15,6 +15,7 @@ namespace Project.Gameplay.Map
         bool[] _blocked;
         bool[] _occupied;
         bool[] _water;
+        float[] _terrainCosts;
 
         void Awake()
         {
@@ -36,6 +37,23 @@ namespace Project.Gameplay.Map
             _blocked = new bool[width * height];
             _occupied = new bool[width * height];
             _water = new bool[width * height];
+            _terrainCosts = new float[width * height];
+            for (int i = 0; i < _terrainCosts.Length; i++)
+                _terrainCosts[i] = 1f;
+        }
+
+        /// <summary>Costo de movimiento en la celda (1 = normal). Agua/blocked no se usan como transitables.</summary>
+        public float GetTerrainCost(Vector2Int c)
+        {
+            if (!IsInBounds(c)) return float.MaxValue;
+            return _terrainCosts[Index(c)];
+        }
+
+        /// <summary>Asigna costo de terreno (ej. 0.5 camino, 1.5 bosque).</summary>
+        public void SetTerrainCost(Vector2Int c, float cost)
+        {
+            if (!IsInBounds(c)) return;
+            _terrainCosts[Index(c)] = Mathf.Max(0.01f, cost);
         }
 
         public bool IsReady => _blocked != null && _occupied != null;
@@ -67,6 +85,54 @@ namespace Project.Gameplay.Map
         public Vector3 CellToWorld(Vector2Int cell)
         {
             return origin + new Vector3((cell.x + 0.5f) * cellSize, 0f, (cell.y + 0.5f) * cellSize);
+        }
+
+        /// <summary>Altura del terreno en el centro de la celda (requiere Terrain en escena).</summary>
+        public static float GetCellHeight(Terrain terrain, Vector2Int cell)
+        {
+            if (terrain == null || Instance == null || !Instance.IsReady) return 0f;
+            Vector3 w = Instance.CellToWorld(cell);
+            return terrain.SampleHeight(new Vector3(w.x, 0f, w.z)) + terrain.transform.position.y;
+        }
+
+        /// <summary>Altura promedio del terreno en un área rectangular (centro + 4 esquinas).</summary>
+        public static float GetAreaAverageHeight(Terrain terrain, Vector3 centerWorld, Vector2 sizeInCells)
+        {
+            if (terrain == null || Instance == null || !Instance.IsReady) return centerWorld.y;
+            int w = Mathf.Max(1, Mathf.RoundToInt(sizeInCells.x));
+            int h = Mathf.Max(1, Mathf.RoundToInt(sizeInCells.y));
+            Vector2Int c = Instance.WorldToCell(centerWorld);
+            float sum = 0f;
+            int n = 0;
+            for (int dx = 0; dx < w; dx++)
+                for (int dy = 0; dy < h; dy++)
+                {
+                    var cell = new Vector2Int(c.x - w / 2 + dx, c.y - h / 2 + dy);
+                    if (Instance.IsInBounds(cell)) { sum += GetCellHeight(terrain, cell); n++; }
+                }
+            return n > 0 ? sum / n : centerWorld.y;
+        }
+
+        /// <summary>Min y max altura del terreno en el área.</summary>
+        public static void GetAreaMinMaxHeight(Terrain terrain, Vector3 centerWorld, Vector2 sizeInCells, out float min, out float max)
+        {
+            min = max = centerWorld.y;
+            if (terrain == null || Instance == null || !Instance.IsReady) return;
+            int w = Mathf.Max(1, Mathf.RoundToInt(sizeInCells.x));
+            int h = Mathf.Max(1, Mathf.RoundToInt(sizeInCells.y));
+            Vector2Int c = Instance.WorldToCell(centerWorld);
+            min = float.MaxValue;
+            max = float.MinValue;
+            for (int dx = 0; dx < w; dx++)
+                for (int dy = 0; dy < h; dy++)
+                {
+                    var cell = new Vector2Int(c.x - w / 2 + dx, c.y - h / 2 + dy);
+                    if (!Instance.IsInBounds(cell)) continue;
+                    float y = GetCellHeight(terrain, cell);
+                    if (y < min) min = y;
+                    if (y > max) max = y;
+                }
+            if (min == float.MaxValue) min = max = centerWorld.y;
         }
 
         public bool IsCellBlocked(Vector2Int c)
@@ -162,3 +228,4 @@ namespace Project.Gameplay.Map
         int Index(Vector2Int c) => c.y * width + c.x;
     }
 }
+

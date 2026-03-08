@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSO
   id: town_center
   prefab: {fileID: 3363113052625933421, guid: a0125fdbe0ec2b24ab9e9f91add71bd8, type: 3}
-  size: {x: 6, y: 6}
+  size: {x: 3, y: 3}
   requiresFlatGround: 0
   costs:
   - kind: 0

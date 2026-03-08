@@ -42,7 +42,7 @@ namespace Project.Gameplay.Units
 
         private State _state = State.Idle;
 
-        // RTS: ignorar Y en distancias de interacci¨®n (evita ¡°se ve cerca pero nunca interact¨²a¡±)
+        // RTS: ignorar Y en distancias de interacción (evita "se ve cerca pero nunca interactúa")
         static float FlatDistance(Vector3 a, Vector3 b)
         {
             a.y = 0f;
@@ -246,6 +246,7 @@ namespace Project.Gameplay.Units
 
         void SetDestinationSmart(Vector3 desired)
         {
+            if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh) return;
             if (NavMesh.SamplePosition(desired, out NavMeshHit hit, navSampleRadius, NavMesh.AllAreas))
                 _agent.SetDestination(hit.position);
             else
@@ -269,19 +270,47 @@ namespace Project.Gameplay.Units
 				_agent.ResetPath();
 			_state = State.Idle;
 		}
-		public void PauseGatherKeepCarried()
-		{
-			// Pausa el trabajo actual, pero mantiene lo que llevo cargado
-			_targetNode = null;
-			_deposit = null;
+	public void PauseGatherKeepCarried()
+	{
+		// Pausa el trabajo actual, pero mantiene lo que llevo cargado
+		_targetNode = null;
+		_deposit = null;
 
-			_gatherTimer = 0f;
-			_retryTimer = 0f;
+		_gatherTimer = 0f;
+		_retryTimer = 0f;
 
-			if (_agent != null && _agent.isOnNavMesh)
-				_agent.ResetPath();
-			_state = State.Idle; // si existe en tu script
-		}
+		if (_agent != null && _agent.isOnNavMesh)
+			_agent.ResetPath();
+		_state = State.Idle;
+	}
+
+	/// <summary>
+	/// Orden manual de depositar en un punto concreto (ej. click derecho sobre TownCenter).
+	/// Si llevo recursos, voy a depositar en ese punto especˆqfico.
+	/// Si no llevo nada, me quedo idle (el llamador deberˆqa moverme con UnitMover en ese caso).
+	/// </summary>
+	public bool GoDepositAt(DropOffPoint point)
+	{
+		if (point == null) return false;
+		if (_carried <= 0) return false;
+		if (!point.Accepts(_carriedKind)) return false;
+
+		_deposit = point;
+		_retryTimer = 0f;
+		_state = State.GoingToDrop;
+		SetDestinationSmart(_deposit.DropPosition);
+
+		if (debugLogs)
+			Debug.Log($"[{gameObject.name}] Orden manual: depositar {_carried} {_carriedKind} en {point.gameObject.name}");
+
+		return true;
+	}
+
+	/// <summary>True si el aldeano lleva recursos cargados.</summary>
+	public bool IsCarrying => _carried > 0;
+
+	/// <summary>True si no está recolectando ni yendo a depósito.</summary>
+	public bool IsIdle => _state == State.Idle;
 
 		
     }

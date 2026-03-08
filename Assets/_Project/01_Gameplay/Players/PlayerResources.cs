@@ -5,11 +5,17 @@ namespace Project.Gameplay.Players
 {
     public class PlayerResources : MonoBehaviour
     {
+        /// <summary>Se dispara cuando cualquier recurso cambia de valor.</summary>
+        public event System.Action OnResourceChanged;
+
         [Header("Resources")]
         public int wood = 200;
         public int stone = 200;
         public int gold = 100;
         public int food = 200;
+
+        [Header("Debug")]
+        public bool debugLogs = false;
 
         /// <summary>
         /// Agrega recursos al jugador
@@ -34,7 +40,8 @@ namespace Project.Gameplay.Players
                     break;
             }
 
-            Debug.Log($"[PlayerResources] +{amount} {kind} | Total: {Get(kind)}");
+            if (debugLogs) Debug.Log($"[PlayerResources] +{amount} {kind} | Total: {Get(kind)}");
+            OnResourceChanged?.Invoke();
         }
 
         /// <summary>
@@ -60,7 +67,8 @@ namespace Project.Gameplay.Players
                     break;
             }
 
-            Debug.Log($"[PlayerResources] -{amount} {kind} | Restante: {Get(kind)}");
+            if (debugLogs) Debug.Log($"[PlayerResources] -{amount} {kind} | Restante: {Get(kind)}");
+            OnResourceChanged?.Invoke();
         }
 
         /// <summary>

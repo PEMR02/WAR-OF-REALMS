@@ -7,9 +7,12 @@ namespace Project.Gameplay.Map.Generator
     public class MapGenConfig : ScriptableObject
     {
         [Header("Grid")]
+        [Tooltip("Ancho del grid en celdas. 256 celdas × cellSize = tamaño del mapa.")]
         public int gridW = 256;
+        [Tooltip("Alto del grid en celdas. 256 celdas × cellSize = tamaño del mapa.")]
         public int gridH = 256;
-        public float cellSizeWorld = 1f;
+        [Tooltip("Tamaño de cada celda en metros. 2.0-3.0 es típico para RTS (estilo AoE2). Cambiar esto afecta el tamaño visual de la grilla y el footprint de edificios.")]
+        public float cellSizeWorld = 2.5f;
         public Vector3 origin = Vector3.zero;
 
         [Header("Seed y reintentos")]
@@ -69,10 +72,17 @@ namespace Project.Gameplay.Map.Generator
         public TerrainLayer grassLayer;
         public TerrainLayer dirtLayer;
         public TerrainLayer rockLayer;
-        [Tooltip("Umbrales 0–1 para pintar capas por altura (grass/dirt/rock).")]
-        public float grassMaxHeight01 = 0.4f;
-        public float dirtMaxHeight01 = 0.65f;
-        [Range(0f, 0.25f)] public float textureBlendWidth = 0.05f;
+        [Tooltip("Porcentaje 0–1 del mapa para grass (zonas bajas). Si > 0 se usa con dirt/rock para derivar umbrales.")]
+        public float grassPercent01 = 0.6f;
+        public float dirtPercent01 = 0.2f;
+        public float rockPercent01 = 0.2f;
+        [Tooltip("Umbrales derivados o legacy: grass hasta este valor, dirt hasta dirtMaxHeight01.")]
+        public float grassMaxHeight01 = 0.6f;
+        public float dirtMaxHeight01 = 0.8f;
+        [Range(0f, 0.25f)] public float textureBlendWidth = 0.08f;
+        [Header("Arena en orillas")]
+        public TerrainLayer sandLayer;
+        [Range(1, 6)] public int sandShoreCells = 3;
 
         [Header("Shoreline smoothing (visual)")]
         [Tooltip("Radio en celdas para suavizar el terreno cerca del agua (solo visual al exportar a Terrain).")]
@@ -85,31 +95,43 @@ namespace Project.Gameplay.Map.Generator
         public float waterSurfaceOffset = 0.05f;
         [Tooltip("Material opcional para la malla de agua. Si no se asigna, se usa un fallback azulado.")]
         public Material waterMaterial;
+        [Tooltip("Transparencia del agua (0 = opaco, 0.85 = se ve la arena bajo el agua). Requiere material con soporte alpha.")]
+        [Range(0.5f, 1f)] public float waterAlpha = 0.88f;
         [Tooltip("Capa de Unity para el GameObject del agua (0 = Default). -1 = usar 0. Debe estar en la Culling Mask de la cámara.")]
         public int waterLayer = -1;
 
         [Header("Agua - bordes redondeados (Marching Squares)")]
-        [Tooltip("Si está activo, genera el agua con Marching Squares (bordes más orgánicos y redondeados).")]
+        [Tooltip("✅ ACTIVAR para bordes orgánicos (elimina esquinas cuadradas). Desactivar solo si quieres agua tipo Minecraft.")]
         public bool waterRoundedEdges = true;
-        [Tooltip("Subdivisión por celda para el campo (2 = 2x resolución; 4 = más redondeado pero más caro).")]
-        [Range(1, 8)] public int waterEdgeSubdiv = 3;
-        [Tooltip("Iteraciones de blur del campo (más = bordes más redondeados).")]
-        [Range(0, 8)] public int waterEdgeBlurIterations = 2;
-        [Tooltip("Radio del blur (en samples del campo).")]
-        [Range(1, 4)] public int waterEdgeBlurRadius = 1;
-        [Tooltip("Nivel de iso (0..1). 0.5 suele ser el correcto.")]
+        [Tooltip("Subdivisión por celda (2-4 recomendado). Mayor = bordes más suaves pero más vértices. 3-4 es ideal para la mayoría de casos.")]
+        [Range(1, 8)] public int waterEdgeSubdiv = 4;
+        [Tooltip("Iteraciones de blur (3-4 recomendado para lagos naturales). Más iteraciones = bordes más redondeados.")]
+        [Range(0, 8)] public int waterEdgeBlurIterations = 3;
+        [Tooltip("Radio del blur. 2 es óptimo para suavizar sin perder definición.")]
+        [Range(1, 4)] public int waterEdgeBlurRadius = 2;
+        [Tooltip("Nivel de iso. 0.5 es perfecto (no cambiar a menos que quieras lagos más grandes/pequeños).")]
         [Range(0.05f, 0.95f)] public float waterIsoLevel = 0.5f;
 
         [Header("Agua - post-proceso de máscara (rápido)")]
-        [Tooltip("Suaviza la máscara binaria de agua antes de generar la malla (majority filter). Reduce 'dientes de sierra' sin shaders.")]
+        [Tooltip("✅ ACTIVAR para eliminar píxeles solitarios y esquinas afiladas ANTES del Marching Squares. Mejora mucho el resultado.")]
         public bool waterMaskPostProcess = true;
-        [Tooltip("Iteraciones del suavizado de máscara (0 = off).")]
-        [Range(0, 8)] public int waterMaskSmoothIterations = 1;
-        [Tooltip("Umbral (0..9) de vecinos+centro para que una celda sea agua tras el suavizado. 5 = mayoría.")]
+        [Tooltip("Iteraciones del suavizado de máscara (2-3 recomendado). Reduce esquinas aisladas.")]
+        [Range(0, 8)] public int waterMaskSmoothIterations = 2;
+        [Tooltip("Umbral de vecinos. 5 = mayoría (recomendado). Bajar a 4 hace lagos más grandes, subir a 6 los hace más pequeños.")]
         [Range(0, 9)] public int waterMaskSmoothThreshold = 5;
 
         [Header("Agua MS - límites de seguridad")]
         [Tooltip("Máximo de samples (esquinas) para Marching Squares (sw*sh). Si se supera, se hace fallback a agua por chunks (más barato).")]
         public int waterMsMaxCornerSamples = 250000;
+
+        [Header("Terrain Skirt (volumen visual)")]
+        [Tooltip("Activa las paredes laterales y base que dan volumen al mapa (efecto bloque de tierra).")]
+        public bool showTerrainSkirt = true;
+        [Tooltip("Profundidad en metros de las paredes laterales bajo el terreno.")]
+        public float skirtDepth = 30f;
+        [Tooltip("Número de muestras de altura por cada borde del terreno. Más muestras = bordes más suaves.")]
+        [Range(32, 512)] public int skirtEdgeSamples = 128;
+        [Tooltip("Material para las paredes y base del skirt. Si es null se genera uno procedural con capas de suelo.")]
+        public Material skirtMaterial;
     }
 }

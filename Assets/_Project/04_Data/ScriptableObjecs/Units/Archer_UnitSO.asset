@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
   id: archer
   displayName: Arquero
-  prefab: {fileID: 7586646631000710113, guid: a8422e017be8bf34aa401cdac0bfc63d, type: 3}
+  prefab: {fileID: 179124, guid: 9eeaf3bfdddd0014f9b75d6507f03c74, type: 3}
   costs:
   - kind: 0
     amount: 25
@@ -24,4 +24,4 @@ MonoBehaviour:
   populationCost: 1
   maxHP: 70
   attack: 12
-  moveSpeed: 3
+  moveSpeed: 3.5

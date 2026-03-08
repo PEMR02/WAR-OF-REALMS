@@ -79,13 +79,26 @@ namespace ProjectEditor.Buildings
                 if (bi == null) bi = prefabRoot.AddComponent<BuildingInstance>();
                 if (buildingSO != null) bi.buildingSO = buildingSO;
 
-                if (prefabRoot.GetComponent<Collider>() == null &&
-                    prefabRoot.GetComponentInChildren<Collider>() == null)
+                float cellSize = GetEditorCellSize();
+                var box = prefabRoot.GetComponent<BoxCollider>();
+                if (box == null) box = prefabRoot.GetComponentInChildren<BoxCollider>();
+                if (box == null)
                 {
-                    var box = prefabRoot.AddComponent<BoxCollider>();
+                    box = prefabRoot.AddComponent<BoxCollider>();
+                    box.isTrigger = false;
+                }
+                // Tamaño del collider = huella del edificio (buildingSO.size × cellSize) para evitar boxes más grandes que el modelo y rutas raras
+                if (bi.buildingSO != null)
+                {
+                    float w = bi.buildingSO.size.x * cellSize;
+                    float d = bi.buildingSO.size.y * cellSize;
+                    box.size = new Vector3(w, 2f, d);
+                    box.center = new Vector3(0f, 1f, 0f);
+                }
+                else
+                {
                     box.size = new Vector3(3f, 2f, 3f);
                     box.center = new Vector3(0f, 1f, 0f);
-                    box.isTrigger = false;
                 }
 
                 PrefabUtility.SaveAsPrefabAsset(prefabRoot, prefabPath);
@@ -102,6 +115,18 @@ namespace ProjectEditor.Buildings
             t.gameObject.layer = layer;
             for (int i = 0; i < t.childCount; i++)
                 SetLayerRecursively(t.GetChild(i), layer);
+        }
+
+        /// <summary>CellSize en editor: GridConfig.gridSize si existe, si no 2.5f.</summary>
+        static float GetEditorCellSize()
+        {
+            var guids = AssetDatabase.FindAssets("t:GridConfig");
+            if (guids.Length > 0)
+            {
+                var config = AssetDatabase.LoadAssetAtPath<GridConfig>(AssetDatabase.GUIDToAssetPath(guids[0]));
+                if (config != null) return config.gridSize;
+            }
+            return 2.5f;
         }
     }
 
@@ -121,7 +146,7 @@ namespace ProjectEditor.Buildings
         {
             EditorGUILayout.HelpBox(
                 "Asigna el prefab de edificio (ej. PF_House) y el BuildingSO (ej. House_SO). " +
-                "Se aplicará: Layer Building, BuildingInstance con el SO, BoxCollider si no tiene.",
+                "Se aplicará: Layer Building, BuildingInstance con el SO, BoxCollider con tamaño = huella (BuildingSO.size × cellSize) para que no sea más grande que el modelo y el pathfinding no genere rodeos.",
                 MessageType.Info);
 
             EditorGUILayout.Space(4);

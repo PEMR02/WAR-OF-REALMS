@@ -13,6 +13,10 @@ namespace Project.UI
         public PopulationManager populationManager;
         public TextMeshProUGUI populationText;
 
+        [Header("Tooltip")]
+        [TextArea(1, 3)]
+        public string tooltipContent = "Población actual / máxima. Construye casas para aumentar el máximo.";
+
         void Awake()
         {
             if (populationManager == null)
@@ -37,6 +41,12 @@ namespace Project.UI
         void Start()
         {
             RefreshDisplay(0, 0);
+            if (populationText != null && !string.IsNullOrWhiteSpace(tooltipContent))
+            {
+                var trigger = populationText.GetComponent<TooltipTrigger>();
+                if (trigger == null) trigger = populationText.gameObject.AddComponent<TooltipTrigger>();
+                trigger.content = tooltipContent;
+            }
         }
 
         void RefreshDisplay(int current, int max)

@@ -227,12 +227,11 @@ namespace Project.Gameplay.Units
             if (!additive)
                 ClearSelection();
 
-            // Buscar todas las unidades del mismo tipo que estén visibles
-            var allUnits = FindObjectsByType<UnitSelectable>(FindObjectsSortMode.None);
-            
-            for (int i = 0; i < allUnits.Length; i++)
+            var allUnits = UnitSelectableRegistry.All;
+            for (int i = 0; i < allUnits.Count; i++)
             {
                 var u = allUnits[i];
+                if (u == null) continue;
                 
                 // Obtener el nombre base de esta unidad
                 string uName = u.gameObject.name;
@@ -262,10 +261,11 @@ namespace Project.Gameplay.Units
         {
             Rect r = MakeRect(start, end);
 
-            var all = FindObjectsByType<UnitSelectable>(FindObjectsSortMode.None);
-            for (int i = 0; i < all.Length; i++)
+            var all = UnitSelectableRegistry.All;
+            for (int i = 0; i < all.Count; i++)
             {
                 var u = all[i];
+                if (u == null) continue;
                 Vector3 sp = cam.WorldToScreenPoint(u.transform.position);
                 if (sp.z < 0f) continue;
 

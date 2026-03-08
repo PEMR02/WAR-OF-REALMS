@@ -23,7 +23,20 @@ namespace Project.Gameplay.Buildings
 
             if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
             {
-                return MapGrid.Instance.IsWorldAreaFree(pos, size, true);
+                if (!MapGrid.Instance.IsWorldAreaFree(pos, size, true))
+                    return false;
+                // Estilo Anno: no construir sobre agua
+                Vector2Int center = MapGrid.Instance.WorldToCell(pos);
+                int w = Mathf.Max(1, Mathf.RoundToInt(size.x));
+                int h = Mathf.Max(1, Mathf.RoundToInt(size.y));
+                for (int dx = 0; dx < w; dx++)
+                    for (int dy = 0; dy < h; dy++)
+                    {
+                        var c = new Vector2Int(center.x - w / 2 + dx, center.y - h / 2 + dy);
+                        if (MapGrid.Instance.IsInBounds(c) && MapGrid.Instance.IsWater(c))
+                            return false;
+                    }
+                return true;
             }
 
             return true;

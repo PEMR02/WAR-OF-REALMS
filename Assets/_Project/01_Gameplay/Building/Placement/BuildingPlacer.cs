@@ -28,6 +28,12 @@ namespace Project.Gameplay.Buildings
         [Header("Blocking")]
         public LayerMask blockingMask;
 
+        [Header("Terrain (footprint) — estilo Anno: edificios apoyados, sin flotar")]
+        [Tooltip("Diferencia máxima de altura (m) entre puntos del footprint. 1.5–2 = más plano tipo Anno.")]
+        public float maxHeightDelta = 1.8f;
+        [Tooltip("Pendiente máxima en grados (0 = no validar). 12–18° típico para zonas construibles.")]
+        [Range(0f, 45f)] public float maxSlopeDegrees = 14f;
+
         [Header("Owner")]
         public PlayerResources owner;
 
@@ -36,6 +42,9 @@ namespace Project.Gameplay.Buildings
 
         [Header("Build Site")]
         [SerializeField] GameObject buildSitePrefab; // prefab con BuildSite + visual fundación
+
+        [Header("Debug")]
+        public bool debugLogs = false;
 
         private GameObject _ghost;
         private GhostPreview _ghostPreview;
@@ -132,10 +141,15 @@ namespace Project.Gameplay.Buildings
                 else
                     p = GridSnapUtil.SnapToBuildingGrid(p, origin, gridSize, bw, bh);
             }
-            // Siempre usar altura del Terrain si existe (evita edificios en Y=0 cuando el raycast golpea otro collider)
+            // Altura: footprint completo (centro + 4 esquinas) para evitar flotar/enterrar
+            bool validTerrain = true;
             if (terrain != null)
             {
-                p.y = terrain.SampleHeight(new Vector3(p.x, 0f, p.z)) + terrain.transform.position.y;
+                int bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
+                int bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
+                var sample = FootprintTerrainSampler.Sample(terrain, p, new Vector2(bw, bh), _currentYaw);
+                validTerrain = TerrainPlacementValidator.IsValid(sample, maxHeightDelta, maxSlopeDegrees, new Vector2(bw, bh));
+                p.y = sample.avgHeight;
             }
             else if (p.y < 0.1f)
             {
@@ -160,7 +174,7 @@ namespace Project.Gameplay.Buildings
             bool validPlace = PlacementValidator.IsValidPlacement(p, selectedBuilding.size, blockingMask);
             bool canPay = CanAfford(selectedBuilding);
 
-            bool valid = validPlace && canPay && hasSitePrefab && hasVillagers;
+            bool valid = validPlace && validTerrain && canPay && hasSitePrefab && hasVillagers;
 
             // Actualizar ghost
             if (_ghost != null)
@@ -182,7 +196,7 @@ namespace Project.Gameplay.Buildings
 				if (TryPlaceBuildSite(p, out var site))
 				{
 					LastPlacedSite = site;
-					Debug.Log($"🏗️ Fundación creada: {selectedBuilding.id} en {p}");
+					if (debugLogs) Debug.Log($"🏗️ Fundación creada: {selectedBuilding.id} en {p}");
 
 					BeginAt(p, Quaternion.Euler(0f, _currentYaw, 0f));
 					AutoAssignBuilders(site);
@@ -211,7 +225,20 @@ namespace Project.Gameplay.Buildings
 
             if (_ghost != null) Destroy(_ghost);
 
-            _ghost = Instantiate(selectedBuilding.prefab);
+            try
+            {
+                if (!(selectedBuilding.prefab is GameObject go) || go == null)
+                {
+                    Debug.LogWarning($"BuildingPlacer: El prefab de '{selectedBuilding.id}' no es un GameObject válido. Asigna el prefab en el BuildingSO desde el Inspector.");
+                    return;
+                }
+                _ghost = Instantiate(go);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"BuildingPlacer: No se pudo instanciar el edificio '{selectedBuilding.id}'. Revisa que el prefab en el BuildingSO sea correcto.\n{e}");
+                return;
+            }
             _ghost.name = $"[GHOST] {selectedBuilding.id}";
 
             MakeGhostSafe(_ghost);
@@ -277,7 +304,7 @@ namespace Project.Gameplay.Buildings
 
 			Quaternion rot = Quaternion.Euler(0f, _currentYaw, 0f);
 			GameObject go = Instantiate(buildSitePrefab, position, rot);
-            AlignBuildSiteToTerrain(go);
+            AlignBuildSiteToTerrain(go, position.y);
 			go.name = $"[SITE] {selectedBuilding.id}";
 
 			site = go.GetComponent<BuildSite>();
@@ -296,8 +323,9 @@ namespace Project.Gameplay.Buildings
 			site.buildingSO = selectedBuilding;
 			site.finalPrefab = selectedBuilding.prefab;
 			site.buildTime = GetBuildTime(selectedBuilding);
+			site.owner = owner;
 
-			Debug.Log($"SITE CONFIG -> name={go.name} id={go.GetInstanceID()} so={(site.buildingSO ? site.buildingSO.id : "null")} final={(site.finalPrefab != null)} buildTime={site.buildTime}");
+			if (debugLogs) Debug.Log($"SITE CONFIG -> name={go.name} id={go.GetInstanceID()} so={(site.buildingSO ? site.buildingSO.id : "null")} final={(site.finalPrefab != null)} buildTime={site.buildTime}");
 
 			// 🟢 OCUPAR CELDAS EN EL GRID (crítico para RTS)
 			OccupyCells(position, selectedBuilding.size, true);
@@ -305,12 +333,12 @@ namespace Project.Gameplay.Buildings
 			return true;
 		}
 
-        void AlignBuildSiteToTerrain(GameObject siteGo)
+        /// <param name="targetBaseY">Si tiene valor, la base visual del site se coloca en esta Y (footprint). Si no, se usa sample del terreno en el pivot.</param>
+        void AlignBuildSiteToTerrain(GameObject siteGo, float? targetBaseY = null)
         {
-            if (siteGo == null || terrain == null) return;
+            if (siteGo == null) return;
 
-            Vector3 pivotPos = siteGo.transform.position;
-            float terrainY = terrain.SampleHeight(pivotPos) + terrain.transform.position.y;
+            float targetY = targetBaseY ?? (terrain != null ? terrain.SampleHeight(siteGo.transform.position) + terrain.transform.position.y : siteGo.transform.position.y);
             float bottomY = float.MaxValue;
             bool foundBounds = false;
 
@@ -338,7 +366,7 @@ namespace Project.Gameplay.Buildings
 
             if (!foundBounds) return;
 
-            float delta = terrainY - bottomY;
+            float delta = targetY - bottomY;
             if (Mathf.Abs(delta) < 0.0001f) return;
             Vector3 p = siteGo.transform.position;
             p.y += delta;
@@ -359,7 +387,7 @@ namespace Project.Gameplay.Buildings
 
 			MapGrid.Instance.SetOccupiedRect(min, size, occupy);
 
-			Debug.Log($"🔲 Grid: {(occupy ? "Ocupado" : "Liberado")} {size.x}×{size.y} en {center}");
+			if (debugLogs) Debug.Log($"🔲 Grid: {(occupy ? "Ocupado" : "Liberado")} {size.x}×{size.y} en {center}");
 		}
 
 
@@ -502,7 +530,7 @@ namespace Project.Gameplay.Buildings
 				if (nearest != null)
 				{
 					nearest.SetBuildTarget(site);
-					Debug.Log($"BuildingPlacer: sin aldeanos seleccionados, asignado el más cercano a {site.name}");
+					if (debugLogs) Debug.Log($"BuildingPlacer: sin aldeanos seleccionados, asignado el más cercano a {site.name}");
 				}
 			}
 		}

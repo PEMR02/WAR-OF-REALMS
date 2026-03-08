@@ -6,7 +6,14 @@ namespace Project.Gameplay.Map.Generator
     /// <summary>Fase 3: genera agua como sistema. Ríos = random walk desde borde; lagos = flood fill desde semilla.</summary>
     public static class WaterGenerator
     {
+        // 🟢 Direcciones cardinales (4) para ríos
         private static readonly Vector2Int[] EdgeDirections = { new Vector2Int(0, 1), new Vector2Int(0, -1), new Vector2Int(1, 0), new Vector2Int(-1, 0) };
+        
+        // 🟢 Direcciones con diagonales (8) para lagos orgánicos
+        private static readonly Vector2Int[] AllDirections = { 
+            new Vector2Int(0, 1), new Vector2Int(0, -1), new Vector2Int(1, 0), new Vector2Int(-1, 0),
+            new Vector2Int(1, 1), new Vector2Int(1, -1), new Vector2Int(-1, 1), new Vector2Int(-1, -1)
+        };
 
         /// <summary>Parámetros: riverCount, lakeCount, maxLakeCells. Marca CellType Water/River. Determinista por rng.</summary>
         public static void GenerateWater(GridSystem grid, MapGenConfig config, IRng rng)
@@ -39,8 +46,8 @@ namespace Project.Gameplay.Map.Generator
             }
 
             // Lagos: flood fill (BFS) desde semilla en Land, hasta maxLakeCells por lago
-            int lakeCount = Mathf.Min(config.lakeCount, 6);
-            int maxLake = Mathf.Min(config.maxLakeCells, 300);
+            int lakeCount = Mathf.Min(config.lakeCount, 12);
+            int maxLake = Mathf.Clamp(config.maxLakeCells, 50, 2500);
             for (int i = 0; i < lakeCount; i++)
             {
                 int attempts = 20;
@@ -115,7 +122,10 @@ namespace Project.Gameplay.Map.Generator
             return path;
         }
 
-        /// <summary>Flood fill desde seed; solo Land; máximo maxCells. Retorna celdas marcadas como Water.</summary>
+        /// <summary>
+        /// Flood fill desde seed; solo Land; máximo maxCells. Usa 8 direcciones para formas orgánicas.
+        /// Añade aleatoriedad para evitar lagos perfectamente circulares/rectangulares.
+        /// </summary>
         private static int FloodFillLake(GridSystem grid, Vector2Int seed, int maxCells)
         {
             var queue = new Queue<Vector2Int>();
@@ -124,24 +134,48 @@ namespace Project.Gameplay.Map.Generator
             visited.Add(seed);
             int count = 0;
 
+            // 🟢 RNG local para aleatoriedad en la expansión (evita patrones perfectos)
+            System.Random localRng = new System.Random(seed.x * 1000 + seed.y);
+
             while (queue.Count > 0 && count < maxCells)
             {
                 var c = queue.Dequeue();
                 ref var cell = ref grid.GetCell(c);
                 if (cell.type != CellType.Land) continue;
+                
                 cell.type = CellType.Water;
                 cell.walkable = false;
                 cell.buildable = false;
                 count++;
 
-                foreach (var dir in EdgeDirections)
+                // 🟢 Usar 8 direcciones (incluye diagonales) para formas más orgánicas
+                // Shuffle para añadir aleatoriedad
+                var directions = new List<Vector2Int>(AllDirections);
+                for (int i = directions.Count - 1; i > 0; i--)
+                {
+                    int j = localRng.Next(i + 1);
+                    var temp = directions[i];
+                    directions[i] = directions[j];
+                    directions[j] = temp;
+                }
+
+                foreach (var dir in directions)
                 {
                     var n = new Vector2Int(c.x + dir.x, c.y + dir.y);
                     if (!grid.InBoundsCell(n.x, n.y) || visited.Contains(n)) continue;
                     ref var ncell = ref grid.GetCell(n);
                     if (ncell.type != CellType.Land) continue;
-                    visited.Add(n);
-                    queue.Enqueue(n);
+                    
+                    // 🟢 Probabilidad de expansión (evita lagos perfectamente redondos)
+                    // Diagonales tienen menos probabilidad que cardinales (más natural)
+                    bool isDiagonal = Mathf.Abs(dir.x) == 1 && Mathf.Abs(dir.y) == 1;
+                    float expandChance = isDiagonal ? 0.7f : 0.9f;
+                    
+                    if (localRng.NextDouble() < expandChance)
+                    {
+                        visited.Add(n);
+                        queue.Enqueue(n);
+                    }
                 }
             }
             return count;

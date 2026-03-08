@@ -403,7 +403,7 @@ namespace Project.Gameplay.Map
 
         void RunDefinitiveGenerate()
         {
-            MapGenConfig config = definitiveMapGenConfig != null ? definitiveMapGenConfig : CreateRuntimeMapGenConfig();
+            MapGenConfig config = definitiveMapGenConfig != null ? definitiveMapGenConfig : MapGenConfigFactory.CreateFrom(this);
             if (config == null) { Debug.LogError("RTSMapGenerator Definitive: no hay MapGenConfig."); return; }
 
             var generator = GetComponent<MapGenerator>();
@@ -463,80 +463,6 @@ namespace Project.Gameplay.Map
 
             StartCoroutine(RebuildNavMeshCoroutine());
             Log("=== Generación Definitiva completada ===");
-        }
-
-        MapGenConfig CreateRuntimeMapGenConfig()
-        {
-            MapGenConfig c = ScriptableObject.CreateInstance<MapGenConfig>();
-            
-            // 🟢 FUENTE ÚNICA DE VERDAD: GridConfig.gridSize
-            if (gridConfig == null)
-            {
-                Debug.LogWarning("⚠️ RTSMapGenerator: gridConfig NO está asignado. Asigna 'GridConfig.asset' en el Inspector. Usando fallback: cellSize=2.5");
-            }
-            float cellSize = gridConfig != null ? gridConfig.gridSize : 2.5f;
-            
-            c.gridW = width;
-            c.gridH = height;
-            c.cellSizeWorld = cellSize;
-            c.origin = centerAtOrigin ? new Vector3(-width * cellSize * 0.5f, 0f, -height * cellSize * 0.5f) : transform.position;
-            c.seed = randomSeedOnPlay ? UnityEngine.Random.Range(1, int.MaxValue) : seed;
-            c.maxRetries = 5;
-            c.regionCount = 8;
-            c.regionNoiseScale = noiseScale;
-            c.waterHeight01 = 0.4f;
-            c.riverCount = Mathf.Clamp(riverCount, 0, 8);
-            c.lakeCount = Mathf.Clamp(lakeCount, 0, 6);
-            c.maxLakeCells = Mathf.Max(100, maxLakeCells);
-            c.cityCount = Mathf.Max(2, playerCount);
-            c.minCityDistanceCells = 40;
-            c.cityRadiusCells = 8;
-            c.maxCitySlopeDeg = maxSlopeAtSpawn;
-            c.cityWaterBufferCells = 2;
-            c.roadWidthCells = 2;
-            c.roadFlattenStrength = 0.8f;
-            c.ringNear = new Vector2Int((int)ringNear.x, (int)ringNear.y);
-            c.ringMid = new Vector2Int((int)ringMid.x, (int)ringMid.y);
-            c.ringFar = new Vector2Int((int)ringFar.x, (int)ringFar.y);
-            c.minWoodPerCity = minWoodTrees;
-            c.minStonePerCity = minStoneNodes;
-            c.minGoldPerCity = minGoldNodes;
-            c.minFoodPerCity = minFoodValue;
-            c.maxResourceRetries = maxResourceRetries;
-            c.terrainHeightWorld = heightMultiplier;
-            c.heightmapResolution = Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(width, height)) + 1, 33, 4097);
-            c.paintTerrainByHeight = paintTerrainByHeight;
-            c.grassLayer = grassLayer;
-            c.dirtLayer = dirtLayer;
-            c.rockLayer = rockLayer;
-            int totalPct = grassPercent + dirtPercent + rockPercent;
-            if (totalPct < 1) totalPct = 100;
-            c.grassPercent01 = Mathf.Clamp01((float)grassPercent / totalPct);
-            c.dirtPercent01 = Mathf.Clamp01((float)dirtPercent / totalPct);
-            c.rockPercent01 = Mathf.Clamp01((float)rockPercent / totalPct);
-            c.grassMaxHeight01 = c.grassPercent01;
-            c.dirtMaxHeight01 = c.grassPercent01 + c.dirtPercent01;
-            c.textureBlendWidth = textureBlendWidth;
-            c.sandLayer = sandLayer;
-            c.sandShoreCells = sandShoreCells;
-            c.waterChunkSize = waterChunkSize;
-            c.waterSurfaceOffset = waterSurfaceOffset;
-            c.waterMaterial = waterMaterial;
-            c.waterAlpha = waterAlpha;
-            c.waterLayer = waterLayerOverride >= 0 ? waterLayerOverride : -1;
-            
-            // 🟢 Parámetros de Marching Squares (agua orgánica)
-            c.waterRoundedEdges = true;
-            c.waterEdgeSubdiv = 4;
-            c.waterEdgeBlurIterations = 3;
-            c.waterEdgeBlurRadius = 2;
-            c.waterIsoLevel = 0.5f;
-            c.waterMaskPostProcess = true;
-            c.waterMaskSmoothIterations = 2;
-            c.waterMaskSmoothThreshold = 5;
-            c.waterMsMaxCornerSamples = 250000;
-            
-            return c;
         }
 
         /// <summary>Rango real del terreno en world Y (muestreando celdas). Para recomendar Water Height sin adivinar.</summary>

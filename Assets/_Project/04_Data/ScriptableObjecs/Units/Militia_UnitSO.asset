@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
   id: militia
   displayName: Milicia
-  prefab: {fileID: 7586646631000710113, guid: a8422e017be8bf34aa401cdac0bfc63d, type: 3}
+  prefab: {fileID: 155132, guid: ba490c52eda16af4aaef94a0b9139749, type: 3}
   costs:
   - kind: 0
     amount: 50
@@ -24,4 +24,4 @@ MonoBehaviour:
   populationCost: 1
   maxHP: 100
   attack: 8
-  moveSpeed: 3.5
+  moveSpeed: 3

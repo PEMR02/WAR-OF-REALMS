@@ -19,6 +19,13 @@ namespace Project.Gameplay.Map.Generator
         public TerrainLayer terrainGrassLayerOverride;
         public TerrainLayer terrainDirtLayerOverride;
         public TerrainLayer terrainRockLayerOverride;
+        [Tooltip("Tamaño de tiling en mundo (X,Z). >0 para reducir repetición de la textura. RTSMapGenerator lo asigna desde grassTileSize.")]
+        public Vector2 terrainGrassTileSize;
+        public Vector2 terrainDirtTileSize;
+        public Vector2 terrainRockTileSize;
+        public TerrainLayer terrainSandLayerOverride;
+        public Vector2 terrainSandTileSize;
+        [Range(1, 6)] public int terrainSandShoreCells = 3;
 
         [Header("Debug")]
         [Tooltip("Logs detallados del pipeline (override local). También se puede activar desde MapGenConfig.debugLogs.")]
@@ -100,7 +107,9 @@ namespace Project.Gameplay.Map.Generator
                 {
                     LogPhaseStart("Fase9 TerrainExport");
                     TerrainExporter.ApplyToTerrain(tr, _grid, c,
-                        terrainGrassLayerOverride, terrainDirtLayerOverride, terrainRockLayerOverride);
+                        terrainGrassLayerOverride, terrainDirtLayerOverride, terrainRockLayerOverride,
+                        terrainGrassTileSize, terrainDirtTileSize, terrainRockTileSize,
+                        terrainSandLayerOverride, terrainSandTileSize, terrainSandShoreCells);
                     LogPhaseEnd("Fase9 TerrainExport");
                     StartCoroutine(RefreshTerrainNextFrame(tr));
                 }

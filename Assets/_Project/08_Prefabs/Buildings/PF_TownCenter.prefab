@@ -527,7 +527,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e9645bf27f31ff24e928d23b717dadac, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingInstance
-  buildingSO: {fileID: 0}
+  buildingSO: {fileID: 11400000, guid: 0c3def422f52bd743b996d8ec5ed876d, type: 2}
   constructionProgress: 1
   isComplete: 1
 --- !u!1 &5132657681750862272
@@ -638,7 +638,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
-  m_AnchoredPosition: {x: 0, y: 10}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 100, y: 100}
   m_Pivot: {x: 0, y: 0}
 --- !u!1 &6517852235411381526
@@ -666,7 +666,7 @@ Transform:
   m_GameObject: {fileID: 6517852235411381526}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.049689032, y: 1.5298922, z: 0.011734518}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -717,11 +717,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalScale.y
-      value: 150.00006
+      value: 150
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalScale.z
-      value: 150.00006
+      value: 150
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalPosition.x

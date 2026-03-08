@@ -13,6 +13,8 @@ namespace Project.Gameplay.Players
         [SerializeField] private int _maxPopulation = 200; // Límite máximo absoluto
         [SerializeField] private int _currentHousingCapacity = 5; // Capacidad inicial (Town Center)
         [SerializeField] private int _reservedPopulation = 0; // Reservada por colas de producción
+        [Tooltip("Si true, al iniciar cuenta los aldeanos ya en escena (generados por mapa o colocados a mano) para que Pop coincida con Ociosos.")]
+        [SerializeField] private bool registerExistingVillagersOnStart = true;
 
         public int CurrentPopulation => _currentPopulation;
         public int MaxPopulation => Mathf.Min(_currentHousingCapacity, _maxPopulation);
@@ -25,8 +27,27 @@ namespace Project.Gameplay.Players
 
         void Awake()
         {
-            // Inicializar población
             _currentPopulation = 0;
+        }
+
+        void Start()
+        {
+            if (registerExistingVillagersOnStart)
+                RegisterExistingVillagers();
+        }
+
+        /// <summary>Cuenta aldeanos ya presentes en la escena (map gen o colocados a mano) para que Pop coincida con Ociosos.</summary>
+        public void RegisterExistingVillagers()
+        {
+            var gatherers = UnityEngine.Object.FindObjectsByType<Project.Gameplay.Units.VillagerGatherer>(UnityEngine.FindObjectsSortMode.None);
+            int added = 0;
+            for (int i = 0; i < gatherers.Length; i++)
+            {
+                if (gatherers[i] == null) continue;
+                if (TryAddPopulation(1)) added++;
+            }
+            if (added > 0)
+                Debug.Log($"PopulationManager: registrados {added} aldeanos existentes en escena. Pop: {_currentPopulation}/{MaxPopulation}");
         }
 
         /// <summary>

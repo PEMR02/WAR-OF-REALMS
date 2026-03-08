@@ -18,6 +18,12 @@ namespace Project.Gameplay.Buildings
         public PopulationManager populationManager;
         public Transform spawnPoint;  // Punto donde aparecen las unidades
 
+        [Header("Rally")]
+        [Tooltip("Si true, las unidades entrenadas aparecen en rallyPointWorld en lugar de junto al edificio.")]
+        public bool useRallyPoint;
+        [Tooltip("Posición en mundo donde aparecerán las unidades (click derecho con el edificio seleccionado).")]
+        public Vector3 rallyPointWorld;
+
         [Header("Spawn")]
         [Tooltip("Separación en metros desde el borde del edificio al punto de aparición.")]
         public float spawnClearanceWorld = 1.25f;
@@ -160,6 +166,7 @@ namespace Project.Gameplay.Buildings
                 }
             }
 
+            // Siempre spawnear junto al edificio; el rally point es solo la orden de movimiento
             Vector3 pos = ResolveSpawnPosition();
             GameObject unitObj = Instantiate(unit.prefab, pos, Quaternion.identity);
 
@@ -167,13 +174,22 @@ namespace Project.Gameplay.Buildings
             var health = unitObj.GetComponent<Health>();
             if (health == null) health = unitObj.AddComponent<Health>();
             health.InitFromMax(unit.maxHP);
+
+            // Si hay rally point, dar orden de ir hasta ahí (a pie, no teletransporte)
+            if (useRallyPoint)
+            {
+                var mover = unitObj.GetComponent<UnitMover>();
+                if (mover != null)
+                    mover.MoveTo(TryProjectToNavMesh(rallyPointWorld));
+            }
             
             OnUnitCompleted?.Invoke(unit);
-            Debug.Log($"ProductionBuilding: {unit.displayName} entrenado completamente");
+            Project.UI.GameplayNotifications.Show($"Unidad creada: {unit.displayName}");
         }
 
         Vector3 ResolveSpawnPosition()
         {
+            // El rally point no define dónde aparecen; solo a dónde van después
             Vector3 fallback = spawnPoint != null ? spawnPoint.position : transform.position;
             if (!useBoundsBasedSpawn)
                 return TryProjectToNavMesh(fallback);

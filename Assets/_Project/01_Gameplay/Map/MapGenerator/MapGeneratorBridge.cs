@@ -49,9 +49,11 @@ namespace Project.Gameplay.Map.Generator
                     var c = new Vector2Int(x, z);
                     ref var cell = ref grid.GetCell(c);
                     bool isWater = cell.type == CellType.Water || cell.type == CellType.River;
-                    bool blocked = !cell.walkable || isWater || cell.type == CellType.Mountain;
+                    bool blocked = !cell.walkable || cell.type == CellType.Mountain;
                     mapGrid.SetWater(c, isWater);
                     mapGrid.SetBlocked(c, blocked);
+                    if (isWater)
+                        mapGrid.SetTerrainCost(c, 5f);
                 }
             }
         }

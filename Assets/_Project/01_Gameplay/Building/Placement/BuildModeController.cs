@@ -29,6 +29,7 @@ public class BuildModeController : MonoBehaviour
 
     public bool CanUseBuild()
     {
+        if (selection == null) selection = FindFirstObjectByType<RTSSelectionController>();
         // aldeanos seleccionados (gatherer o builder)
         return selection != null && selection.HasSelectedVillagers();
     }

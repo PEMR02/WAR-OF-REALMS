@@ -129,5 +129,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Resources.ResourceNode
   kind: 3
   amount: 500
+  maxAmount: 0
   snapToNavMeshOnAwake: 1
   snapRadius: 3

@@ -18,7 +18,10 @@ MonoBehaviour:
     unit: {fileID: 11400000, guid: 7f3a2c1d9e8b4a56c0d1e2f3a4b5c6d7, type: 2}
   - buildingId: Barracks
     slot: 1
-    unit: {fileID: 11400000, guid: 50f025d25b67e1541a380604240c22be, type: 2}
+    unit: {fileID: 11400000, guid: e5afedc769a97444b8e2c7f2c583287a, type: 2}
   - buildingId: Barracks
     slot: 2
     unit: {fileID: 11400000, guid: 50f025d25b67e1541a380604240c22be, type: 2}
+  - buildingId: Barracks
+    slot: 3
+    unit: {fileID: 11400000, guid: 47cf8b845e9d1004a92c2f1407157702, type: 2}

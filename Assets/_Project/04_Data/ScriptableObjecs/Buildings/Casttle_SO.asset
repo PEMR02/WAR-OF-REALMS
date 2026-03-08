@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1301d1186efe9f04892beab2914da048, type: 3}
+  m_Name: Casttle_SO
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSO
+  id: Castillo
+  prefab: {fileID: 6239120701045057464, guid: 94070ea459615cd48859fc6a22a756d2, type: 3}
+  size: {x: 3, y: 3}
+  requiresFlatGround: 1
+  costs:
+  - kind: 0
+    amount: 50
+  buildTimeSeconds: 10
+  maxHP: 500
+  populationProvided: 15
+  unitSpawnForwardSign: -1

@@ -39,7 +39,7 @@ namespace Project.Gameplay.Map.Generator
 
             // Siempre capa 0 (Default) para que la cámara muestre el agua sin tocar Culling Mask.
             const int waterLayer = 0;
-            Material sharedWaterMat = GetOrCreateWaterMaterial(waterMaterial);
+            Material sharedWaterMat = GetOrCreateWaterMaterial(waterMaterial, config);
 
             _waterRoot = new GameObject("Water").transform;
             _waterRoot.SetParent(null);
@@ -578,11 +578,9 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
-        /// <summary>Material Unlit azul para el agua del generador definitivo (sin iluminación = sin triángulos oscuros ni brillo blanco).</summary>
-        private static Material GetOrCreateWaterMaterial(Material assigned)
+        /// <summary>Material para el agua. Aplica transparencia si config.waterAlpha &lt; 1 para ver la arena bajo el agua.</summary>
+        private static Material GetOrCreateWaterMaterial(Material assigned, MapGenConfig config)
         {
-            // Si hay material asignado (ej. MAT_Water), úsalo (instanciado) para que se vea su textura.
-            // Solo aplicamos ajustes "seguros" (ZWrite Off si existe, renderQueue si no está fijado).
             Material mat = assigned != null ? new Material(assigned) : GetFallbackMaterial();
 
             if (mat == null)
@@ -591,10 +589,8 @@ namespace Project.Gameplay.Map.Generator
                 return null;
             }
 
-            // Si el material no tiene renderQueue fijo, ponlo justo después del terreno.
             if (mat.renderQueue < 0) mat.renderQueue = 2001;
 
-            // Solo tintamos en fallback (cuando no hay material asignado).
             if (assigned == null)
             {
                 Color azulAgua = new Color(0.25f, 0.48f, 0.75f, 1f);
@@ -602,13 +598,33 @@ namespace Project.Gameplay.Map.Generator
                 if (mat.HasProperty("_Color")) mat.SetColor("_Color", azulAgua);
             }
 
-            // URP Unlit: forzar ZWrite Off si existe el property.
             if (mat.HasProperty("_ZWrite")) mat.SetFloat("_ZWrite", 0f);
-            // Otras variantes comunes en shaders/SG.
             if (mat.HasProperty("_ZWriteControl")) mat.SetFloat("_ZWriteControl", 0f);
             if (mat.HasProperty("_ZWriteMode")) mat.SetFloat("_ZWriteMode", 0f);
 
-            // No forzamos _Surface aquí: respetamos el modo del material asignado (opaco/transparent).
+            float alpha = (config != null && config.waterAlpha > 0f) ? Mathf.Clamp01(config.waterAlpha) : 1f;
+            if (alpha < 0.99f)
+            {
+                if (mat.HasProperty("_BaseColor"))
+                {
+                    Color c = mat.GetColor("_BaseColor");
+                    c.a = alpha;
+                    mat.SetColor("_BaseColor", c);
+                }
+                else if (mat.HasProperty("_Color"))
+                {
+                    Color c = mat.GetColor("_Color");
+                    c.a = alpha;
+                    mat.SetColor("_Color", c);
+                }
+                mat.renderQueue = 3000;
+                if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 1f);
+                if (mat.HasProperty("_Blend")) mat.SetFloat("_Blend", 0f);
+                if (mat.HasProperty("_SrcBlend")) mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                if (mat.HasProperty("_DstBlend")) mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            }
+
             if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", (float)CullMode.Off);
             return mat;
         }

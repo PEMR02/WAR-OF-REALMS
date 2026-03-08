@@ -14,7 +14,24 @@ public class HUDContextController : MonoBehaviour
         if (selection == null) selection = FindFirstObjectByType<RTSSelectionController>();
     }
 
-    void Update()
+    void OnEnable()
+    {
+        if (selection != null)
+            selection.OnSelectionChanged += Refresh;
+    }
+
+    void OnDisable()
+    {
+        if (selection != null)
+            selection.OnSelectionChanged -= Refresh;
+    }
+
+    void Start()
+    {
+        Refresh();
+    }
+
+    void Refresh()
     {
         if (selection == null) return;
 
