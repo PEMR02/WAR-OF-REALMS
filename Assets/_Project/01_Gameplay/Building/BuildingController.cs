@@ -20,6 +20,8 @@ namespace Project.Gameplay.Buildings
 
         static int _lastDrawAllToggleFrame;
         bool _footprintAppliedWhenGridReady;
+        BuildingInstance _buildingInstanceCached;
+        bool _buildingInstanceResolved;
 
         void Awake()
         {
@@ -61,7 +63,12 @@ namespace Project.Gameplay.Buildings
         {
             if (_footprintAppliedWhenGridReady) return;
             if (MapGrid.Instance == null || !MapGrid.Instance.IsReady) return;
-            if (GetComponent<BuildingInstance>() == null) return;
+            if (!_buildingInstanceResolved)
+            {
+                _buildingInstanceCached = GetComponent<BuildingInstance>();
+                _buildingInstanceResolved = true;
+            }
+            if (_buildingInstanceCached == null) return;
 
             RefreshObstacleAndCollider();
             _footprintAppliedWhenGridReady = true;

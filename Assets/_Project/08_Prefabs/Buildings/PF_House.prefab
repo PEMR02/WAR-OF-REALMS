@@ -293,7 +293,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 3247042526657421986}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5b109568e8c487a45bb1a55c1d688f07, type: 3}
   m_Name: 
@@ -828,7 +828,7 @@ MonoBehaviour:
   _currentHP: 100
   barAnchor: {fileID: 0}
   fallbackOffset: {x: 0, y: 2, z: 0}
-  startWithPercentForTesting: 1
+  startWithPercentForTesting: 0
   startPercent: 50
 --- !u!114 &-6300112233445566777
 MonoBehaviour:

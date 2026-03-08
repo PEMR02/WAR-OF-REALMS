@@ -51,6 +51,7 @@ namespace Project.Gameplay.Units
         // Hover sobre recursos
         private ResourceSelectable _hoveredResource;
         private float _hoveredResourceTime;
+        private int _resourceHoverFrameSkip;
 		
 		public Project.Gameplay.Buildings.BuildingPlacer buildingPlacer;
 
@@ -281,9 +282,7 @@ namespace Project.Gameplay.Units
             u.SetSelected(true);
             SetHealthBarVisibleForEntity(u.gameObject, true);
 
-            // Cache: aldeano = VillagerGatherer o Builder.
-            if (u.GetComponent<VillagerGatherer>() != null) _selectedVillagerCount++;
-            else if (u.GetComponent<Builder>() != null) _selectedVillagerCount++;
+            if (u.IsVillager) _selectedVillagerCount++;
 
             OnSelectionChanged?.Invoke();
         }
@@ -384,6 +383,11 @@ namespace Project.Gameplay.Units
                 ClearResourceHover();
                 return;
             }
+
+            // Throttle: raycast cada 2 frames para reducir coste
+            _resourceHoverFrameSkip++;
+            if ((_resourceHoverFrameSkip & 1) != 0)
+                return;
 
             var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             Ray ray = cam.ScreenPointToRay(mousePos);

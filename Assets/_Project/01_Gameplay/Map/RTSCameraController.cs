@@ -376,9 +376,20 @@ namespace Project.Gameplay
             // 5) Rotación: actualizar target yaw (aplicación en LateUpdate)
             _targetYaw = _yaw;
 
-            // 6) Bounds — clamp del target en XZ
-            _targetRigPosition.x = Mathf.Clamp(_targetRigPosition.x, minBounds.x, maxBounds.x);
-            _targetRigPosition.z = Mathf.Clamp(_targetRigPosition.z, minBounds.y, maxBounds.y);
+            // 6) Bounds — clamp del target en XZ (suave cerca del borde si smoothEdgeMovement)
+            if (smoothEdgeMovement && smoothEdgeSpeed > 0.001f)
+            {
+                float clampedX = Mathf.Clamp(_targetRigPosition.x, minBounds.x, maxBounds.x);
+                float clampedZ = Mathf.Clamp(_targetRigPosition.z, minBounds.y, maxBounds.y);
+                float maxPull = smoothEdgeSpeed * dt;
+                _targetRigPosition.x = Mathf.MoveTowards(_targetRigPosition.x, clampedX, maxPull);
+                _targetRigPosition.z = Mathf.MoveTowards(_targetRigPosition.z, clampedZ, maxPull);
+            }
+            else
+            {
+                _targetRigPosition.x = Mathf.Clamp(_targetRigPosition.x, minBounds.x, maxBounds.x);
+                _targetRigPosition.z = Mathf.Clamp(_targetRigPosition.z, minBounds.y, maxBounds.y);
+            }
         }
 
         void LateUpdate()

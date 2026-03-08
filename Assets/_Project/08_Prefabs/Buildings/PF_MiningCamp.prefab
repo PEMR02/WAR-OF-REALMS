@@ -187,7 +187,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2315010920360554749}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5b109568e8c487a45bb1a55c1d688f07, type: 3}
   m_Name: 
@@ -395,7 +395,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Combat.Health
   maxHP: 50
   _currentHP: 50
-  startWithPercentForTesting: 1
+  startWithPercentForTesting: 0
   startPercent: 80
 --- !u!114 &-7944119534373013943
 MonoBehaviour:

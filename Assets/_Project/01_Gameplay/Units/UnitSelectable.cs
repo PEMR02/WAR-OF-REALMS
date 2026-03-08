@@ -16,6 +16,23 @@ namespace Project.Gameplay.Units
         private Color[] _baseColors;
         private SelectableOutline _outline;
 
+        bool _cachedIsVillagerValid;
+        bool _cachedIsVillager;
+
+        /// <summary>True si la unidad tiene VillagerGatherer o Builder (aldeano). Cacheado para evitar GetComponent repetidos en selección.</summary>
+        public bool IsVillager
+        {
+            get
+            {
+                if (!_cachedIsVillagerValid)
+                {
+                    _cachedIsVillagerValid = true;
+                    _cachedIsVillager = GetComponent<VillagerGatherer>() != null || GetComponent<Builder>() != null;
+                }
+                return _cachedIsVillager;
+            }
+        }
+
         void OnEnable()
         {
             UnitSelectableRegistry.Register(this);

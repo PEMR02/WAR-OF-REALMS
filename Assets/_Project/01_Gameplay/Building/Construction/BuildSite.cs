@@ -27,6 +27,7 @@ namespace Project.Gameplay.Buildings
         public bool debugLogs = false;
 
         readonly HashSet<Project.Gameplay.Units.Builder> _builders = new();
+        readonly List<Project.Gameplay.Units.Builder> _buildersSnapshot = new List<Project.Gameplay.Units.Builder>(16);
         bool _completed;
         bool _cellsOccupied;
         Image _progressFill;
@@ -139,10 +140,11 @@ namespace Project.Gameplay.Buildings
 
 			FreeCells();
 
-			// Quitar este solar como objetivo de los aldeanos que estaban construyendo
-			var copy = new List<Project.Gameplay.Units.Builder>(_builders);
+			// Quitar este solar como objetivo de los aldeanos que estaban construyendo (snapshot reutilizable, sin alloc)
+			_buildersSnapshot.Clear();
+			_buildersSnapshot.AddRange(_builders);
 			_builders.Clear();
-			foreach (var b in copy)
+			foreach (var b in _buildersSnapshot)
 			{
 				if (b != null) b.ClearBuildTargetIfThis(this);
 			}
@@ -207,13 +209,14 @@ namespace Project.Gameplay.Buildings
                 Debug.LogWarning($"BuildSite: finalPrefab null | name={name} | id={GetInstanceID()} | so={(buildingSO?buildingSO.id:"null")}");
 				
 
-            // ✅ copiar antes de iterar (evita modificar la colección durante foreach)
-            var copy = new List<Project.Gameplay.Units.Builder>(_builders);
+            // Snapshot reutilizable (evita alloc y modificar la colección durante la iteración)
+            _buildersSnapshot.Clear();
+            _buildersSnapshot.AddRange(_builders);
             _builders.Clear();
 
-            for (int i = 0; i < copy.Count; i++)
+            for (int i = 0; i < _buildersSnapshot.Count; i++)
             {
-                var b = copy[i];
+                var b = _buildersSnapshot[i];
                 if (b != null) b.ClearBuildTargetIfThis(this);
             }
 

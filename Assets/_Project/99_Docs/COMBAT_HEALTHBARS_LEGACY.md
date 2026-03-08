@@ -12,20 +12,14 @@
 - **HealthBarWorld**: Script en Canvas World Space por unidad/edificio. Marcado `[Obsolete]`. Se mantiene solo para prefabs que aún lo tienen.
 - **PF_WorldHealthBar.prefab**: Prefab de barra world-space; ya no se usa en el flujo de selección (HealthBarManager usa PF_HealthBarUI).
 
-## Prefabs que aún tienen HealthBarWorld
+## Prefabs que tenían HealthBarWorld
 
-Estos prefabs siguen teniendo el componente HealthBarWorld como hijo (o en un Canvas hijo). El juego funciona porque el flujo de selección usa HealthBarManager; si el prefab tiene además HealthBarWorld, pueden convivir (doble barra) o puedes desactivar/eliminar el objeto con HealthBarWorld en Unity.
+En los prefabs de edificios (PF_Castillo, PF_TownCenter, PF_House, PF_Barracks, PF_Granary, PF_LumberCamp, PF_MiningCamp) el **componente HealthBarWorld está desactivado** (`m_Enabled: 0`). El script ya no se ejecuta: no hay doble barra ni doble LateUpdate; las barras se muestran solo con HealthBarManager + PF_HealthBarUI al seleccionar. El componente sigue en el prefab por si se quiere reactivar en Unity.
 
-| Prefab |
-|--------|
-| PF_Castillo |
-| PF_TownCenter |
-| PF_House |
-| PF_Barracks |
-| PF_Granary |
-| PF_LumberCamp |
-| PF_MiningCamp |
-| PF_WorldHealthBar (prefab de barra legacy) |
+| Prefab | Estado |
+|--------|--------|
+| PF_Castillo, PF_TownCenter, PF_House, PF_Barracks, PF_Granary, PF_LumberCamp, PF_MiningCamp | HealthBarWorld **desactivado** (m_Enabled: 0) |
+| PF_WorldHealthBar (prefab de barra legacy) | Sin cambiar; solo se usa si algo lo instancia manualmente. |
 
 ## Migración recomendada (en Unity)
 

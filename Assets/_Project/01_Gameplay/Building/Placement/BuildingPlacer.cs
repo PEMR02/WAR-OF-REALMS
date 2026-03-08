@@ -141,15 +141,18 @@ namespace Project.Gameplay.Buildings
                 else
                     p = GridSnapUtil.SnapToBuildingGrid(p, origin, gridSize, bw, bh);
             }
-            // Altura: footprint completo (centro + 4 esquinas) para evitar flotar/enterrar
+            // Altura: footprint completo (FootprintTerrainSampler + TerrainPlacementValidator); BuildingAnchorSolver = única fuente de Y para ghost y site
+            int bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
+            int bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
             bool validTerrain = true;
+            float ghostPivotY = p.y + _ghostPivotToBottom; // fallback sin terreno
             if (terrain != null)
             {
-                int bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
-                int bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
                 var sample = FootprintTerrainSampler.Sample(terrain, p, new Vector2(bw, bh), _currentYaw);
                 validTerrain = TerrainPlacementValidator.IsValid(sample, maxHeightDelta, maxSlopeDegrees, new Vector2(bw, bh));
-                p.y = sample.avgHeight;
+                BuildingAnchorSolver.Solve(sample, _ghostPivotToBottom, out float placementY, out float visualOffsetY);
+                p.y = placementY;
+                ghostPivotY = placementY + visualOffsetY;
             }
             else if (p.y < 0.1f)
             {
@@ -176,13 +179,12 @@ namespace Project.Gameplay.Buildings
 
             bool valid = validPlace && validTerrain && canPay && hasSitePrefab && hasVillagers;
 
-            // Actualizar ghost
+            // Actualizar ghost: pivot Y = ghostPivotY (ya calculado con BuildingAnchorSolver cuando hay terreno)
             if (_ghost != null)
             {
                 _ghost.transform.rotation = Quaternion.Euler(0f, _currentYaw, 0f);
                 Vector3 ghostPos = p;
-                // Elevar/ajustar el ghost según su base visual para que no se vea enterrado.
-                ghostPos.y += _ghostPivotToBottom;
+                ghostPos.y = ghostPivotY;
                 _ghost.transform.position = ghostPos;
             }
 

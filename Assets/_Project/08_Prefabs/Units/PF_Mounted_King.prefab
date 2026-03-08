@@ -1964,7 +1964,7 @@ MonoBehaviour:
   _currentHP: 100
   barAnchor: {fileID: 0}
   fallbackOffset: {x: 0, y: 2, z: 0}
-  startWithPercentForTesting: 1
+  startWithPercentForTesting: 0
   startPercent: 27
 --- !u!114 &2442399287959982753
 MonoBehaviour:

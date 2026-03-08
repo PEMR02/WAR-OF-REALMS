@@ -16,9 +16,12 @@ namespace Project.Gameplay.Combat
         [SerializeField] private Canvas canvas;
         [SerializeField] private RectTransform canvasRect;
         [SerializeField] private HealthBarUI healthBarPrefab;
+        [Tooltip("Barras más lejos que esta distancia no se actualizan (solo se ocultan). Reduce coste cuando hay muchas unidades.")]
+        [SerializeField] private float maxBarDistance = 120f;
 
         /// <summary>Una barra por entidad (GameObject), para que doble clic muestre barra en cada unidad aunque compartan Health (ej. mismo prefab con dos UnitSelectable).</summary>
         private readonly Dictionary<GameObject, (Health health, HealthBarUI bar)> _barsByEntity = new();
+        private readonly List<GameObject> _toRemove = new List<GameObject>(32);
         private bool _createdCanvasRuntime;
         private static bool _warnedMissingCanvas;
         private static bool _warnedMissingPrefab;
@@ -129,25 +132,20 @@ namespace Project.Gameplay.Combat
         {
             if (Instance != this || health == null)
                 return;
-            List<GameObject> toRemove = null;
+            _toRemove.Clear();
             foreach (var kv in _barsByEntity)
             {
                 if (kv.Value.health == health)
-                {
-                    toRemove ??= new List<GameObject>();
-                    toRemove.Add(kv.Key);
-                }
+                    _toRemove.Add(kv.Key);
             }
-            if (toRemove != null)
+            for (int i = 0; i < _toRemove.Count; i++)
             {
-                foreach (GameObject key in toRemove)
+                GameObject key = _toRemove[i];
+                if (_barsByEntity.TryGetValue(key, out var entry))
                 {
-                    if (_barsByEntity.TryGetValue(key, out var entry))
-                    {
-                        if (entry.bar != null && entry.bar.gameObject != null)
-                            Destroy(entry.bar.gameObject);
-                        _barsByEntity.Remove(key);
-                    }
+                    if (entry.bar != null && entry.bar.gameObject != null)
+                        Destroy(entry.bar.gameObject);
+                    _barsByEntity.Remove(key);
                 }
             }
         }
@@ -208,7 +206,7 @@ namespace Project.Gameplay.Combat
             if (worldCamera == null || canvas == null || canvasRect == null)
                 return;
 
-            List<GameObject> toRemove = null;
+            _toRemove.Clear();
 
             foreach (var kv in _barsByEntity)
             {
@@ -218,12 +216,18 @@ namespace Project.Gameplay.Combat
 
                 if (entity == null || health == null || bar == null)
                 {
-                    toRemove ??= new List<GameObject>();
-                    toRemove.Add(kv.Key);
+                    _toRemove.Add(kv.Key);
                     continue;
                 }
 
                 Vector3 worldPos = GetBarWorldPositionForEntity(entity, health);
+                float maxDistSq = maxBarDistance * maxBarDistance;
+                if (maxDistSq > 0f && (worldPos - worldCamera.transform.position).sqrMagnitude > maxDistSq)
+                {
+                    bar.gameObject.SetActive(false);
+                    continue;
+                }
+
                 Vector3 screenPoint = worldCamera.WorldToScreenPoint(worldPos);
 
                 bool visible = screenPoint.z > 0f;
@@ -243,16 +247,14 @@ namespace Project.Gameplay.Combat
                 bar.Refresh();
             }
 
-            if (toRemove != null)
+            for (int i = 0; i < _toRemove.Count; i++)
             {
-                foreach (GameObject key in toRemove)
+                GameObject key = _toRemove[i];
+                if (_barsByEntity.TryGetValue(key, out var entry))
                 {
-                    if (_barsByEntity.TryGetValue(key, out var entry))
-                    {
-                        if (entry.bar != null && entry.bar.gameObject != null)
-                            Destroy(entry.bar.gameObject);
-                        _barsByEntity.Remove(key);
-                    }
+                    if (entry.bar != null && entry.bar.gameObject != null)
+                        Destroy(entry.bar.gameObject);
+                    _barsByEntity.Remove(key);
                 }
             }
         }

@@ -38,20 +38,22 @@ namespace Project.Gameplay.Units
     {
         public float duration = 1.4f;
         float _timer;
+        Renderer _cachedRenderer;
+
+        void Awake()
+        {
+            _cachedRenderer = GetComponent<Renderer>();
+        }
 
         void Update()
         {
             _timer += Time.deltaTime;
             if (_timer >= duration)
                 Destroy(gameObject);
-            else
+            else if (_cachedRenderer != null && _cachedRenderer.material != null)
             {
-                var r = GetComponent<Renderer>();
-                if (r != null && r.material != null)
-                {
-                    float a = 0.7f * (1f - _timer / duration);
-                    r.material.color = new Color(0.2f, 0.85f, 0.35f, a);
-                }
+                float a = 0.7f * (1f - _timer / duration);
+                _cachedRenderer.material.color = new Color(0.2f, 0.85f, 0.35f, a);
             }
         }
     }

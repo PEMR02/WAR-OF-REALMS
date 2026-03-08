@@ -20,6 +20,7 @@ namespace Project.Gameplay.Units
 
         Animator _animator;
         NavMeshAgent _agent;
+        bool _skipDriver; // true si tiene AnimalPastureBehaviour (animales llevan su propia lógica)
 
         void Awake()
         {
@@ -27,11 +28,12 @@ namespace Project.Gameplay.Units
             _agent = GetComponent<NavMeshAgent>();
             if (_agent == null)
                 _agent = GetComponentInParent<NavMeshAgent>();
+            _skipDriver = GetComponentInParent<AnimalPastureBehaviour>() != null;
         }
 
         void Update()
         {
-            if (GetComponentInParent<AnimalPastureBehaviour>() != null) return;
+            if (_skipDriver) return;
             if (_animator == null || !_animator.isInitialized) return;
 
             float speed = 0f;
