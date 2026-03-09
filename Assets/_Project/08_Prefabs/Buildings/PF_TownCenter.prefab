@@ -1,5 +1,50 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!1 &7600010001
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7600010002}
+  - component: {fileID: 5668107965156927129}
+  m_Layer: 0
+  m_Name: Footprint
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7600010002
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7600010001}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 18, y: 0.1, z: 18}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1884626522377825667}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &5668107965156927129
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7600010001}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f674630d88020eb4783ffd97b743d590, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingFootprintGizmo
+  gizmoColor: {r: 0, g: 1, b: 0.5, a: 0.25}
 --- !u!1 &485696853226427106
 GameObject:
   m_ObjectHideFlags: 0
@@ -209,7 +254,7 @@ MonoBehaviour:
   colorNoHealth: {r: 1, g: 0, b: 0, a: 1}
   colorBorder: {r: 0, g: 0, b: 0, a: 1}
   billboardMode: 0
-  debugLogs: 1
+  debugLogs: 0
 --- !u!1 &3248518425483450688
 GameObject:
   m_ObjectHideFlags: 0
@@ -321,14 +366,15 @@ Transform:
   m_GameObject: {fileID: 3363113052625933421}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 2, z: 0}
-  m_LocalScale: {x: 7.7, y: 7.5, z: 7.5}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 8171217760133577122}
   - {fileID: 568421737540073688}
   - {fileID: 2132348766510025482}
   - {fileID: 1537449536492966003}
+  - {fileID: 7600010002}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!33 &1122460899857840478
@@ -449,7 +495,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingController
   carveNavMesh: 1
-  debugDrawObstacleBounds: 1
+  debugDrawObstacleBounds: 0
 --- !u!208 &5919986341083871303
 NavMeshObstacle:
   m_ObjectHideFlags: 0
@@ -494,6 +540,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Combat.Health
   maxHP: 200
   _currentHP: 200
+  barAnchor: {fileID: 0}
+  fallbackOffset: {x: 0, y: 2, z: 0}
   startWithPercentForTesting: 0
   startPercent: 50
 --- !u!114 &8264770244525599036
@@ -713,23 +761,23 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalScale.x
-      value: 150
+      value: 1400
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalScale.y
-      value: 150
+      value: 1000
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalScale.z
-      value: 150
+      value: 1600
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 0
+      value: 0.5
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0
+      value: 3.1
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: c229ec24967a7e546948f576c287d5f5, type: 3}
       propertyPath: m_LocalPosition.z

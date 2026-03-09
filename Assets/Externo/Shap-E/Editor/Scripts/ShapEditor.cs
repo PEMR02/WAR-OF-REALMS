@@ -17,6 +17,7 @@ namespace AiKodexShapE
 {
     public class ShapEditor : EditorWindow
     {
+        private const string GeneratorUrlPrefKey = "ShapE_generator_URL";
         string prompt = "";
         string textToMeshID = "nejnwmcwvhcax9";
         string imageToMeshID = "UnderDevelopment";
@@ -30,6 +31,7 @@ namespace AiKodexShapE
         private bool postFlag = false;
         private int postProgress = 0;
         private string directoryPath;
+        private string shapERootPath;
         private string modelName;
         GameObject prefabObject, defaultPrefabObject;
         Editor prefabObjectEditor, defaultPrefabObjectEditor;
@@ -97,9 +99,10 @@ namespace AiKodexShapE
 
         void Awake()
         {
-            directoryPath = "Assets/Shap-E/Models";
-            generator_URL = PlayerPrefs.GetString("ShapE_generator_URL");
-            defaultPrefabObject = (GameObject)AssetDatabase.LoadAssetAtPath("Assets/Shap-E/Editor/Resources/Cube.png", typeof(GameObject));
+            shapERootPath = ResolveShapERootPath();
+            directoryPath = $"{shapERootPath}/Models";
+            generator_URL = PlayerPrefs.GetString(GeneratorUrlPrefKey, string.Empty);
+            defaultPrefabObject = (GameObject)AssetDatabase.LoadAssetAtPath($"{shapERootPath}/Editor/Resources/Cube.prefab", typeof(GameObject));
         }
         private void OnEnable()
         {
@@ -184,7 +187,7 @@ namespace AiKodexShapE
                 fontStyle = FontStyle.Bold
             };
 
-            defaultPrefabObject = (GameObject)AssetDatabase.LoadAssetAtPath("Assets/Shap-E/Editor/Resources/Cube.prefab", typeof(GameObject));
+            defaultPrefabObject = (GameObject)AssetDatabase.LoadAssetAtPath($"{shapERootPath}/Editor/Resources/Cube.prefab", typeof(GameObject));
 
         }
         void OnGUI()
@@ -195,12 +198,17 @@ namespace AiKodexShapE
             EditorGUILayout.BeginHorizontal();
             Texture logo = (Texture)AssetDatabase.LoadAssetAtPath("Assets/Shap-E/Editor/Resources/Logo.png", typeof(Texture));
             Texture infoToolTip = (Texture)AssetDatabase.LoadAssetAtPath("Assets/Shap-E/Editor/Resources/Info.png", typeof(Texture));
+            if (logo == null)
+                logo = (Texture)AssetDatabase.LoadAssetAtPath($"{shapERootPath}/Editor/Resources/Logo.png", typeof(Texture));
+            if (infoToolTip == null)
+                infoToolTip = (Texture)AssetDatabase.LoadAssetAtPath($"{shapERootPath}/Editor/Resources/Info.png", typeof(Texture));
             EditorGUILayout.BeginVertical();
             EditorGUILayout.Space(10);
             EditorGUILayout.LabelField("              Shap-E", headStyle, GUILayout.MinHeight(23));
             EditorGUILayout.LabelField("                      Version 2.0", subStyle);
             EditorGUILayout.EndVertical();
-            GUI.DrawTexture(new Rect(10, 3, 65, 65), logo, ScaleMode.StretchToFill, true, 10.0F);
+            if (logo != null)
+                GUI.DrawTexture(new Rect(10, 3, 65, 65), logo, ScaleMode.StretchToFill, true, 10.0F);
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.Space(10);
             GUILayout.BeginVertical();
@@ -210,7 +218,7 @@ namespace AiKodexShapE
             GUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("");
             if (GUILayout.Button("Save", GUILayout.MaxWidth(40), GUILayout.MaxHeight(17)))
-                PlayerPrefs.SetString("ShapE_generator_URL", generator_URL);
+                PlayerPrefs.SetString(GeneratorUrlPrefKey, generator_URL?.Trim() ?? string.Empty);
 
             GUILayout.EndHorizontal();
             EditorGUILayout.Space(20);
@@ -275,16 +283,27 @@ namespace AiKodexShapE
             EditorGUI.BeginDisabledGroup(prompt == "" && fromImage == null || postFlag == true || modelName == "");
             if (GUILayout.Button("Generate 3D Model", GUILayout.Height(30)))
             {
-                    OverwriteCheck();
-                    postFlag = true;
-                    postProgress = 0;
-                    if (fromImage == null)
-                        this.StartCoroutine(Post($"{generator_URL}", "{\"prompt\":\"" + $"{prompt}" + "\",\"steps\":\"" + $"{steps}" + "\",\"cfg\":\"" + $"{cfg}" + "\",\"fileFormat\":\"" + $"{format}" + "\"}"));
+                    if (!TryNormalizeGeneratorUrl(generator_URL, out var normalizedUrl))
+                    {
+                        Debug.LogError("Shap-E: URL invalida. Ejemplo valido: https://<POD-ID>-5000.proxy.runpod.net/data");
+                    }
                     else
                     {
-                        byte[] encJPG = fromImage.DeCompress().EncodeToJPG();
-                        base64encJPG = Convert.ToBase64String(encJPG);
-                        this.StartCoroutine(Post($"https://{imageToMeshID}-5000.proxy.runpod.net/data", "{\"prompt\":\"" + $"{base64encJPG}" + "\",\"steps\":\"" + $"{steps}" + "\",\"cfg\":\"" + $"{cfg}" + "\",\"fileFormat\":\"" + $"{format}" + "\"}"));
+                        generator_URL = normalizedUrl;
+                        modelName = SanitizeFileName(modelName);
+                        directoryPath = NormalizeAssetDirectory(directoryPath);
+                        EnsureAssetDirectoryExists(directoryPath);
+                        OverwriteCheck();
+                        postFlag = true;
+                        postProgress = 0;
+                        if (fromImage == null)
+                            this.StartCoroutine(Post(generator_URL, "{\"prompt\":\"" + $"{prompt}" + "\",\"steps\":\"" + $"{steps}" + "\",\"cfg\":\"" + $"{cfg}" + "\",\"fileFormat\":\"" + $"{format}" + "\"}"));
+                        else
+                        {
+                            byte[] encJPG = fromImage.DeCompress().EncodeToJPG();
+                            base64encJPG = Convert.ToBase64String(encJPG);
+                            this.StartCoroutine(Post($"https://{imageToMeshID}-5000.proxy.runpod.net/data", "{\"prompt\":\"" + $"{base64encJPG}" + "\",\"steps\":\"" + $"{steps}" + "\",\"cfg\":\"" + $"{cfg}" + "\",\"fileFormat\":\"" + $"{format}" + "\"}"));
+                        }
                     }
             }
             EditorGUI.EndDisabledGroup();
@@ -295,7 +314,7 @@ namespace AiKodexShapE
                 Repaint();
                 EditorGUI.ProgressBar(loading, Mathf.Sqrt(++postProgress) * 0.005f, "");
             }
-            GUILayout.EndHorizontal();
+            GUILayout.EndVertical();
             EditorGUILayout.Space(5);
             GUILayout.BeginVertical();
             EditorGUILayout.LabelField("Preview", sectionTitle);
@@ -322,7 +341,13 @@ namespace AiKodexShapE
                     {
 
                         prefabObject = Selection.activeGameObject;
-                        prefabObject.GetComponent<MeshRenderer>().sharedMaterial = (Material)AssetDatabase.LoadAssetAtPath("Assets/Shap-E/Materials/Vertex Color.mat", typeof(Material));
+                        var prefabRenderer = prefabObject.GetComponent<MeshRenderer>();
+                        if (prefabRenderer != null)
+                        {
+                            var vertexColorMaterial = (Material)AssetDatabase.LoadAssetAtPath($"{shapERootPath}/Materials/Vertex Color.mat", typeof(Material));
+                            if (vertexColorMaterial != null)
+                                prefabRenderer.sharedMaterial = vertexColorMaterial;
+                        }
                         if (prefabObjectEditor == null || selectionChanged || viewingModeIndexChanged || playModeCurrent != playModePrevious)
                             prefabObjectEditor = Editor.CreateEditor(prefabObject);
                         prefabObjectEditor.OnInteractivePreviewGUI(GUILayoutUtility.GetRect(200, 200), BackgroundStyle.Get(new Color(0, 0, 0, 0.4f)));
@@ -333,11 +358,13 @@ namespace AiKodexShapE
                 else
                 {
 
-                    if (defaultPrefabObjectEditor == null || playModeCurrent != playModePrevious)
+                    if ((defaultPrefabObjectEditor == null || playModeCurrent != playModePrevious) && defaultPrefabObject != null)
                         defaultPrefabObjectEditor = Editor.CreateEditor(defaultPrefabObject);
-
-                    defaultPrefabObjectEditor.OnInteractivePreviewGUI(GUILayoutUtility.GetRect(200, 200), BackgroundStyle.Get(new Color(0, 0, 0, 0.4f)));
-                    GUILayout.Label("Default Cube");
+                    if (defaultPrefabObjectEditor != null)
+                    {
+                        defaultPrefabObjectEditor.OnInteractivePreviewGUI(GUILayoutUtility.GetRect(200, 200), BackgroundStyle.Get(new Color(0, 0, 0, 0.4f)));
+                        GUILayout.Label("Default Cube");
+                    }
                 }
                 playModePrevious = playModeCurrent;
                 EditorGUI.BeginDisabledGroup(m_active == null);
@@ -599,11 +626,23 @@ namespace AiKodexShapE
                     Debug.Log("It seems that you may have reached the limit. To check your character usage, please click on the Status button. Please wait until the 1st of the next month to get a renewed character count. Thank you for using Shap-E for Unity.");
                 else
                 {
-                    byte[] modelData = Convert.FromBase64String(request.downloadHandler.text);
-                    File.WriteAllBytes($"Assets/Shap-E/Models/{modelName}.{format}", modelData);
-                    Debug.Log($"<color=green>Inference Successful: </color>Please find the model in the {directoryPath}");
+                    byte[] modelData;
+                    try
+                    {
+                        modelData = Convert.FromBase64String(request.downloadHandler.text);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogError($"Shap-E: la respuesta no es un modelo valido en base64. Revisa URL/backend. Detalle: {ex.Message}");
+                        request.Dispose();
+                        yield break;
+                    }
+                    string outputAssetPath = $"{NormalizeAssetDirectory(directoryPath)}/{modelName}.{format}";
+                    EnsureAssetDirectoryExists(NormalizeAssetDirectory(directoryPath));
+                    File.WriteAllBytes(ToAbsolutePath(outputAssetPath), modelData);
+                    Debug.Log($"<color=green>Inference Successful: </color>Modelo guardado en {outputAssetPath}");
                     AssetDatabase.Refresh();
-                    Selection.activeObject = (UnityEngine.Object)AssetDatabase.LoadAssetAtPath($"Assets/Shap-E/Models/{modelName}.{format}", typeof(UnityEngine.Object));
+                    Selection.activeObject = (UnityEngine.Object)AssetDatabase.LoadAssetAtPath(outputAssetPath, typeof(UnityEngine.Object));
                 }
             }
 
@@ -640,29 +679,86 @@ namespace AiKodexShapE
         }
         void OverwriteCheck()
         {
-            string filePath = Path.Combine(directoryPath, modelName);
+            directoryPath = NormalizeAssetDirectory(directoryPath);
+            EnsureAssetDirectoryExists(directoryPath);
+            modelName = SanitizeFileName(modelName);
+            string ext = format.ToString();
+            string baseName = modelName;
             int suffixNumber = 1;
+            string absolutePath = ToAbsolutePath($"{directoryPath}/{modelName}.{ext}");
 
-            if (modelName[modelName.Length - 2] == '_')
-                while (File.Exists(filePath + "." + format))
-                {
-                    modelName = modelName.Remove(modelName.Length - 1, 1) + suffixNumber;
-                    filePath = Path.Combine(directoryPath, modelName);
-                    suffixNumber++;
-                }
-    
-            if(File.Exists(filePath + "." + format))
-                modelName += "_1";
-
-            if (modelName[modelName.Length - 2] == '_')
-                while (File.Exists(filePath + "." + format))
-                {
-                    modelName = modelName.Remove(modelName.Length - 1, 1) + suffixNumber;
-                    filePath = Path.Combine(directoryPath, modelName);
-                    suffixNumber++;
-                }
-
-            
+            while (File.Exists(absolutePath))
+            {
+                modelName = $"{baseName}_{suffixNumber++}";
+                absolutePath = ToAbsolutePath($"{directoryPath}/{modelName}.{ext}");
+            }
+        }
+        static string SanitizeFileName(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return "shape_model";
+            var invalid = Path.GetInvalidFileNameChars();
+            var sb = new StringBuilder(raw.Length);
+            foreach (char c in raw.Trim())
+                sb.Append(invalid.Contains(c) ? '_' : c);
+            string result = Regex.Replace(sb.ToString(), @"\s+", "_");
+            return string.IsNullOrWhiteSpace(result) ? "shape_model" : result;
+        }
+        string NormalizeAssetDirectory(string rawPath)
+        {
+            string fallback = $"{shapERootPath}/Models";
+            if (string.IsNullOrWhiteSpace(rawPath))
+                return fallback;
+            string normalized = rawPath.Trim().Replace("\\", "/").TrimEnd('/');
+            if (!normalized.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                Debug.LogWarning($"Shap-E: Model Folder debe empezar con 'Assets'. Se usara {fallback}");
+                return fallback;
+            }
+            return normalized;
+        }
+        static bool TryNormalizeGeneratorUrl(string rawUrl, out string normalizedUrl)
+        {
+            normalizedUrl = string.Empty;
+            if (string.IsNullOrWhiteSpace(rawUrl))
+                return false;
+            string candidate = rawUrl.Trim();
+            candidate = candidate.Replace("\r", "").Replace("\n", "");
+            candidate = candidate.Trim('\"', '\'');
+            if (!candidate.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !candidate.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                candidate = $"https://{candidate}";
+            if (!candidate.EndsWith("/data", StringComparison.OrdinalIgnoreCase))
+                candidate = $"{candidate.TrimEnd('/')}/data";
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out Uri uri))
+                return false;
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (string.IsNullOrWhiteSpace(uri.Host))
+                return false;
+            normalizedUrl = uri.ToString().TrimEnd('/');
+            return true;
+        }
+        static string ResolveShapERootPath()
+        {
+            if (AssetDatabase.IsValidFolder("Assets/Shap-E"))
+                return "Assets/Shap-E";
+            if (AssetDatabase.IsValidFolder("Assets/Externo/Shap-E"))
+                return "Assets/Externo/Shap-E";
+            return "Assets/Shap-E";
+        }
+        static string ToAbsolutePath(string assetPath)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            string relativePath = assetPath.Replace("\\", "/");
+            return Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        }
+        static void EnsureAssetDirectoryExists(string assetDir)
+        {
+            string absoluteDir = ToAbsolutePath(assetDir);
+            if (!Directory.Exists(absoluteDir))
+                Directory.CreateDirectory(absoluteDir);
         }
         private void SimplifyMeshFilter(MeshFilter meshFilter, float ratio)
         {

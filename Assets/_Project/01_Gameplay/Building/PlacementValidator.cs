@@ -7,16 +7,20 @@ namespace Project.Gameplay.Buildings
     {
         // Valida sobre Ground y sin colisiones con Unit/Building/Obstacle.
         // size = tamaño en CELDAS de la grilla (ej. 3x3). Se usa cellSize del MapGrid para convertir a mundo en el OverlapBox.
+        /// <param name="overlapInset">Margen interno (metros) para el OverlapBox; evita que dos edificios adyacentes (que solo se tocan en el borde) se rechacen. 0.05–0.1 típico.</param>
         public static bool IsValidPlacement(
             Vector3 pos,
             Vector2 size,
             LayerMask blockingMask,
-            float yOffset = 0.5f)
+            float yOffset = 0.5f,
+            float overlapInset = 0.08f)
         {
             float cellSize = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.cellSize : 1f;
             float wx = size.x * cellSize;
             float wz = size.y * cellSize;
-            Vector3 halfExtents = new Vector3(wx * 0.5f, yOffset, wz * 0.5f);
+            float hx = Mathf.Max(0.01f, wx * 0.5f - overlapInset);
+            float hz = Mathf.Max(0.01f, wz * 0.5f - overlapInset);
+            Vector3 halfExtents = new Vector3(hx, yOffset, hz);
             Collider[] hits = Physics.OverlapBox(pos, halfExtents, Quaternion.identity, blockingMask);
 
             if (hits != null && hits.Length > 0) return false;

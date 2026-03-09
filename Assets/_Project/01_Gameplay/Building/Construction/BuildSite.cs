@@ -22,6 +22,8 @@ namespace Project.Gameplay.Buildings
 
         [Header("Runtime")]
         [Range(0f, 1f)] public float progress01;
+        [Tooltip("Altura Y de la base del edificio (placementY del footprint). Se usa al completar para que el edificio no quede volando.")]
+        public float targetBaseY = float.MinValue;
 
         [Header("Debug")]
         public bool debugLogs = false;
@@ -173,7 +175,7 @@ namespace Project.Gameplay.Buildings
             if (finalPrefab != null)
             {
                 GameObject built = Instantiate(finalPrefab, transform.position, transform.rotation);
-                AlignBuiltToTerrain(built);
+                AlignBuiltToTerrain(built, targetBaseY > -10000f ? targetBaseY : (float?)null);
                 // Mantener capa de selección/colisión consistente en todo el edificio final.
                 built.layer = gameObject.layer;
                 SetLayerRecursive(built.transform, built.layer);
@@ -234,14 +236,24 @@ namespace Project.Gameplay.Buildings
                 SetLayerRecursive(root.GetChild(i), layer);
         }
 
-        static void AlignBuiltToTerrain(GameObject go)
+        /// <param name="targetBaseY">Si tiene valor, la base del edificio se coloca en esta Y (misma que el placement). Si no, se usa SampleHeight en el pivot (fallback).</param>
+        static void AlignBuiltToTerrain(GameObject go, float? targetBaseY = null)
         {
             if (go == null) return;
-            var terrain = Object.FindFirstObjectByType<Terrain>();
-            if (terrain == null) return;
 
-            Vector3 pivotPos = go.transform.position;
-            float terrainY = terrain.SampleHeight(pivotPos) + terrain.transform.position.y;
+            float referenceY;
+            if (targetBaseY.HasValue)
+            {
+                referenceY = targetBaseY.Value;
+            }
+            else
+            {
+                var terrain = Object.FindFirstObjectByType<Terrain>();
+                if (terrain == null) return;
+                Vector3 pivotPos = go.transform.position;
+                referenceY = terrain.SampleHeight(pivotPos) + terrain.transform.position.y;
+            }
+
             float bottomY = float.MaxValue;
             bool foundBounds = false;
 
@@ -269,7 +281,8 @@ namespace Project.Gameplay.Buildings
                 }
             }
 
-            float delta = terrainY - (foundBounds ? bottomY : pivotPos.y);
+            float pivotY = go.transform.position.y;
+            float delta = referenceY - (foundBounds ? bottomY : pivotY);
             if (Mathf.Abs(delta) < 0.0001f) return;
             Vector3 p = go.transform.position;
             p.y += delta;

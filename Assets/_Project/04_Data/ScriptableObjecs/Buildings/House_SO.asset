@@ -20,4 +20,6 @@ MonoBehaviour:
   - kind: 0
     amount: 25
   buildTimeSeconds: 10
+  maxHP: 300
   populationProvided: 5
+  unitSpawnForwardSign: -1

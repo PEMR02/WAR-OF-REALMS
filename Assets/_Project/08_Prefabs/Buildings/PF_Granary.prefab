@@ -316,6 +316,51 @@ MonoBehaviour:
   colorBorder: {r: 0, g: 0, b: 0, a: 1}
   billboardMode: 0
   debugLogs: 0
+--- !u!1 &3908351818016487009
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1029320069897351926}
+  - component: {fileID: 4179938690249487816}
+  m_Layer: 0
+  m_Name: Footprint
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1029320069897351926
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3908351818016487009}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 4, y: 0.1, z: 4}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 8932550132603400474}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &4179938690249487816
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3908351818016487009}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f674630d88020eb4783ffd97b743d590, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingFootprintGizmo
+  gizmoColor: {r: 0, g: 1, b: 0.5, a: 0.25}
 --- !u!1 &4027806755981077060
 GameObject:
   m_ObjectHideFlags: 0
@@ -426,13 +471,14 @@ Transform:
   m_GameObject: {fileID: 4467395263768014775}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 2.32663, y: 1, z: -32.4}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 7372513143079202243}
   - {fileID: 2310259625147812078}
   - {fileID: 5834070976975663596}
+  - {fileID: 1029320069897351926}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!33 &2164727008005056991
@@ -586,6 +632,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Combat.Health
   maxHP: 50
   _currentHP: 50
+  barAnchor: {fileID: 0}
+  fallbackOffset: {x: 0, y: 2, z: 0}
   startWithPercentForTesting: 0
   startPercent: 50
 --- !u!114 &-6300112233445566776

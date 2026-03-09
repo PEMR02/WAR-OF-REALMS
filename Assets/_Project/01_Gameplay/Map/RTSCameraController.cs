@@ -447,5 +447,14 @@ namespace Project.Gameplay
             _targetRigPosition = p;
             _rigVelocity = Vector3.zero;
         }
+
+        /// <summary>Fija solo el target del rig (XZ). La cámara se moverá suavemente hacia ahí en LateUpdate. Evita que otro script (ej. focus en selección) y este controlador se pisen y produzcan tiritones.</summary>
+        public void SetRigTargetPosition(Vector3 worldPositionXZ)
+        {
+            _targetRigPosition.x = Mathf.Clamp(worldPositionXZ.x, minBounds.x, maxBounds.x);
+            _targetRigPosition.z = Mathf.Clamp(worldPositionXZ.z, minBounds.y, maxBounds.y);
+            _targetRigPosition.y = Rig.position.y;
+            _rigVelocity = Vector3.zero;
+        }
     }
 }

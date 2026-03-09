@@ -14,8 +14,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSO
   id: Barracks
   prefab: {fileID: 6239120701045057464, guid: c13e413ceb3cd5543b19510d9bb2eb43, type: 3}
-  size: {x: 2, y: 2}
+  size: {x: 6, y: 6}
   requiresFlatGround: 0
   costs:
   - kind: 0
     amount: 50
+  buildTimeSeconds: 10
+  maxHP: 300
+  populationProvided: 0
+  unitSpawnForwardSign: -1

@@ -313,11 +313,12 @@ namespace Project.Gameplay.Buildings
 			foreach (var cost in selectedBuilding.costs)
 				owner.Subtract(cost.kind, cost.amount);
 
-			// Configurar site
+			// Configurar site (targetBaseY = altura de la base del footprint para que el edificio completado no quede volando)
 			site.buildingSO = selectedBuilding;
 			site.finalPrefab = selectedBuilding.prefab;
 			site.buildTime = GetBuildTime(selectedBuilding);
 			site.owner = owner;
+			site.targetBaseY = position.y;
 
 			if (debugLogs) Debug.Log($"SITE CONFIG -> name={go.name} id={go.GetInstanceID()} so={(site.buildingSO ? site.buildingSO.id : "null")} final={(site.finalPrefab != null)} buildTime={site.buildTime}");
 

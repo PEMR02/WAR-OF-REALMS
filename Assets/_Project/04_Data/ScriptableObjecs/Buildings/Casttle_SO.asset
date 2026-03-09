@@ -14,8 +14,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSO
   id: Castillo
   prefab: {fileID: 6239120701045057464, guid: 94070ea459615cd48859fc6a22a756d2, type: 3}
-  size: {x: 3, y: 3}
-  requiresFlatGround: 1
+  size: {x: 6, y: 6}
+  requiresFlatGround: 0
   costs:
   - kind: 0
     amount: 50
