@@ -25,6 +25,8 @@ namespace Project.Gameplay.Units
 
         [Header("NavMesh")]
         public float snapToNavMeshRadius = 50f;
+        [Tooltip("Distancia mínima al destino para considerar que la unidad llegó. Evita que se amontonen y vibren en el mismo punto.")]
+        public float minStoppingDistance = 0.4f;
 
         [Header("Debug")]
         public bool debugLogs = false;
@@ -42,8 +44,15 @@ namespace Project.Gameplay.Units
 
         void Start()
         {
+            ApplyMinStoppingDistance();
             // Intentar colocar en NavMesh al inicio
             Invoke(nameof(TrySnapToNavMesh), 0.5f);
+        }
+
+        void ApplyMinStoppingDistance()
+        {
+            if (_agent != null && _agent.stoppingDistance < minStoppingDistance)
+                _agent.stoppingDistance = minStoppingDistance;
         }
 
         // ─────────────────────────────────────────────────────────────
@@ -55,6 +64,7 @@ namespace Project.Gameplay.Units
         {
             if (_agent == null || !_agent.enabled) return;
 
+            ApplyMinStoppingDistance();
             // Asegurar que está en NavMesh
             if (!_agent.isOnNavMesh)
             {

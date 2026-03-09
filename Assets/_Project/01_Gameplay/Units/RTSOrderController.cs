@@ -9,6 +9,8 @@ using UnityEngine.EventSystems;
 
 namespace Project.Gameplay.Units
 {
+    public enum FormationStyle { Grid, Circle }
+
     /// <summary>Caché por unidad de componentes usados al dar órdenes (un GetComponent por tipo por frame de orden).</summary>
     public struct CachedUnitComponents
     {
@@ -31,8 +33,14 @@ namespace Project.Gameplay.Units
         public LayerMask buildingMask;
         public LayerMask groundMask;
 
-        [Header("Formation")]
-        public float formationSpacing = 1.5f;
+        [Header("Formation (movimiento en grupo)")]
+        [Tooltip("Separación entre unidades en el destino. Valores mayores reducen amontonamiento.")]
+        public float formationSpacing = 2f;
+        [Tooltip("Grid = cuadrícula; Circle = arco hacia el destino (menos obstrucción mutua).")]
+        public FormationStyle formationStyle = FormationStyle.Grid;
+        [Tooltip("Pequeña variación aleatoria en cada posición para evitar que todas apunten al mismo punto del NavMesh.")]
+        [Range(0f, 0.5f)]
+        public float formationRandomOffset = 0.15f;
 
         private CommandBus _bus;
         [Header("Debug")]
@@ -189,7 +197,12 @@ namespace Project.Gameplay.Units
             forward.y = 0f;
             forward.Normalize();
 
-            var formationPositions = FormationHelper.GenerateGrid(target, cached.Count, formationSpacing, forward);
+            List<Vector3> formationPositions = formationStyle == FormationStyle.Circle
+                ? FormationHelper.GenerateCircle(target, cached.Count, formationSpacing, forward)
+                : FormationHelper.GenerateGrid(target, cached.Count, formationSpacing, forward);
+
+            if (formationRandomOffset > 0f)
+                FormationHelper.ApplyRandomOffset(formationPositions, formationRandomOffset);
 
             for (int i = 0; i < cached.Count; i++)
             {

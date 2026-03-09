@@ -20,7 +20,10 @@ namespace Project.Gameplay.Units
 
         [Header("Selection")]
         public LayerMask unitLayerMask;
+        [Tooltip("Mantener pulsado Shift al hacer clic/doble clic para sumar unidades a la selección (mismo tipo en doble clic).")]
         public bool addToSelectionWithShift = true;
+        [Tooltip("Mantener pulsado Ctrl al hacer clic/doble clic para sumar otros tipos de unidades a la selección (mezclar aldeanos, soldados, etc.).")]
+        public bool addToSelectionWithCtrl = true;
 
         [Header("Double Click")]
         public float doubleClickTime = 0.3f;
@@ -132,11 +135,18 @@ namespace Project.Gameplay.Units
 
                 bool isBox = Vector2.Distance(_dragStart, dragEnd) > 12f;
 
-                bool additive = addToSelectionWithShift &&
-                                (Keyboard.current != null) &&
-                                (Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed);
+                var kbSel = Keyboard.current;
+                bool additive = kbSel != null && (
+                    (addToSelectionWithShift && (kbSel.leftShiftKey.isPressed || kbSel.rightShiftKey.isPressed)) ||
+                    (addToSelectionWithCtrl && (kbSel.leftCtrlKey.isPressed || kbSel.rightCtrlKey.isPressed)));
 
-                if (!additive) ClearSelection();
+                // Detectar doble clic antes de decidir si limpiar (tolerancia 24px)
+                float timeSinceLastClick = Time.time - _lastClickTime;
+                bool isDoubleClick = !isBox && timeSinceLastClick <= doubleClickTime &&
+                                    Vector2.Distance(_lastClickPos, dragEnd) < 24f;
+
+                // En doble clic no limpiar aquí; DoubleClickSelect usa ClearSelectionForDoubleClick (no oculta barras de unidades)
+                if (!additive && !isDoubleClick) ClearSelection();
 
                 if (isBox)
                 {
@@ -144,11 +154,6 @@ namespace Project.Gameplay.Units
                 }
                 else
                 {
-                    // Detectar doble clic (tolerancia 24px para que cuente como doble clic aunque el dedo se mueva un poco)
-                    float timeSinceLastClick = Time.time - _lastClickTime;
-                    bool isDoubleClick = timeSinceLastClick <= doubleClickTime &&
-                                        Vector2.Distance(_lastClickPos, dragEnd) < 24f;
-
                     if (isDoubleClick)
                     {
                         // Si tiene shift, no limpia la selección previa
@@ -157,7 +162,7 @@ namespace Project.Gameplay.Units
                     }
                     else
                     {
-                        ClickSelect(dragEnd);
+                        ClickSelect(dragEnd, additive);
                         _lastClickTime = Time.time;
                         _lastClickPos = dragEnd;
                     }
@@ -165,7 +170,7 @@ namespace Project.Gameplay.Units
             }
         }
 
-        void ClickSelect(Vector2 screenPos)
+        void ClickSelect(Vector2 screenPos, bool additive = false)
         {
             Ray ray = cam.ScreenPointToRay(screenPos);
 
@@ -176,6 +181,9 @@ namespace Project.Gameplay.Units
                 if (u != null) AddSelection(u);
                 return;
             }
+
+            // Con Ctrl/Shift (additive) no reemplazar selección por edificio ni recurso
+            if (additive) return;
 
             // 2) Luego: Buildings
             if (Physics.Raycast(ray, out RaycastHit hitB, 5000f, buildingLayerMask))
@@ -224,9 +232,12 @@ namespace Project.Gameplay.Units
             string clickedName = clickedUnit.gameObject.name;
             string baseName = clickedName.Split('(')[0].Trim();
 
-            // Solo limpiar selección si NO es aditivo (sin shift)
+            // Solo limpiar selección si NO es aditivo (sin shift).
+            // Importante: en doble clic no ocultamos las barras de las unidades antes de reañadirlas,
+            // para evitar que la unidad sobre la que se hizo doble clic pierda su barra (Hide + Register
+            // en el mismo frame puede dejar ese ente sin barra visible).
             if (!additive)
-                ClearSelection();
+                ClearSelectionForDoubleClick();
 
             var allUnits = UnitSelectableRegistry.All;
             for (int i = 0; i < allUnits.Count; i++)
@@ -255,6 +266,13 @@ namespace Project.Gameplay.Units
 
                 // Seleccionar esta unidad
                 AddSelection(u);
+            }
+
+            // Asegurar que todas las barras de vida se muestren (doble clic = mismo comportamiento que box select)
+            for (int i = 0; i < _selected.Count; i++)
+            {
+                if (_selected[i] != null)
+                    SetHealthBarVisibleForEntity(_selected[i].gameObject, true);
             }
         }
 
@@ -287,25 +305,29 @@ namespace Project.Gameplay.Units
             OnSelectionChanged?.Invoke();
         }
 
-        /// <summary>Limpia la selección actual (unidades, edificio, recurso). Llamable desde UI (ej. al cancelar construcción).</summary>
-        public void ClearSelection()
+        void ClearBuildingAndResource()
         {
-            ClearResourceHover();
-            bool hadSelection = _selected.Count > 0 || _selectedBuilding != null || _selectedResource != null;
-
             if (_selectedBuilding != null)
             {
                 SetHealthBarVisibleForEntity(_selectedBuilding.gameObject, false);
                 _selectedBuilding.SetSelected(false);
                 _selectedBuilding = null;
             }
-
             if (_selectedResource != null)
             {
                 SetHealthBarVisibleForEntity(_selectedResource.gameObject, false);
                 _selectedResource.SetSelected(false);
                 _selectedResource = null;
             }
+        }
+
+        /// <summary>Limpia la selección actual (unidades, edificio, recurso). Llamable desde UI (ej. al cancelar construcción).</summary>
+        public void ClearSelection()
+        {
+            ClearResourceHover();
+            bool hadSelection = _selected.Count > 0 || _selectedBuilding != null || _selectedResource != null;
+
+            ClearBuildingAndResource();
 
             for (int i = 0; i < _selected.Count; i++)
             {
@@ -315,7 +337,24 @@ namespace Project.Gameplay.Units
                     _selected[i].SetSelected(false);
                 }
             }
+            _selected.Clear();
+            _selectedVillagerCount = 0;
+            if (hadSelection) OnSelectionChanged?.Invoke();
+        }
 
+        /// <summary>Limpia edificio/recurso y la lista de unidades sin ocultar barras de vida. Usado en doble clic para evitar que la unidad del primer clic pierda la barra.</summary>
+        void ClearSelectionForDoubleClick()
+        {
+            ClearResourceHover();
+            bool hadSelection = _selected.Count > 0 || _selectedBuilding != null || _selectedResource != null;
+
+            ClearBuildingAndResource();
+
+            for (int i = 0; i < _selected.Count; i++)
+            {
+                if (_selected[i] != null)
+                    _selected[i].SetSelected(false);
+            }
             _selected.Clear();
             _selectedVillagerCount = 0;
             if (hadSelection) OnSelectionChanged?.Invoke();
