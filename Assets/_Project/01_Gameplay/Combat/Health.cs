@@ -1,7 +1,14 @@
 using UnityEngine;
+using Project.Gameplay.Units;
 
 namespace Project.Gameplay.Combat
 {
+    /// <summary>Tipo de daño para aplicar armadura o resistencia mágica.</summary>
+    public enum DamageType
+    {
+        Physical,
+        Magic
+    }
     /// <summary>
     /// Componente de vida reutilizable para unidades y edificios.
     /// Inicializar con InitFromMax() al spawnear o desde BuildingSO/UnitSO.
@@ -86,12 +93,19 @@ namespace Project.Gameplay.Combat
             _currentHP = maxHP;
         }
 
-        public void TakeDamage(int amount, object source = null)
+        /// <summary>Inflige daño. Si hay UnitStatsRuntime, aplica reducción por armadura (Physical) o resistencia mágica (Magic).</summary>
+        public void TakeDamage(int amount, DamageType type = DamageType.Physical, object source = null)
         {
             if (amount <= 0 || !IsAlive) return;
 
-            FloatingDamageText.Spawn(transform.position, amount, isHeal: false);
-            _currentHP = Mathf.Max(0, _currentHP - amount);
+            int reduction = 0;
+            var stats = GetComponent<UnitStatsRuntime>();
+            if (stats != null)
+                reduction = type == DamageType.Physical ? stats.GetEffectiveArmor() : stats.GetEffectiveMagicResist();
+            int final = Mathf.Max(1, amount - reduction);
+
+            FloatingDamageText.Spawn(transform.position, final, isHeal: false);
+            _currentHP = Mathf.Max(0, _currentHP - final);
 
             if (_currentHP <= 0)
             {
@@ -99,6 +113,9 @@ namespace Project.Gameplay.Combat
                 Destroy(gameObject);
             }
         }
+
+        /// <summary>Compatible con código que llama TakeDamage(amount, source).</summary>
+        public void TakeDamage(int amount, object source) => TakeDamage(amount, DamageType.Physical, source);
 
         /// <summary>
         /// Restaura vida (curación, reparación).

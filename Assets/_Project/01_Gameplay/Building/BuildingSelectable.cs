@@ -46,5 +46,11 @@ namespace Project.Gameplay.Buildings
 
             if (_outline != null) _outline.SetSelectionOutline(selected);
         }
+
+        /// <summary>Hover del cursor sobre el edificio (outline más suave).</summary>
+        public void SetHovered(bool hovered)
+        {
+            if (_outline != null) _outline.SetHoverOutline(hovered);
+        }
     }
 }

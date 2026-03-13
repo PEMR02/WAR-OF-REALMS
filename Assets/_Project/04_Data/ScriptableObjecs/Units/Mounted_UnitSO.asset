@@ -12,14 +12,20 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 76b4b4bbc0baa484d8e426377420dcc4, type: 3}
   m_Name: Mounted_UnitSO
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
-  id: mounted
-  displayName: Jinete
+  id: knight
+  displayName: Caballero
+  role: 6
   prefab: {fileID: 110684, guid: 656957b0c17f77d44a74ad12134741ef, type: 3}
   costs:
   - kind: 3
     amount: 50
   trainingTimeSeconds: 25
   populationCost: 1
-  maxHP: 150
-  attack: 15
-  moveSpeed: 6
+  maxHP: 180
+  attack: 16
+  attackRange: 1.8
+  attackIntervalSec: 1.6
+  moveSpeed: 5.2
+  armor: 7
+  magicResist: 2
+  bonusDamageVsCavalry: 0

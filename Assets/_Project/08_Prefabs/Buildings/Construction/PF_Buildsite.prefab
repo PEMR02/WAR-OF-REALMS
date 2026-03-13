@@ -50,7 +50,10 @@ MonoBehaviour:
   finalPrefab: {fileID: 0}
   buildTime: 10
   refundOnCancel: 0.75
+  owner: {fileID: 0}
   progress01: 0
+  targetBaseY: -3.4028235e+38
+  debugLogs: 0
 --- !u!65 &9212282637572486064
 BoxCollider:
   m_ObjectHideFlags: 0

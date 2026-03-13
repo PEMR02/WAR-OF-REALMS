@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using UnityEngine.AI;
+using Project.Gameplay;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Combat;
 using Unity.AI.Navigation;
@@ -106,6 +107,10 @@ namespace Project.Gameplay.Map
         public int waterChunkSize = 32;
         [Tooltip("Si >= 0, el agua usa esta capa. Por defecto (-1) se usa capa 0 (Default) para que se vea en Game view.")]
         public int waterLayerOverride = -1;
+
+        [Header("Selección (outline unidades/edificios/recursos)")]
+        [Tooltip("Config global del borde de selección. Asigna un asset creado con Create > Project > Selection > Outline Config para controlar color y grosor desde aquí (aplica a todos).")]
+        public SelectionOutlineConfig selectionOutlineConfig;
 
         [Header("Players")]
         [Range(2, 4)] public int playerCount = 2;
@@ -221,23 +226,7 @@ namespace Project.Gameplay.Map
         [Tooltip("Config del Generador Definitivo. Si no asignas, se crea uno en runtime desde los campos de este componente (grid, seed, playerCount, etc.).")]
         public MapGenConfig definitiveMapGenConfig;
 
-        [Header("Grilla visual")]
-        [Tooltip("Mostrar cuadrícula en vista Scene (sobre el terreno).")]
-        public bool showGridInScene = true;
-        [Tooltip("Mostrar cuadrícula en Game view.")]
-        public bool showGridInGameView = true;
-        [Range(0.02f, 0.5f), Tooltip("Transparencia de las líneas (bajo = muy tenue).")]
-        public float gridLineAlpha = 0.06f;
-        [Tooltip("Altura sobre el terreno. Si la grilla se ve cortada por cerros, sube a 0.15–0.35 o usa un material con ZTest Always (Unlit/GridAlwaysOnTop).")]
-        [Range(0.01f, 0.5f)] public float gridHeightOffset = 0.2f;
-        [Tooltip("Material con ZTest Always (ej. Unlit/GridAlwaysOnTop) para que la grilla no se oculte tras el terreno. Opcional: Unlit/Color en URP.")]
-        public Material gridLineMaterialOverride;
-        [Tooltip("Segmentar líneas: cada línea sigue el relieve (más vértices, grilla pegada al terreno). Si desactivado, líneas rectas (pueden quedar tapadas).")]
-        public bool gridSegmentFollowTerrain = false;
-
         MapGrid _grid;
-        Material _gridLineMat;
-        static readonly int s_GridLinesLimit = 4096;
         System.Random _rng;
         readonly List<Vector3> _spawns = new();
         readonly List<Vector3> _townCenterPositions = new();
@@ -279,47 +268,11 @@ namespace Project.Gameplay.Map
         bool HasAnyAnimalPrefab() { return animalPrefab != null || HasAnyIn(animalPrefabVariants); }
         static bool HasAnyIn(GameObject[] arr) { if (arr == null) return false; foreach (var p in arr) if (p != null) return true; return false; }
 
-        void OnEnable()
-        {
-            CreateGridLineMaterial();
-        }
-
-        void OnDisable()
-        {
-            if (_gridLineMat != null && _gridLineMat != gridLineMaterialOverride)
-            {
-                if (Application.isPlaying) Destroy(_gridLineMat);
-                else DestroyImmediate(_gridLineMat);
-                _gridLineMat = null;
-            }
-        }
-
-        void CreateGridLineMaterial()
-        {
-            if (_gridLineMat != null) return;
-            if (gridLineMaterialOverride != null) { _gridLineMat = gridLineMaterialOverride; return; }
-            var shader = Shader.Find("Unlit/GridAlwaysOnTop");
-            if (shader == null) shader = Shader.Find("Hidden/Internal-Colored");
-            if (shader == null) shader = Shader.Find("Sprites/Default");
-            if (shader == null) shader = Shader.Find("Unlit/Color");
-            if (shader != null)
-            {
-                _gridLineMat = new Material(shader);
-                if (shader.name == "Unlit/GridAlwaysOnTop" && _gridLineMat.HasProperty("_Color"))
-                    _gridLineMat.SetColor("_Color", new Color(1f, 1f, 1f, gridLineAlpha));
-            }
-        }
-
-        float GridSampleY(float worldX, float worldZ, float fallbackY)
-        {
-            if (terrain == null || terrain.terrainData == null) return fallbackY + gridHeightOffset;
-            Vector3 worldPos = new Vector3(worldX, 0f, worldZ);
-            float y = terrain.SampleHeight(worldPos) + terrain.transform.position.y;
-            return y + gridHeightOffset;
-        }
-
         void Awake()
         {
+            if (selectionOutlineConfig != null)
+                SelectionOutlineConfig.SetGlobal(selectionOutlineConfig);
+
             // Desactivar todos los NavMeshAgent al inicio para evitar "Failed to create agent because it is not close enough to the NavMesh"
             // (el NavMesh se construye después; se re-activan en FixUnitsAfterNavMesh).
             var agents = FindObjectsByType<UnityEngine.AI.NavMeshAgent>(FindObjectsSortMode.None);
@@ -1602,136 +1555,6 @@ namespace Project.Gameplay.Map
             Log($"Animal: {HasAnyAnimalPrefab()}");
             Log($"Gold: {HasAnyGoldPrefab()}");
             Log($"Stone: {HasAnyStonePrefab()}");
-        }
-
-        void OnDrawGizmos()
-        {
-            if (!showGridInScene || _grid == null || !_grid.IsReady) return;
-            float cs = _grid.cellSize;
-            Vector3 o = _grid.origin;
-            int w = _grid.width;
-            int h = _grid.height;
-            Gizmos.color = new Color(1f, 1f, 1f, gridLineAlpha);
-            if (gridSegmentFollowTerrain)
-                DrawGridGizmosSegmented(cs, o, w, h);
-            else
-            {
-                for (int x = 0; x <= w; x++)
-                {
-                    float wx = o.x + x * cs;
-                    float y0 = GridSampleY(wx, o.z, o.y);
-                    float y1 = GridSampleY(wx, o.z + h * cs, o.y);
-                    Gizmos.DrawLine(new Vector3(wx, y0, o.z), new Vector3(wx, y1, o.z + h * cs));
-                }
-                for (int z = 0; z <= h; z++)
-                {
-                    float wz = o.z + z * cs;
-                    float y0 = GridSampleY(o.x, wz, o.y);
-                    float y1 = GridSampleY(o.x + w * cs, wz, o.y);
-                    Gizmos.DrawLine(new Vector3(o.x, y0, wz), new Vector3(o.x + w * cs, y1, wz));
-                }
-            }
-        }
-
-        void DrawGridGizmosSegmented(float cs, Vector3 o, int w, int h)
-        {
-            for (int x = 0; x <= w; x++)
-            {
-                float wx = o.x + x * cs;
-                for (int z = 0; z < h; z++)
-                {
-                    float wz0 = o.z + z * cs;
-                    float wz1 = o.z + (z + 1) * cs;
-                    float y0 = GridSampleY(wx, wz0, o.y);
-                    float y1 = GridSampleY(wx, wz1, o.y);
-                    Gizmos.DrawLine(new Vector3(wx, y0, wz0), new Vector3(wx, y1, wz1));
-                }
-            }
-            for (int z = 0; z <= h; z++)
-            {
-                float wz = o.z + z * cs;
-                for (int x = 0; x < w; x++)
-                {
-                    float wx0 = o.x + x * cs;
-                    float wx1 = o.x + (x + 1) * cs;
-                    float y0 = GridSampleY(wx0, wz, o.y);
-                    float y1 = GridSampleY(wx1, wz, o.y);
-                    Gizmos.DrawLine(new Vector3(wx0, y0, wz), new Vector3(wx1, y1, wz));
-                }
-            }
-        }
-
-        void OnRenderObject()
-        {
-            if (!showGridInGameView || _grid == null || !_grid.IsReady) return;
-            if (gridLineMaterialOverride != null) _gridLineMat = gridLineMaterialOverride;
-            else if (_gridLineMat == null) CreateGridLineMaterial();
-            if (_gridLineMat == null) return;
-            int w = _grid.width;
-            int h = _grid.height;
-            float cs = _grid.cellSize;
-            Vector3 o = _grid.origin;
-            if (_gridLineMat.HasProperty("_Color"))
-                _gridLineMat.SetColor("_Color", new Color(1f, 1f, 1f, gridLineAlpha));
-            if (!_gridLineMat.SetPass(0)) return;
-            GL.PushMatrix();
-            GL.MultMatrix(Matrix4x4.identity);
-            GL.Begin(GL.LINES);
-            GL.Color(new Color(1f, 1f, 1f, gridLineAlpha));
-            if (gridSegmentFollowTerrain)
-                DrawGridGLSegmented(cs, o, w, h);
-            else
-            {
-                if ((w + 1) + (h + 1) > s_GridLinesLimit) { GL.End(); GL.PopMatrix(); return; }
-                for (int x = 0; x <= w; x++)
-                {
-                    float wx = o.x + x * cs;
-                    float y0 = GridSampleY(wx, o.z, o.y);
-                    float y1 = GridSampleY(wx, o.z + h * cs, o.y);
-                    GL.Vertex3(wx, y0, o.z);
-                    GL.Vertex3(wx, y1, o.z + h * cs);
-                }
-                for (int z = 0; z <= h; z++)
-                {
-                    float wz = o.z + z * cs;
-                    float y0 = GridSampleY(o.x, wz, o.y);
-                    float y1 = GridSampleY(o.x + w * cs, wz, o.y);
-                    GL.Vertex3(o.x, y0, wz);
-                    GL.Vertex3(o.x + w * cs, y1, wz);
-                }
-            }
-            GL.End();
-            GL.PopMatrix();
-        }
-
-        void DrawGridGLSegmented(float cs, Vector3 o, int w, int h)
-        {
-            for (int x = 0; x <= w; x++)
-            {
-                float wx = o.x + x * cs;
-                for (int z = 0; z < h; z++)
-                {
-                    float wz0 = o.z + z * cs;
-                    float wz1 = o.z + (z + 1) * cs;
-                    float y0 = GridSampleY(wx, wz0, o.y);
-                    float y1 = GridSampleY(wx, wz1, o.y);
-                    GL.Vertex3(wx, y0, wz0);
-                    GL.Vertex3(wx, y1, wz1);
-                }
-            }
-            for (int z = 0; z <= h; z++)
-            {
-                float wz = o.z + z * cs;
-                for (int x = 0; x < w; x++)
-                {
-                    float wx0 = o.x + x * cs;
-                    float wx1 = o.x + (x + 1) * cs;
-                    float y0 = GridSampleY(wx0, wz, o.y);
-                    float y1 = GridSampleY(wx1, wz, o.y);
-                    GL.Vertex3(wx0, y0, wz);
-                    GL.Vertex3(wx1, y1, wz);
-                }
-            }
         }
 
         void OnDrawGizmosSelected()

@@ -15,8 +15,8 @@ namespace Project.Gameplay.Combat
         [Header("Offset")]
         [Tooltip("Si true, HealthBarWorld usa este offset local para posicionar la barra.")]
         public bool useLocalOffsetOverride = true;
-        [Tooltip("Offset local de la barra respecto al pivote de la entidad.")]
-        public Vector3 localOffset = new Vector3(0f, 2f, 0f);
+        [Tooltip("Offset local de la barra respecto al pivote de la entidad (+0.5 m para que se vea sobre unidades/edificios).")]
+        public Vector3 localOffset = new Vector3(0f, 2.5f, 0f);
 
         [Header("Anchor (opcional)")]
         [Tooltip("Anchor explícito para la barra (recomendado: child 'BarAnchor'). Si está vacío se intenta encontrar uno automáticamente.")]

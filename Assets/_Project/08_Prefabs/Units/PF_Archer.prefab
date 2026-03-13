@@ -14898,6 +14898,8 @@ GameObject:
   - component: {fileID: -2246716814632497654}
   - component: {fileID: 8765838440089718542}
   - component: {fileID: 9123456789012345678}
+  - component: {fileID: -4284576207649672655}
+  - component: {fileID: 6718035930616474837}
   m_Layer: 8
   m_Name: PF_Archer
   m_TagString: Untagged
@@ -15079,6 +15081,7 @@ MonoBehaviour:
   useGridPathfinding: 1
   canSwim: 0
   snapToNavMeshRadius: 50
+  minStoppingDistance: 0.4
   debugLogs: 0
 --- !u!114 &6616987591531431951
 MonoBehaviour:
@@ -15139,6 +15142,34 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitAnimatorDriver
   speedParameter: Speed
   runThreshold: 2
+--- !u!114 &-4284576207649672655
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 179124}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cb66d3201f0866b4d8e749f8f1ce7976, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitGroundShadow
+  radius: 0.5
+  heightOffset: 0.02
+  shadowMaterial: {fileID: 0}
+--- !u!114 &6718035930616474837
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 179124}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 38eed5c0dd91ca540bbe775cdb532cce, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitVisualGroundOffset
+  visualOffsetDown: 0.8
 --- !u!1 &179126
 GameObject:
   m_ObjectHideFlags: 0

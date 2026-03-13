@@ -86,7 +86,7 @@ GameObject:
   - component: {fileID: 7391931783032677274}
   - component: {fileID: 4203833247194162391}
   - component: {fileID: 896995986003570431}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: Fill
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -159,7 +159,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2310259625147812078}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: BarAnchor
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -194,7 +194,7 @@ GameObject:
   - component: {fileID: 4447477129699015390}
   - component: {fileID: 6166058509816435500}
   - component: {fileID: 6684701936255480178}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: Canvas
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -326,7 +326,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1029320069897351926}
   - component: {fileID: 4179938690249487816}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: Footprint
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -372,7 +372,7 @@ GameObject:
   - component: {fileID: 8697292951579559838}
   - component: {fileID: 7831978727467002224}
   - component: {fileID: 6675837596108811921}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: Border
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -455,7 +455,8 @@ GameObject:
   - component: {fileID: -1978738227837561549}
   - component: {fileID: -6300112233445566776}
   - component: {fileID: -5435010900959435779}
-  m_Layer: 0
+  - component: {fileID: 3871603171889549390}
+  m_Layer: 7
   m_Name: PF_Granary
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -670,6 +671,22 @@ MonoBehaviour:
   autoAnchorName: BarAnchor
   autoUseRendererTopWhenNoAnchor: 1
   rendererTopPadding: 0.3
+--- !u!114 &3871603171889549390
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4467395263768014775}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9d5d0d89d2a04ce41842c0ce188fd061, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingGroundDecal
+  dirtMaterial: {fileID: 0}
+  dirtTexture: {fileID: 0}
+  heightOffset: 0.02
+  margin: 0.2
 --- !u!1 &5724782157682178379
 GameObject:
   m_ObjectHideFlags: 0
@@ -679,7 +696,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 5834070976975663596}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: HealthBar
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -715,7 +732,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 7372513143079202243}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: DropAnchor
   m_TagString: Untagged
   m_Icon: {fileID: 0}

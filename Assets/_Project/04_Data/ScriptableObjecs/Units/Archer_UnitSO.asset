@@ -14,6 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
   id: archer
   displayName: Arquero
+  role: 5
   prefab: {fileID: 179124, guid: 9eeaf3bfdddd0014f9b75d6507f03c74, type: 3}
   costs:
   - kind: 0
@@ -23,5 +24,10 @@ MonoBehaviour:
   trainingTimeSeconds: 18
   populationCost: 1
   maxHP: 70
-  attack: 12
-  moveSpeed: 3.5
+  attack: 7
+  attackRange: 8
+  attackIntervalSec: 1.5
+  moveSpeed: 3.8
+  armor: 1
+  magicResist: 0
+  bonusDamageVsCavalry: 0

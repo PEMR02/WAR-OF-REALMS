@@ -112,6 +112,8 @@ namespace Project.Gameplay.Combat
 
             HealthBarUI bar = Instantiate(healthBarPrefab, canvas.transform);
             bar.Bind(health);
+            bar.gameObject.SetActive(true);
+            bar.Refresh();
             _barsByEntity[entity] = (health, bar);
         }
 

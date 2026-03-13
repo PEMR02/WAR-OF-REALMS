@@ -5,6 +5,7 @@ Shader "Unlit/GridAlwaysOnTop"
     Properties
     {
         _Color ("Color", Color) = (1,1,1,0.06)
+        [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("Z Test", Int) = 8
     }
     SubShader
     {
@@ -12,7 +13,7 @@ Shader "Unlit/GridAlwaysOnTop"
         Pass
         {
             ZWrite Off
-            ZTest Always
+            ZTest [_ZTest]
             Blend SrcAlpha OneMinusSrcAlpha
             Cull Off
 

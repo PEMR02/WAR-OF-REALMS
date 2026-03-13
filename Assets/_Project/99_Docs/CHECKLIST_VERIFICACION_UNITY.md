@@ -233,3 +233,21 @@ Si algo pega tirones, anota:
 - Qué acción
 - Qué script aparece arriba
 - Si hubo alloc o no
+
+---
+
+## I. Stats base y modificadores (unidades y edificios)
+
+### Unidades (UnitSO + UnitStatsRuntime)
+
+- **UnitSO**: define valores base (vida, ataque, rango, velocidad, armadura, resistencia mágica, etc.).
+- **UnitStatsRuntime**: en cada unidad en partida; toma la base del UnitSO al spawn y aplica modificadores (mejoras, debuffs). Health y NavMeshAgent leen de aquí cuando existe.
+- **Durante la partida**: usar `AddModifierMaxHP`, `AddModifierAttack`, `AddModifierMoveSpeed`, etc., para auras/mejoras; los getters `GetEffective*` devuelven el valor final.
+
+### Edificios (BuildingSO)
+
+- **BuildingSO**: actualmente solo vida máxima base (`maxHP`). Misma idea: base en el SO; en el futuro un componente tipo `BuildingStatsRuntime` permitiría modificar vida/defensa durante la partida.
+
+### Catálogo de producción (Scout y Lancero)
+
+Si en el **ProductionCatalog** no aparecen Scout ni Lancero en el Barracks, añádelos en el Inspector: abre el asset `ProductionCatalog_Asset`, en **Entries** agrega dos entradas con `buildingId: Barracks`, `slot: 4` (Scout_UnitSO) y `slot: 5` (Lancero_UnitSO), asignando los ScriptableObjects correspondientes.

@@ -299,7 +299,7 @@ namespace Project.Gameplay.Buildings
                 var go = new GameObject("BarAnchor");
                 anchor = go.transform;
                 anchor.SetParent(built.transform, false);
-                anchor.localPosition = new Vector3(0f, 2f, 0f);
+                anchor.localPosition = new Vector3(0f, 2.5f, 0f);
             }
 
             var health = built.GetComponent<Health>();

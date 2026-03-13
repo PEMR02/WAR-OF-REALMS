@@ -25,3 +25,9 @@ MonoBehaviour:
   - buildingId: Barracks
     slot: 3
     unit: {fileID: 11400000, guid: 47cf8b845e9d1004a92c2f1407157702, type: 2}
+  - buildingId: Barracks
+    slot: 4
+    unit: {fileID: 11400000, guid: dc24629c051530746a3044f3a2e08d7b, type: 2}
+  - buildingId: Barracks
+    slot: 5
+    unit: {fileID: 11400000, guid: d4e5f6a7b8c9094a5b6c7d8e9f001234, type: 2}

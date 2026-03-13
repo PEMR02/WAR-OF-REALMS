@@ -1,30 +1,56 @@
 using UnityEngine;
+using Project.Gameplay.Buildings;
+using Project.Gameplay.Resources;
+using Project.Gameplay.Units;
 
 namespace Project.Gameplay
 {
     /// <summary>
     /// Muestra un borde/outline alrededor del objeto: selección (más marcado) o hover (más suave).
     /// Crea en runtime copias del mesh escaladas con material Cull Front.
+    /// Lee el bloque correspondiente del SelectionOutlineConfig según tipo (unidad, edificio, recurso).
     /// </summary>
     public class SelectableOutline : MonoBehaviour
     {
         public enum OutlineState { Off, Hover, Selected }
 
-        [Header("Apariencia")]
+        [Header("Apariencia (override si no hay config; si hay config se usa por tipo: edificio/recurso)")]
         [Tooltip("Color del borde al seleccionar (más visible).")]
         public Color selectionColor = new Color(0.15f, 0.85f, 0.35f, 0.98f);
         [Tooltip("Color del borde al hacer hover (más suave).")]
         public Color hoverColor = new Color(0.4f, 0.75f, 0.4f, 0.8f);
-        [Tooltip("Grosor del borde (escala del mesh; 1.1–1.15 muy visible en animales).")]
-        [Range(1.02f, 1.25f)] public float outlineScale = 1.12f;
+        [Tooltip("Grosor del borde (escala del mesh).")]
+        [Range(1.02f, 1.25f)] public float outlineScale = 1.02f;
 
         private GameObject[] _outlineObjects;
+        private SkinnedMeshRenderer[] _outlineSkinnedSources;
+        private Mesh[] _outlineBakedMeshes;
         private Material _outlineMaterial;
         private OutlineState _state;
+        private bool _isUnit;
 
         void Awake()
         {
+            if (SelectionOutlineConfig.Global != null)
+            {
+                OutlineAppearance app = GetAppearanceFromConfig();
+                selectionColor = app.selectionColor;
+                hoverColor = app.hoverColor;
+                outlineScale = app.outlineScale;
+            }
             TryCreateOutlineRenderers();
+        }
+
+        OutlineAppearance GetAppearanceFromConfig()
+        {
+            if (GetComponent<BuildingSelectable>() != null) return SelectionOutlineConfig.Global.buildings;
+            if (GetComponent<ResourceSelectable>() != null) return SelectionOutlineConfig.Global.resources;
+            if (GetComponent<UnitSelectable>() != null)
+            {
+                var u = SelectionOutlineConfig.Global.units;
+                return new OutlineAppearance { selectionColor = u.selectionColor, hoverColor = u.hoverColor, outlineScale = u.outlineScale };
+            }
+            return SelectionOutlineConfig.Global.buildings;
         }
 
         void TryCreateOutlineRenderers()
@@ -37,50 +63,70 @@ namespace Project.Gameplay
         {
             var meshFilters = GetComponentsInChildren<MeshFilter>(true);
             var skinned = GetComponentsInChildren<SkinnedMeshRenderer>(true);
-
-            int total = (meshFilters != null ? meshFilters.Length : 0) + (skinned != null ? skinned.Length : 0);
-            if (total == 0) return;
+            int nMesh = meshFilters != null ? meshFilters.Length : 0;
+            int nSkinned = skinned != null ? skinned.Length : 0;
+            if (nMesh + nSkinned == 0) return;
 
             var shader = Shader.Find("Unlit/OutlineCullFront");
             if (shader == null) return;
 
-            _outlineMaterial = new Material(shader);
-            _outlineObjects = new GameObject[total];
-            int idx = 0;
+            _isUnit = GetComponent<UnitSelectable>() != null;
+            bool centerByBounds = _isUnit;
 
+            _outlineMaterial = new Material(shader);
+            _outlineObjects = new GameObject[nMesh + nSkinned];
+            _outlineSkinnedSources = new SkinnedMeshRenderer[nMesh + nSkinned];
+            _outlineBakedMeshes = new Mesh[nMesh + nSkinned];
+            int idx = 0;
             if (meshFilters != null)
             {
                 for (int i = 0; i < meshFilters.Length; i++)
                 {
                     var mf = meshFilters[i];
                     if (mf == null || mf.sharedMesh == null) continue;
-                    _outlineObjects[idx++] = CreateOutlineObject(mf.sharedMesh, mf.transform);
+                    _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, centerByBounds, null);
+                    _outlineSkinnedSources[idx] = null;
+                    _outlineBakedMeshes[idx] = null;
+                    idx++;
                 }
             }
-
             if (skinned != null)
             {
                 for (int i = 0; i < skinned.Length; i++)
                 {
                     var smr = skinned[i];
                     if (smr == null || smr.sharedMesh == null) continue;
-                    _outlineObjects[idx++] = CreateOutlineObject(smr.sharedMesh, smr.transform);
+                    var bakedMesh = new Mesh();
+                    bakedMesh.name = "OutlineBaked";
+                    _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerByBounds, smr);
+                    _outlineSkinnedSources[idx] = smr;
+                    _outlineBakedMeshes[idx] = bakedMesh;
+                    idx++;
                 }
             }
-
-            if (idx < total)
+            if (idx < _outlineObjects.Length)
             {
                 var trimmed = new GameObject[idx];
-                for (int i = 0; i < idx; i++) trimmed[i] = _outlineObjects[i];
+                var trimmedSrc = new SkinnedMeshRenderer[idx];
+                var trimmedMesh = new Mesh[idx];
+                for (int i = 0; i < idx; i++) { trimmed[i] = _outlineObjects[i]; trimmedSrc[i] = _outlineSkinnedSources[i]; trimmedMesh[i] = _outlineBakedMeshes[i]; }
                 _outlineObjects = trimmed;
+                _outlineSkinnedSources = trimmedSrc;
+                _outlineBakedMeshes = trimmedMesh;
             }
         }
 
-        GameObject CreateOutlineObject(Mesh mesh, Transform parentForOutline)
+        GameObject CreateOutlineObject(Mesh mesh, Transform parentForOutline, bool centerByBounds, SkinnedMeshRenderer skinnedSource)
         {
             var go = new GameObject("Outline");
             go.transform.SetParent(parentForOutline != null ? parentForOutline : transform, false);
-            go.transform.localPosition = Vector3.zero;
+            if (centerByBounds && skinnedSource == null)
+            {
+                var bounds = mesh.bounds;
+                go.transform.localPosition = -bounds.center;
+            }
+            else
+                go.transform.localPosition = Vector3.zero;
             go.transform.localRotation = Quaternion.identity;
             go.transform.localScale = Vector3.one * outlineScale;
 
@@ -96,6 +142,22 @@ namespace Project.Gameplay
 
             go.SetActive(false);
             return go;
+        }
+
+        void LateUpdate()
+        {
+            if (_state == OutlineState.Off || _outlineObjects == null || !_isUnit) return;
+            for (int i = 0; i < _outlineObjects.Length; i++)
+            {
+                var smr = _outlineSkinnedSources[i];
+                var baked = _outlineBakedMeshes[i];
+                if (smr == null || baked == null || _outlineObjects[i] == null) continue;
+                smr.BakeMesh(baked);
+                var mf = _outlineObjects[i].GetComponent<MeshFilter>();
+                if (mf != null) mf.sharedMesh = baked;
+                if (_isUnit)
+                    _outlineObjects[i].transform.localPosition = -baked.bounds.center;
+            }
         }
 
         /// <summary>Activa borde de selección (más marcado).</summary>
@@ -118,6 +180,20 @@ namespace Project.Gameplay
             if (state != OutlineState.Off) TryCreateOutlineRenderers();
             if (_outlineObjects == null || _outlineObjects.Length == 0) return;
 
+            // Re-aplicar config al mostrar (para que Outline Scale del SelectionOutlineConfig sí cambie el grosor)
+            if (SelectionOutlineConfig.Global != null)
+            {
+                var app = GetAppearanceFromConfig();
+                outlineScale = app.outlineScale;
+                selectionColor = app.selectionColor;
+                hoverColor = app.hoverColor;
+                for (int i = 0; i < _outlineObjects.Length; i++)
+                {
+                    if (_outlineObjects[i] != null)
+                        _outlineObjects[i].transform.localScale = Vector3.one * outlineScale;
+                }
+            }
+
             bool active = state != OutlineState.Off;
             for (int i = 0; i < _outlineObjects.Length; i++)
             {
@@ -127,7 +203,10 @@ namespace Project.Gameplay
 
             if (_outlineMaterial != null)
             {
-                _outlineMaterial.color = state == OutlineState.Selected ? selectionColor : hoverColor;
+                Color c = state == OutlineState.Selected ? selectionColor : hoverColor;
+                _outlineMaterial.color = c;
+                if (_outlineMaterial.HasProperty("_BaseColor"))
+                    _outlineMaterial.SetColor("_BaseColor", c);
             }
         }
     }

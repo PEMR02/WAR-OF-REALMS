@@ -170,10 +170,10 @@ namespace Project.Gameplay.Buildings
             Vector3 pos = ResolveSpawnPosition();
             GameObject unitObj = Instantiate(unit.prefab, pos, Quaternion.identity);
 
-            // Inicializar vida desde UnitSO
-            var health = unitObj.GetComponent<Health>();
-            if (health == null) health = unitObj.AddComponent<Health>();
-            health.InitFromMax(unit.maxHP);
+            // Stats en partida (base + modificadores): vida, velocidad, armadura, etc.
+            var stats = unitObj.GetComponent<UnitStatsRuntime>();
+            if (stats == null) stats = unitObj.AddComponent<UnitStatsRuntime>();
+            stats.InitFromUnitSO(unit);
 
             // Si hay rally point, dar orden de ir hasta ahí (a pie, no teletransporte)
             if (useRallyPoint)

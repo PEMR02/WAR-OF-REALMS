@@ -350,6 +350,7 @@ GameObject:
   - component: {fileID: 969193670895838163}
   - component: {fileID: 8264770244525599036}
   - component: {fileID: -6300112233445566778}
+  - component: {fileID: 3973078125985552781}
   m_Layer: 7
   m_Name: PF_TownCenter
   m_TagString: Untagged
@@ -538,9 +539,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3d43390ae73ff6c43b66bdd47c901f71, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Combat.Health
-  maxHP: 200
-  _currentHP: 200
-  barAnchor: {fileID: 0}
+  maxHP: 300
+  _currentHP: 300
+  barAnchor: {fileID: 1537449536492966003}
   fallbackOffset: {x: 0, y: 2, z: 0}
   startWithPercentForTesting: 0
   startPercent: 50
@@ -578,6 +579,22 @@ MonoBehaviour:
   buildingSO: {fileID: 11400000, guid: 0c3def422f52bd743b996d8ec5ed876d, type: 2}
   constructionProgress: 1
   isComplete: 1
+--- !u!114 &3973078125985552781
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3363113052625933421}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9d5d0d89d2a04ce41842c0ce188fd061, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingGroundDecal
+  dirtMaterial: {fileID: 0}
+  dirtTexture: {fileID: 0}
+  heightOffset: 0.02
+  margin: 0.2
 --- !u!1 &5132657681750862272
 GameObject:
   m_ObjectHideFlags: 0
@@ -714,7 +731,7 @@ Transform:
   m_GameObject: {fileID: 6517852235411381526}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 0, y: 3, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

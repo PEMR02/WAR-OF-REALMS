@@ -5,6 +5,7 @@ using UnityEngine.EventSystems;
 using Project.Gameplay.Combat;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Buildings;
+using Project.Gameplay.Map;
 
 namespace Project.Gameplay.Units
 {
@@ -29,11 +30,11 @@ namespace Project.Gameplay.Units
         public float doubleClickTime = 0.3f;
 
         [Header("Hover sobre recursos (con aldeano seleccionado)")]
-        [Tooltip("Tiempo sobre un recurso para mostrar borde de hover (facilita el clic).")]
-        public float resourceHoverDelay = 0.25f;
+        [Tooltip("Segundos sobre el recurso antes de mostrar hover (0 = inmediato).")]
+        public float resourceHoverDelay = 0f;
 
         public LayerMask buildingLayerMask;
-        [Tooltip("Capa de recursos (árboles, piedra, oro). Debe incluir la capa 'Resource' si el generador la usa.")]
+        [Tooltip("Capa de recursos (árboles, piedra, oro). Si está en Nothing, se rellena desde RTSMapGenerator.resourceLayerName al iniciar.")]
         public LayerMask resourceLayerMask;
 
         private Project.Gameplay.Buildings.BuildingSelectable _selectedBuilding;
@@ -55,6 +56,10 @@ namespace Project.Gameplay.Units
         private ResourceSelectable _hoveredResource;
         private float _hoveredResourceTime;
         private int _resourceHoverFrameSkip;
+        // Hover sobre edificios
+        private BuildingSelectable _hoveredBuilding;
+        // Hover sobre unidades
+        private UnitSelectable _hoveredUnit;
 		
 		public Project.Gameplay.Buildings.BuildingPlacer buildingPlacer;
 
@@ -63,9 +68,27 @@ namespace Project.Gameplay.Units
             if (cam == null) cam = Camera.main;
             if (selectionBoxUI == null)
                 selectionBoxUI = FindFirstObjectByType<Project.UI.SelectionBoxUI>();
-			if (buildingPlacer == null)
-				buildingPlacer = FindFirstObjectByType<Project.Gameplay.Buildings.BuildingPlacer>();
-	        }
+            if (buildingPlacer == null)
+                buildingPlacer = FindFirstObjectByType<Project.Gameplay.Buildings.BuildingPlacer>();
+            EnsureResourceLayerMaskFromMap();
+        }
+
+        void Start()
+        {
+            EnsureResourceLayerMaskFromMap();
+        }
+
+        void EnsureResourceLayerMaskFromMap()
+        {
+            if (resourceLayerMask != 0) return;
+            string layerName = "Resource";
+            var gen = FindFirstObjectByType<RTSMapGenerator>();
+            if (gen != null && !string.IsNullOrEmpty(gen.resourceLayerName))
+                layerName = gen.resourceLayerName;
+            int layer = LayerMask.NameToLayer(layerName);
+            if (layer < 0) layer = 11;
+            resourceLayerMask = 1 << layer;
+        }
 
         void Update()
         {
@@ -115,8 +138,9 @@ namespace Project.Gameplay.Units
                 }
             }
 
-            // Hover sobre recursos cuando hay aldeano seleccionado
             UpdateResourceHover();
+            UpdateBuildingHover();
+            UpdateUnitHover();
 
             // LMB released -> select click or box
             if (_isDragging && mouse.leftButton.wasReleasedThisFrame)
@@ -325,6 +349,8 @@ namespace Project.Gameplay.Units
         public void ClearSelection()
         {
             ClearResourceHover();
+            ClearBuildingHover();
+            ClearUnitHover();
             bool hadSelection = _selected.Count > 0 || _selectedBuilding != null || _selectedResource != null;
 
             ClearBuildingAndResource();
@@ -346,6 +372,8 @@ namespace Project.Gameplay.Units
         void ClearSelectionForDoubleClick()
         {
             ClearResourceHover();
+            ClearBuildingHover();
+            ClearUnitHover();
             bool hadSelection = _selected.Count > 0 || _selectedBuilding != null || _selectedResource != null;
 
             ClearBuildingAndResource();
@@ -411,7 +439,9 @@ namespace Project.Gameplay.Units
 
         void UpdateResourceHover()
         {
-            if (!HasSelectedVillagers() || resourceLayerMask == 0 || cam == null)
+            if (resourceLayerMask == 0)
+                EnsureResourceLayerMaskFromMap();
+            if (resourceLayerMask == 0 || cam == null)
             {
                 ClearResourceHover();
                 return;
@@ -430,14 +460,20 @@ namespace Project.Gameplay.Units
 
             var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             Ray ray = cam.ScreenPointToRay(mousePos);
-            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, resourceLayerMask))
+            var hits = Physics.RaycastAll(ray, 5000f, resourceLayerMask, QueryTriggerInteraction.Collide);
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            ResourceSelectable res = null;
+            for (int i = 0; i < hits.Length; i++)
             {
-                ClearResourceHover();
-                return;
+                var r = hits[i].collider.GetComponent<ResourceSelectable>();
+                if (r == null) r = hits[i].collider.GetComponentInParent<ResourceSelectable>();
+                if (r != null && r.GetResourceNode() != null)
+                {
+                    res = r;
+                    break;
+                }
             }
-
-            var res = hit.collider.GetComponentInParent<ResourceSelectable>();
-            if (res == null || res.GetResourceNode() == null)
+            if (res == null)
             {
                 ClearResourceHover();
                 return;
@@ -454,6 +490,8 @@ namespace Project.Gameplay.Units
                 ClearResourceHover();
                 _hoveredResource = res;
                 _hoveredResourceTime = 0f;
+                if (resourceHoverDelay <= 0f)
+                    res.SetHovered(true);
             }
         }
 
@@ -465,6 +503,100 @@ namespace Project.Gameplay.Units
                 _hoveredResource = null;
             }
             _hoveredResourceTime = 0f;
+        }
+
+        void UpdateBuildingHover()
+        {
+            if (buildingLayerMask == 0 || cam == null)
+            {
+                ClearBuildingHover();
+                return;
+            }
+            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            {
+                ClearBuildingHover();
+                return;
+            }
+            _resourceHoverFrameSkip++;
+            if ((_resourceHoverFrameSkip & 1) != 0) return;
+
+            var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
+            Ray ray = cam.ScreenPointToRay(mousePos);
+            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, buildingLayerMask))
+            {
+                ClearBuildingHover();
+                return;
+            }
+            var building = hit.collider.GetComponentInParent<BuildingSelectable>();
+            if (building == null)
+            {
+                ClearBuildingHover();
+                return;
+            }
+            if (building == _hoveredBuilding)
+                building.SetHovered(true);
+            else
+            {
+                ClearBuildingHover();
+                _hoveredBuilding = building;
+                building.SetHovered(true);
+            }
+        }
+
+        void ClearBuildingHover()
+        {
+            if (_hoveredBuilding != null)
+            {
+                _hoveredBuilding.SetHovered(false);
+                _hoveredBuilding = null;
+            }
+        }
+
+        void UpdateUnitHover()
+        {
+            if (unitLayerMask == 0 || cam == null)
+            {
+                ClearUnitHover();
+                return;
+            }
+            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            {
+                ClearUnitHover();
+                return;
+            }
+            _resourceHoverFrameSkip++;
+            if ((_resourceHoverFrameSkip & 1) != 0) return;
+
+            var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
+            Ray ray = cam.ScreenPointToRay(mousePos);
+            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, unitLayerMask))
+            {
+                ClearUnitHover();
+                return;
+            }
+            var unit = hit.collider.GetComponentInParent<UnitSelectable>();
+            if (unit == null)
+            {
+                ClearUnitHover();
+                return;
+            }
+            if (unit == _hoveredUnit)
+                unit.SetHovered(true);
+            else
+            {
+                ClearUnitHover();
+                _hoveredUnit = unit;
+                unit.SetHovered(true);
+            }
+        }
+
+        void ClearUnitHover()
+        {
+            if (_hoveredUnit != null)
+            {
+                _hoveredUnit.SetHovered(false);
+                _hoveredUnit = null;
+            }
         }
 
         /// <summary>Muestra u oculta la barra flotante para la entidad. Usa la API del HealthBarManager; solo entidades con Health muestran barra.</summary>

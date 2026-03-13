@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 76b4b4bbc0baa484d8e426377420dcc4, type: 3}
+  m_Name: PF_Scout
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
+  id: scout
+  displayName: Explorador
+  role: 1
+  prefab: {fileID: 172856, guid: ccccc19c53714e0418b4fd1a6d717742, type: 3}
+  costs:
+  - kind: 3
+    amount: 50
+  trainingTimeSeconds: 15
+  populationCost: 1
+  maxHP: 100
+  attack: 10
+  attackRange: 1.5
+  attackIntervalSec: 1.3
+  moveSpeed: 6
+  armor: 0
+  magicResist: 0
+  bonusDamageVsCavalry: 0

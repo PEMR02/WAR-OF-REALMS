@@ -309,6 +309,7 @@ GameObject:
   - component: {fileID: -6300112233445566771}
   - component: {fileID: -6300112233445566772}
   - component: {fileID: 3908341900606677600}
+  - component: {fileID: -1106635733310959944}
   m_Layer: 7
   m_Name: PF_MiningCamp
   m_TagString: Untagged
@@ -508,6 +509,22 @@ MonoBehaviour:
   autoAnchorName: BarAnchor
   autoUseRendererTopWhenNoAnchor: 1
   rendererTopPadding: 0.3
+--- !u!114 &-1106635733310959944
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4315469614231166514}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9d5d0d89d2a04ce41842c0ce188fd061, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingGroundDecal
+  dirtMaterial: {fileID: 0}
+  dirtTexture: {fileID: 0}
+  heightOffset: 0.02
+  margin: 0.2
 --- !u!1 &5461393150416036770
 GameObject:
   m_ObjectHideFlags: 0

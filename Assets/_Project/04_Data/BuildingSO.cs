@@ -2,6 +2,11 @@ using UnityEngine;
 
 namespace Project.Gameplay.Buildings
 {
+    /// <summary>
+    /// Datos base de un edificio. Los valores aquí son la base; durante la partida
+    /// pueden modificarse por mejoras, debuffs o auras (futuro: BuildingStatsRuntime
+    /// análogo a UnitStatsRuntime, con GetEffectiveMaxHP(), etc.).
+    /// </summary>
     [CreateAssetMenu(menuName = "Project/Building")]
     public class BuildingSO : ScriptableObject
     {

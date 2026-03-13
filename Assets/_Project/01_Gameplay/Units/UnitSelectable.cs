@@ -15,6 +15,7 @@ namespace Project.Gameplay.Units
 
         private Color[] _baseColors;
         private SelectableOutline _outline;
+        private UnitSelectionRing _selectionRing;
 
         bool _cachedIsVillagerValid;
         bool _cachedIsVillager;
@@ -57,6 +58,8 @@ namespace Project.Gameplay.Units
 
             _outline = GetComponent<SelectableOutline>();
             if (_outline == null) _outline = gameObject.AddComponent<SelectableOutline>();
+            _selectionRing = GetComponent<UnitSelectionRing>();
+            if (_selectionRing == null) _selectionRing = gameObject.AddComponent<UnitSelectionRing>();
         }
 
         public void SetSelected(bool selected)
@@ -76,7 +79,17 @@ namespace Project.Gameplay.Units
                     r.material.color = baseCol;
             }
 
+            if (_selectionRing == null) _selectionRing = GetComponent<UnitSelectionRing>();
+            if (_selectionRing == null) _selectionRing = gameObject.AddComponent<UnitSelectionRing>();
+            _selectionRing.SetSelected(selected);
+
             if (_outline != null) _outline.SetSelectionOutline(selected);
+        }
+
+        /// <summary>Hover del cursor sobre la unidad (outline más suave).</summary>
+        public void SetHovered(bool hovered)
+        {
+            if (_outline != null) _outline.SetHoverOutline(hovered);
         }
     }
 }

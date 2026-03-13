@@ -14,12 +14,18 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitSO
   id: villager
   displayName: Aldeano
+  role: 0
   prefab: {fileID: 155500, guid: e3f5ce5af5638a44f8da5267d7ff2b4a, type: 3}
   costs:
   - kind: 3
     amount: 50
   trainingTimeSeconds: 25
   populationCost: 1
-  maxHP: 100
-  attack: 5
-  moveSpeed: 3.5
+  maxHP: 45
+  attack: 3
+  attackRange: 1.2
+  attackIntervalSec: 1.4
+  moveSpeed: 3.8
+  armor: 0
+  magicResist: 0
+  bonusDamageVsCavalry: 0

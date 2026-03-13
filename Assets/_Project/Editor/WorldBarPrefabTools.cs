@@ -120,7 +120,9 @@ public static class WorldBarPrefabTools
         try
         {
             root = PrefabUtility.LoadPrefabContents(prefabPath);
+#pragma warning disable CS0618
             var bar = root.GetComponentInChildren<HealthBarWorld>(true);
+#pragma warning restore CS0618
             if (bar == null)
             {
                 details = "Prefab no tiene HealthBarWorld (se usa fallback en runtime o no aplica).";
@@ -214,7 +216,9 @@ public static class WorldBarPrefabTools
         try
         {
             root = PrefabUtility.LoadPrefabContents(prefabPath);
+#pragma warning disable CS0618
             var bar = root.GetComponentInChildren<HealthBarWorld>(true);
+#pragma warning restore CS0618
             var health = root.GetComponentInChildren<Health>(true);
             var settings = root.GetComponent<WorldBarSettings>();
             var renderers = root.GetComponentsInChildren<Renderer>(true);

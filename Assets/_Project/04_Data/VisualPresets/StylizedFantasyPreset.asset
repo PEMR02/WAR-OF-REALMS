@@ -1,0 +1,33 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5c54f5e07468bd542b3fd05df57f8c35, type: 3}
+  m_Name: StylizedFantasyPreset
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Environment.VisualPreset
+  lightIntensity: 1.35
+  lightColor: {r: 1, g: 0.88, b: 0.7, a: 1}
+  lightRotation: {x: 52, y: -35, z: 0}
+  shadowStrength: 0.95
+  fogEnabled: 1
+  fogDensity: 0.0035
+  fogColor: {r: 0.56, g: 0.65, b: 0.75, a: 1}
+  skyboxExposure: 1.2
+  postExposure: 0.55
+  contrast: 28
+  saturation: 12
+  rimColor: {r: 1, g: 0.9, b: 0.75, a: 1}
+  rimIntensity: 0.2
+  rimPower: 4
+  grassColor: {r: 0.4, g: 0.55, b: 0.25, a: 1}
+  shadowTint: {r: 0.4, g: 0.5, b: 0.7, a: 1}
+  highlightTint: {r: 1, g: 0.95, b: 0.8, a: 1}
+  vegetationSaturation: 1
+  vegetationBrightness: 1
