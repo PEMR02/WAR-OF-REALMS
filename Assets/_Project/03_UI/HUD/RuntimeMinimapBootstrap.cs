@@ -40,6 +40,11 @@ namespace Project.UI
         [Tooltip("Limitar el tamaño máximo del minimapa.")]
         [SerializeField, Min(100f)] float uiMaxSize = 600f;
 
+        [Header("UV (relleno visual)")]
+        [Tooltip("Recorta horizontalmente la textura del minimapa para reducir bandas negras si la RT tiene letterboxing.")]
+        [SerializeField] bool cropUvHorizontal = true;
+        [SerializeField, Range(0f, 0.45f)] float uvHorizontalInset = 0.1f;
+
         [Header("Iconos (unidades/edificios)")]
         [SerializeField] bool showUnitIcons = true;
         [SerializeField] bool showBuildingIcons = true;
@@ -58,6 +63,8 @@ namespace Project.UI
         Camera _minimapCamera;
         Camera _mainCamera;
         RenderTexture _renderTexture;
+        int _renderTextureAllocW;
+        int _renderTextureAllocH;
         Bounds _worldBounds;
         bool _hasWorldBounds;
         bool _warnedMissingViewport;
@@ -70,6 +77,7 @@ namespace Project.UI
 
         LayoutElement _minimapContainerLayout;
         RectTransform _minimapRawRect;
+        RawImage _minimapRawImage;
         RTSCameraController _rtsCameraController;
         bool _minimapDragging;
 
@@ -137,6 +145,9 @@ namespace Project.UI
                 Destroy(_renderTexture);
                 _renderTexture = null;
             }
+
+            _renderTextureAllocW = 0;
+            _renderTextureAllocH = 0;
         }
 
         void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -148,6 +159,9 @@ namespace Project.UI
         {
             if (_minimapCamera == null)
                 return;
+
+            if (_minimapRawImage != null)
+                SyncRenderTextureToMinimapRect(_minimapRawImage);
 
             if (autoFitWorld && Time.unscaledTime >= _nextBoundsRefreshTime)
             {
@@ -433,7 +447,6 @@ namespace Project.UI
             }
 
             _warnedMissingViewport = false;
-            EnsureRenderTexture(512);
             EnsureCamera();
             ConfigureCameraFromWorldBounds();
             _mainCamera = ResolveMainCamera();
@@ -447,11 +460,27 @@ namespace Project.UI
 
             raw.raycastTarget = true;  // necesario para que EventSystem bloquee el drag de selección RTS
             raw.color = Color.white;
-            raw.texture = _renderTexture;
             _minimapRawRect = raw.rectTransform;
+            _minimapRawImage = raw;
 
             CacheMinimapLayout(viewport.transform);
             ApplyMinimapSize();
+
+            Canvas.ForceUpdateCanvases();
+            if (_minimapContainerLayout != null)
+            {
+                var containerRt = _minimapContainerLayout.transform as RectTransform;
+                if (containerRt != null)
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(containerRt);
+            }
+            if (_minimapRawRect != null)
+            {
+                var vpRt = viewport.transform as RectTransform;
+                if (vpRt != null)
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(vpRt);
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_minimapRawRect);
+            }
+            SyncRenderTextureToMinimapRect(raw);
             EnsureViewRectOverlay(raw.transform);
             EnsureMinimapIconOverlay(raw.transform);
             UpdateCameraViewRect();
@@ -474,6 +503,7 @@ namespace Project.UI
             _minimapContainerLayout.preferredWidth = -1;
             _minimapContainerLayout.preferredHeight = -1;
             _minimapContainerLayout.flexibleHeight = 1f;
+            _minimapContainerLayout.flexibleWidth = 1f;
         }
 
         static RawImage GetOrCreateRawTarget(GameObject viewport)
@@ -521,20 +551,67 @@ namespace Project.UI
 
         GameObject FindMinimapViewport()
         {
-            var hudRoot = GameObject.Find("HUD_Main_V2");
+            var hudRoot = GameObject.Find("HUD_Main") ?? GameObject.Find("HUD_Main_V2");
             if (hudRoot != null)
             {
                 var path = hudRoot.transform.Find("HUD_Bottom/RightPanel/MinimapContainer/MinimapViewport");
                 if (path != null) return path.gameObject;
             }
 
-            // Fallback por nombre por si cambia la jerarquía.
             return GameObject.Find("MinimapViewport");
         }
 
-        void EnsureRenderTexture(int size)
+        /// <summary>
+        /// Ajusta la RT al rect del RawImage (mismo aspecto que el marco del HUD) para evitar bandas negras o deformación.
+        /// </summary>
+        void SyncRenderTextureToMinimapRect(RawImage raw)
         {
-            bool needsCreate = _renderTexture == null || _renderTexture.width != size || _renderTexture.height != size;
+            if (raw == null || _minimapRawRect == null) return;
+
+            Rect r = _minimapRawRect.rect;
+            int w = Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(r.width)), 64, 1024);
+            int h = Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(r.height)), 64, 1024);
+            w = (w / 2) * 2;
+            h = (h / 2) * 2;
+
+            if (_renderTexture != null && _renderTextureAllocW == w && _renderTextureAllocH == h)
+            {
+                if (raw.texture != _renderTexture) raw.texture = _renderTexture;
+                if (_minimapCamera != null && _minimapCamera.targetTexture != _renderTexture)
+                    _minimapCamera.targetTexture = _renderTexture;
+                return;
+            }
+
+            EnsureRenderTexture(w, h);
+            _renderTextureAllocW = w;
+            _renderTextureAllocH = h;
+
+            raw.texture = _renderTexture;
+            ApplyUvCrop(raw);
+            if (_minimapCamera != null)
+            {
+                _minimapCamera.targetTexture = _renderTexture;
+                _minimapCamera.aspect = w > 0 && h > 0 ? (float)w / h : 1f;
+            }
+        }
+
+        void ApplyUvCrop(RawImage raw)
+        {
+            if (raw == null) return;
+            if (!cropUvHorizontal)
+            {
+                raw.uvRect = new Rect(0f, 0f, 1f, 1f);
+                return;
+            }
+            float i = Mathf.Clamp(uvHorizontalInset, 0f, 0.45f);
+            raw.uvRect = new Rect(i, 0f, Mathf.Max(0.1f, 1f - 2f * i), 1f);
+        }
+
+        void EnsureRenderTexture(int width, int height)
+        {
+            bool needsCreate = _renderTexture == null
+                || _renderTexture.width != width
+                || _renderTexture.height != height;
             if (!needsCreate)
                 return;
 
@@ -544,7 +621,7 @@ namespace Project.UI
                 Destroy(_renderTexture);
             }
 
-            _renderTexture = new RenderTexture(size, size, 16, RenderTextureFormat.ARGB32)
+            _renderTexture = new RenderTexture(width, height, 16, RenderTextureFormat.ARGB32)
             {
                 name = "Minimap_RT",
                 useMipMap = false,
@@ -579,6 +656,8 @@ namespace Project.UI
             _minimapCamera.allowHDR = false;
             _minimapCamera.allowMSAA = false;
             _minimapCamera.targetTexture = _renderTexture;
+            if (_renderTexture != null)
+                _minimapCamera.aspect = (float)_renderTexture.width / Mathf.Max(1, _renderTexture.height);
             _minimapCamera.depth = -100f;
         }
 

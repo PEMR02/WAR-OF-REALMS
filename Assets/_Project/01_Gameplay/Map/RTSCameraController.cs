@@ -76,7 +76,7 @@ namespace Project.Gameplay
         public float pitchAngle = 55f;
 
         [Header("Rotación (Q / E y Ctrl + rueda)")]
-        [Tooltip("Grados por segundo al mantener Q (izquierda) o E (derecha).")]
+        [Tooltip("Grados por segundo al mantener Q (gira a la derecha) o E (gira a la izquierda).")]
         public float rotateSpeedKeys = 60f;
         [Tooltip("Grados por paso de rueda cuando se mantiene Ctrl (0 = desactivado).")]
         public float rotateSpeedScroll = 15f;
@@ -151,6 +151,8 @@ namespace Project.Gameplay
         {
             ResolveCamera();
             RefreshBoundsFromMapOrTerrain();
+            // El mapa puede generarse en runtime y tardar algunos frames: reintentar bounds hasta que MapGrid esté listo.
+            StartCoroutine(RefreshBoundsUntilReady());
             _yaw = Rig.eulerAngles.y;
             _targetYaw = _yaw;
             _targetRigPosition = Rig.position;
@@ -160,6 +162,21 @@ namespace Project.Gameplay
             ClampDistance();
             if (focusOnTownCenterAtStart)
                 StartCoroutine(FocusOnPlayer1TownCenterDelayed());
+        }
+
+        IEnumerator RefreshBoundsUntilReady()
+        {
+            const float timeout = 3.0f;
+            float t = 0f;
+            while (t < timeout)
+            {
+                RefreshBoundsFromMapOrTerrain();
+                // Si ya salimos de los defaults típicos (ej. -80..80) asumimos que ya calculó con mapa/terrain.
+                if (Mathf.Abs(maxBounds.x - minBounds.x) > 200f || Mathf.Abs(maxBounds.y - minBounds.y) > 200f)
+                    yield break;
+                t += Time.unscaledDeltaTime;
+                yield return null;
+            }
         }
 
         /// <summary>Tras un breve delay, centra la cámara en el Town Center del jugador 1 (para no empezar fuera del mapa o con vista horizontal).</summary>
@@ -298,8 +315,8 @@ namespace Project.Gameplay
             // 0) Rotación: Q / E y Ctrl + rueda
             bool ctrl = kb.leftCtrlKey.isPressed || kb.rightCtrlKey.isPressed;
             float scroll = mouse.scroll.ReadValue().y;
-            if (kb.qKey.isPressed) _yaw -= rotateSpeedKeys * dt;
-            if (kb.eKey.isPressed) _yaw += rotateSpeedKeys * dt;
+            if (kb.qKey.isPressed) _yaw += rotateSpeedKeys * dt;
+            if (kb.eKey.isPressed) _yaw -= rotateSpeedKeys * dt;
             if (ctrl && rotateSpeedScroll > 0f && Mathf.Abs(scroll) > 0.01f)
                 _yaw += scroll * rotateSpeedScroll;
             // Con Pivot: el Rig solo gira en Y; el Pivot aplica la inclinación (pitch). Sin Pivot: el Rig inclina también (cámara = Rig).

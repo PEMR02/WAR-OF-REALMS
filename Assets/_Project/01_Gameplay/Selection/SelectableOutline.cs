@@ -23,6 +23,7 @@ namespace Project.Gameplay
         [Range(1.02f, 1.25f)] public float outlineScale = 1.02f;
 
         private GameObject[] _outlineObjects;
+        private MeshFilter[] _outlineMeshFilters;
         private SkinnedMeshRenderer[] _outlineSkinnedSources;
         private Mesh[] _outlineBakedMeshes;
         private Material _outlineMaterial;
@@ -43,13 +44,15 @@ namespace Project.Gameplay
 
         OutlineAppearance GetAppearanceFromConfig()
         {
-            if (GetComponent<BuildingSelectable>() != null) return SelectionOutlineConfig.Global.buildings;
-            if (GetComponent<ResourceSelectable>() != null) return SelectionOutlineConfig.Global.resources;
             if (GetComponent<UnitSelectable>() != null)
             {
                 var u = SelectionOutlineConfig.Global.units;
                 return new OutlineAppearance { selectionColor = u.selectionColor, hoverColor = u.hoverColor, outlineScale = u.outlineScale };
             }
+            // Priorizar ResourceSelectable sobre BuildingSelectable: algunos prefabs pueden reutilizar componentes
+            // y si ambos existen queremos que el color sea el del bloque "Resources".
+            if (GetComponent<ResourceSelectable>() != null) return SelectionOutlineConfig.Global.resources;
+            if (GetComponent<BuildingSelectable>() != null) return SelectionOutlineConfig.Global.buildings;
             return SelectionOutlineConfig.Global.buildings;
         }
 
@@ -75,6 +78,7 @@ namespace Project.Gameplay
 
             _outlineMaterial = new Material(shader);
             _outlineObjects = new GameObject[nMesh + nSkinned];
+            _outlineMeshFilters = new MeshFilter[nMesh + nSkinned];
             _outlineSkinnedSources = new SkinnedMeshRenderer[nMesh + nSkinned];
             _outlineBakedMeshes = new Mesh[nMesh + nSkinned];
             int idx = 0;
@@ -85,6 +89,7 @@ namespace Project.Gameplay
                     var mf = meshFilters[i];
                     if (mf == null || mf.sharedMesh == null) continue;
                     _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, centerByBounds, null);
+                    _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
                     _outlineSkinnedSources[idx] = null;
                     _outlineBakedMeshes[idx] = null;
                     idx++;
@@ -99,6 +104,7 @@ namespace Project.Gameplay
                     var bakedMesh = new Mesh();
                     bakedMesh.name = "OutlineBaked";
                     _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerByBounds, smr);
+                    _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
                     _outlineSkinnedSources[idx] = smr;
                     _outlineBakedMeshes[idx] = bakedMesh;
                     idx++;
@@ -107,10 +113,12 @@ namespace Project.Gameplay
             if (idx < _outlineObjects.Length)
             {
                 var trimmed = new GameObject[idx];
+                var trimmedFilters = new MeshFilter[idx];
                 var trimmedSrc = new SkinnedMeshRenderer[idx];
                 var trimmedMesh = new Mesh[idx];
-                for (int i = 0; i < idx; i++) { trimmed[i] = _outlineObjects[i]; trimmedSrc[i] = _outlineSkinnedSources[i]; trimmedMesh[i] = _outlineBakedMeshes[i]; }
+                for (int i = 0; i < idx; i++) { trimmed[i] = _outlineObjects[i]; trimmedFilters[i] = _outlineMeshFilters[i]; trimmedSrc[i] = _outlineSkinnedSources[i]; trimmedMesh[i] = _outlineBakedMeshes[i]; }
                 _outlineObjects = trimmed;
+                _outlineMeshFilters = trimmedFilters;
                 _outlineSkinnedSources = trimmedSrc;
                 _outlineBakedMeshes = trimmedMesh;
             }
@@ -153,7 +161,7 @@ namespace Project.Gameplay
                 var baked = _outlineBakedMeshes[i];
                 if (smr == null || baked == null || _outlineObjects[i] == null) continue;
                 smr.BakeMesh(baked);
-                var mf = _outlineObjects[i].GetComponent<MeshFilter>();
+                var mf = _outlineMeshFilters != null && i < _outlineMeshFilters.Length ? _outlineMeshFilters[i] : null;
                 if (mf != null) mf.sharedMesh = baked;
                 if (_isUnit)
                     _outlineObjects[i].transform.localPosition = -baked.bounds.center;

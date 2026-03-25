@@ -117,9 +117,9 @@ namespace Project.UI
         {
             if (_canvasRect == null) return;
 
-            Vector2 mousePos = UnityEngine.InputSystem.Mouse.current != null
-                ? UnityEngine.InputSystem.Mouse.current.position.ReadValue()
-                : (Vector2)Input.mousePosition;
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse == null) return;
+            Vector2 mousePos = mouse.position.ReadValue();
 
             // Calcular posición en canvas space
             RectTransformUtility.ScreenPointToLocalPointInRectangle(

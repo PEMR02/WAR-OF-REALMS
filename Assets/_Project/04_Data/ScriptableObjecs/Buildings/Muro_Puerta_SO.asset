@@ -1,0 +1,44 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1301d1186efe9f04892beab2914da048, type: 3}
+  m_Name: Muro_Puerta_SO
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSO
+  id: Muro_Puerta
+  prefab: {fileID: 2426750427480666295, guid: f768dd763a9a8cf42aae464383c7fb49, type: 3}
+  size: {x: 1, y: 2}
+  requiresFlatGround: 0
+  costs:
+  - kind: 0
+    amount: 10
+  - kind: 1
+    amount: 5
+  buildTimeSeconds: 5
+  maxHP: 150
+  populationProvided: 0
+  unitSpawnForwardSign: -1
+  isCompound: 0
+  compoundSegmentPrefab: {fileID: 0}
+  compoundSegmentCount: 1
+  compoundSpacing: 2
+  compoundPathMode: 0
+  compoundSegmentLength: 2
+  compoundPathRaycastTerrain: 0
+  compoundPathGroundMask:
+    serializedVersion: 2
+    m_Bits: 0
+  compoundSegmentRotationOffset: {x: 0, y: 0, z: 0}
+  compoundCornerPrefab: {fileID: 0}
+  compoundCornerMinAngleDeg: 15
+  compoundPlaceCornerAtEndpoints: 0
+  compoundGatePrefab: {fileID: 0}
+  compoundGateRotationOffset: {x: 0, y: 0, z: 0}
+  gateReplacementRotationOffset: {x: 90, y: 0, z: 0}

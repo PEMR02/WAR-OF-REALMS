@@ -6,13 +6,14 @@ namespace Project.Gameplay.Map.Generator
     [CreateAssetMenu(fileName = "MapGenConfig", menuName = "Map Generator/MapGenConfig", order = 0)]
     public class MapGenConfig : ScriptableObject
     {
-        [Header("Grid")]
-        [Tooltip("Ancho del grid en celdas. 256 celdas × cellSize = tamaño del mapa.")]
+        [Header("Grid (solo plantilla en disco)")]
+        [Tooltip("En Play, RTSMapGenerator pisa estos valores con width/height + GridConfig + centerAtOrigin. Edita el grid jugable en el RTS, no aquí.")]
         public int gridW = 256;
-        [Tooltip("Alto del grid en celdas. 256 celdas × cellSize = tamaño del mapa.")]
+        [Tooltip("En Play, lo define RTSMapGenerator.height. Este campo en el asset es solo referencia / escenas sin RTS.")]
         public int gridH = 256;
-        [Tooltip("Tamaño de cada celda en metros. 2.0-3.0 es típico para RTS (estilo AoE2). Cambiar esto afecta el tamaño visual de la grilla y el footprint de edificios.")]
+        [Tooltip("En Play, el tamaño de celda es GridConfig.gridSize en RTSMapGenerator, no este número.")]
         public float cellSizeWorld = 2.5f;
+        [Tooltip("En Play, se recalcula desde centerAtOrigin y el transform del RTS. Origen (0,0,0) en el asset suele quedar desfasado del terreno centrado.")]
         public Vector3 origin = Vector3.zero;
 
         [Header("Seed y reintentos")]
@@ -131,7 +132,7 @@ namespace Project.Gameplay.Map.Generator
         public float skirtDepth = 30f;
         [Tooltip("Número de muestras de altura por cada borde del terreno. Más muestras = bordes más suaves.")]
         [Range(32, 512)] public int skirtEdgeSamples = 128;
-        [Tooltip("Material para las paredes y base del skirt. Si es null se genera uno procedural con capas de suelo.")]
+        [Tooltip("Material URP Lit para paredes y base del skirt (p. ej. MAT_TerrainSkirt_SoilLayers con soil_layers). Si es null, se intenta cargar desde Resources; si falla, shader procedural Custom/TerrainSkirt (bandas de color). Las UV del mesh asumen atlas 4 columnas en soil_layers (Sur/Este/Norte/Oeste).")]
         public Material skirtMaterial;
     }
 }

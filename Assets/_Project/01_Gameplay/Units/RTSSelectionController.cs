@@ -1,11 +1,11 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.EventSystems;
 using Project.Gameplay.Combat;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Map;
+using Project.UI;
 
 namespace Project.Gameplay.Units
 {
@@ -92,26 +92,33 @@ namespace Project.Gameplay.Units
 
         void Update()
         {
-            if (buildingPlacer != null && buildingPlacer.IsPlacing)
-				return; // mientras colocas edificios, no seleccionas unidades
-			
-			var mouse = Mouse.current;
-            if (mouse == null || cam == null) return;
-
-            // ESC: deseleccionar todo (cuando no se está colocando un edificio)
             var kb = Keyboard.current;
+            var mouse = Mouse.current;
+
+            // ESC: primero retroceder en el menú de construcción (categoría / colocación); si no hay menú activo, deseleccionar.
+            // Debe ir antes del return por IsPlacing para que Esc funcione al colocar y dentro de submenús aunque el puntero no esté sobre la UI.
             if (kb != null && kb.escapeKey.wasPressedThisFrame)
             {
-                ClearSelection();
+                var build = FindFirstObjectByType<BuildModeController>();
+                if (build != null && build.state != BuildState.Idle)
+                    build.Cancel();
+                else
+                    ClearSelection();
                 return;
             }
+
+            // Mientras colocas (edificio o muro por path), no procesar clic izquierdo como selección o se deseleccionan los aldeanos y se sale del modo construcción.
+            if (buildingPlacer != null && buildingPlacer.IsPlacing)
+				return;
+			
+            if (mouse == null || cam == null) return;
 
             // LMB pressed -> start drag
             if (mouse.leftButton.wasPressedThisFrame)
             {
                 // CRUCIAL: Ignorar clicks sobre UI (botones, paneles, etc) o sobre el minimapa
-                if ((EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-                    || Project.UI.RuntimeMinimapBootstrap.IsPointerOverMinimap)
+                if (UiInputRaycast.IsPointerOverGameObject()
+                    || RuntimeMinimapBootstrap.IsPointerOverMinimap)
                 {
                     return; // Hay UI bajo el cursor, no procesar selección
                 }
@@ -152,7 +159,7 @@ namespace Project.Gameplay.Units
                 selectionBoxUI?.Hide();
 
                 // CRUCIAL: Si el cursor está sobre UI al soltar, cancelar selección
-                if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+                if (UiInputRaycast.IsPointerOverGameObject())
                 {
                     return; // Hay UI bajo el cursor, no procesar selección
                 }
@@ -209,8 +216,9 @@ namespace Project.Gameplay.Units
             // Con Ctrl/Shift (additive) no reemplazar selección por edificio ni recurso
             if (additive) return;
 
-            // 2) Luego: Buildings
-            if (Physics.Raycast(ray, out RaycastHit hitB, 5000f, buildingLayerMask))
+            // 2) Luego: Buildings (ignorar triggers: muro compuesto usa un Box trigger grande en el AABB del path;
+            // si no, clic en suelo dentro del patio seleccionaba el muro).
+            if (Physics.Raycast(ray, out RaycastHit hitB, 5000f, buildingLayerMask, QueryTriggerInteraction.Ignore))
             {
                 var b = hitB.collider.GetComponentInParent<Project.Gameplay.Buildings.BuildingSelectable>();
                 if (b != null)
@@ -447,7 +455,7 @@ namespace Project.Gameplay.Units
                 return;
             }
 
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            if (UiInputRaycast.IsPointerOverGameObject())
             {
                 ClearResourceHover();
                 return;
@@ -512,7 +520,7 @@ namespace Project.Gameplay.Units
                 ClearBuildingHover();
                 return;
             }
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            if (UiInputRaycast.IsPointerOverGameObject())
             {
                 ClearBuildingHover();
                 return;
@@ -522,7 +530,7 @@ namespace Project.Gameplay.Units
 
             var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             Ray ray = cam.ScreenPointToRay(mousePos);
-            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, buildingLayerMask))
+            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, buildingLayerMask, QueryTriggerInteraction.Ignore))
             {
                 ClearBuildingHover();
                 return;
@@ -559,7 +567,7 @@ namespace Project.Gameplay.Units
                 ClearUnitHover();
                 return;
             }
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            if (UiInputRaycast.IsPointerOverGameObject())
             {
                 ClearUnitHover();
                 return;

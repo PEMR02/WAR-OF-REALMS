@@ -45,6 +45,8 @@ namespace Project.Gameplay.Combat
         public Transform BarAnchor => barAnchor;
 
         public event System.Action OnDeath;
+        /// <summary>Se invoca al recibir daño (amount, source). Útil para mobs que se vuelven hostiles al ser atacados.</summary>
+        public event System.Action<int, object> OnDamageReceived;
 
         /// <summary>Posición en mundo donde debe dibujarse la barra (HealthBarManager la convierte a pantalla).</summary>
         public Vector3 GetBarWorldPosition()
@@ -106,6 +108,7 @@ namespace Project.Gameplay.Combat
 
             FloatingDamageText.Spawn(transform.position, final, isHeal: false);
             _currentHP = Mathf.Max(0, _currentHP - final);
+            OnDamageReceived?.Invoke(final, source);
 
             if (_currentHP <= 0)
             {

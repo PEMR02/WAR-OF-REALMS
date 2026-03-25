@@ -5,7 +5,7 @@ using Project.Core.Commands;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Combat;
 using Project.Gameplay.Resources;
-using UnityEngine.EventSystems;
+using Project.UI;
 
 namespace Project.Gameplay.Units
 {
@@ -19,6 +19,7 @@ namespace Project.Gameplay.Units
         public VillagerGatherer gatherer;
         public UnitMover mover;
         public Repairer repairer;
+        public UnityEngine.AI.NavMeshAgent agent;
     }
 
     public class RTSOrderController : MonoBehaviour
@@ -62,7 +63,7 @@ namespace Project.Gameplay.Units
             if (mouse == null || cam == null || selection == null) return;
             if (!mouse.rightButton.wasPressedThisFrame) return;
 
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            if (UiInputRaycast.IsPointerOverGameObject())
                 return;
 
             Ray ray = cam.ScreenPointToRay(mouse.position.ReadValue());
@@ -115,7 +116,8 @@ namespace Project.Gameplay.Units
                     builder = u.GetComponent<Builder>(),
                     gatherer = u.GetComponent<VillagerGatherer>(),
                     mover = u.GetComponent<UnitMover>(),
-                    repairer = u.GetComponent<Repairer>()
+                    repairer = u.GetComponent<Repairer>(),
+                    agent = u.GetComponent<UnityEngine.AI.NavMeshAgent>()
                 });
             }
         }
@@ -197,9 +199,22 @@ namespace Project.Gameplay.Units
             forward.y = 0f;
             forward.Normalize();
 
-            List<Vector3> formationPositions = formationStyle == FormationStyle.Circle
-                ? FormationHelper.GenerateCircle(target, cached.Count, formationSpacing, forward)
-                : FormationHelper.GenerateGrid(target, cached.Count, formationSpacing, forward);
+            float dynamicSpacing = formationSpacing;
+            float maxRadius = 0.5f;
+            for (int i = 0; i < cached.Count; i++)
+            {
+                if (cached[i].agent != null)
+                    maxRadius = Mathf.Max(maxRadius, cached[i].agent.radius);
+            }
+            dynamicSpacing = Mathf.Max(dynamicSpacing, maxRadius * 2.4f);
+
+            FormationStyle effectiveStyle = formationStyle;
+            if (cached.Count >= 5 && effectiveStyle == FormationStyle.Grid)
+                effectiveStyle = FormationStyle.Circle;
+
+            List<Vector3> formationPositions = effectiveStyle == FormationStyle.Circle
+                ? FormationHelper.GenerateCircle(target, cached.Count, dynamicSpacing, forward)
+                : FormationHelper.GenerateGrid(target, cached.Count, dynamicSpacing, forward);
 
             if (formationRandomOffset > 0f)
                 FormationHelper.ApplyRandomOffset(formationPositions, formationRandomOffset);

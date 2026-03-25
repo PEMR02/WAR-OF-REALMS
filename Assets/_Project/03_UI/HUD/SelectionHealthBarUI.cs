@@ -21,7 +21,9 @@ namespace Project.UI
         public GameObject rootPanel;
         [Tooltip("Opcional: imagen de fondo del panel (marco). Si se asigna, se pondrá en frameColor (ej. negro).")]
         public Image frameImage;
-        [Tooltip("Color del marco/fondo del panel (ej. negro). Solo se usa si frameImage está asignado.")]
+        [Tooltip("Si false, no se modifica el color del marco (útil con sprites decorativos).")]
+        public bool tintFrameImage;
+        [Tooltip("Color del marco/fondo del panel (ej. negro). Solo se usa si frameImage está asignado y tintFrameImage.")]
         public Color frameColor = Color.black;
         public Image fillImage;
         public Image backgroundImage;
@@ -148,7 +150,7 @@ namespace Project.UI
         {
             if (rootPanel != null && !rootPanel.activeSelf)
                 rootPanel.SetActive(true);
-            if (frameImage != null)
+            if (tintFrameImage && frameImage != null)
                 frameImage.color = frameColor;
         }
 
@@ -179,16 +181,17 @@ namespace Project.UI
             {
                 var inst = building.GetComponent<BuildingInstance>();
                 if (inst != null && inst.buildingSO != null)
-                    return inst.buildingSO.id;
-                return building.gameObject.name;
+                    return inst.buildingSO.GetDisplayName();
+                return SelectionDisplayName.HumanizeId(building.gameObject.name);
             }
 
             var units = selection.GetSelected();
             if (units != null && units.Count > 0 && units[0] != null)
             {
-                string raw = units[0].gameObject.name;
-                int idx = raw.IndexOf('(');
-                return idx > 0 ? raw.Substring(0, idx).Trim() : raw.Replace("(Clone)", "").Trim();
+                var stats = units[0].GetComponent<UnitStatsRuntime>();
+                if (stats != null)
+                    return stats.GetHudDisplayName();
+                return SelectionDisplayName.HumanizeId(units[0].gameObject.name);
             }
 
             return "";

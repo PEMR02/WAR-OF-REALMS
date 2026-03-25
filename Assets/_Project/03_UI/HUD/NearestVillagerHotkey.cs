@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.EventSystems;
 using Project.Gameplay.Units;
+using Project.UI;
 
 public class NearestVillagerHotkey : MonoBehaviour
 {
@@ -32,7 +33,7 @@ public class NearestVillagerHotkey : MonoBehaviour
         if (kb == null || cam == null || selection == null) return;
 
         // no robar input si estás sobre UI
-        if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+        if (UiInputRaycast.IsPointerOverGameObject())
             return;
 
         if (!kb[key].wasPressedThisFrame) return;

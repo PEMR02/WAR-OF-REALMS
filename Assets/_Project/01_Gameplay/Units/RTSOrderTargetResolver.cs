@@ -29,6 +29,8 @@ namespace Project.Gameplay.Units
             public DropOffPoint dropOffPoint;
             public Health buildingHealth;
             public Vector3 buildingPosition;
+            public bool hasGroundHit;
+            public Vector3 groundPosition;
         }
 
         /// <summary>
@@ -37,47 +39,108 @@ namespace Project.Gameplay.Units
         public static ResolveResult Resolve(Ray ray, LayerMask buildSiteMask, LayerMask resourceMask, LayerMask buildingMask, LayerMask groundMask)
         {
             var result = new ResolveResult { type = TargetType.None };
+            RaycastHit[] hits = Physics.RaycastAll(ray, 5000f, buildSiteMask | resourceMask | buildingMask | groundMask);
+            if (hits == null || hits.Length == 0)
+                return result;
 
-            if (Physics.Raycast(ray, out RaycastHit hitS, 5000f, buildSiteMask))
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+            RaycastHit bestBuildSite = default;
+            bool hasBuildSite = false;
+            RaycastHit bestResource = default;
+            bool hasResource = false;
+            RaycastHit bestBuilding = default;
+            bool hasBuilding = false;
+            RaycastHit bestGround = default;
+            bool hasGround = false;
+
+            for (int i = 0; i < hits.Length; i++)
             {
-                var site = hitS.collider.GetComponentInParent<BuildSite>();
-                if (site != null)
+                RaycastHit hit = hits[i];
+                if (hit.collider == null || hit.collider.isTrigger) continue;
+
+                int hitBit = 1 << hit.collider.gameObject.layer;
+                if (!hasBuildSite && (buildSiteMask.value & hitBit) != 0)
                 {
-                    result.type = TargetType.BuildSite;
-                    result.hit = hitS;
-                    result.buildSite = site;
-                    return result;
+                    var site = hit.collider.GetComponentInParent<BuildSite>();
+                    if (site != null)
+                    {
+                        bestBuildSite = hit;
+                        hasBuildSite = true;
+                    }
+                }
+
+                if (!hasResource && (resourceMask.value & hitBit) != 0)
+                {
+                    var node = hit.collider.GetComponentInParent<ResourceNode>();
+                    if (node != null)
+                    {
+                        bestResource = hit;
+                        hasResource = true;
+                    }
+                }
+
+                if (!hasBuilding && buildingMask != 0 && (buildingMask.value & hitBit) != 0)
+                {
+                    if (hit.collider.GetComponentInParent<UnitMover>() == null)
+                    {
+                        bestBuilding = hit;
+                        hasBuilding = true;
+                    }
+                }
+
+                if (!hasGround && (groundMask.value & hitBit) != 0)
+                {
+                    bestGround = hit;
+                    hasGround = true;
                 }
             }
 
-            if (Physics.Raycast(ray, out RaycastHit hitR, 5000f, resourceMask))
+            if (hasGround)
             {
-                var node = hitR.collider.GetComponentInParent<ResourceNode>();
-                if (node != null)
-                {
-                    result.type = TargetType.Resource;
-                    result.hit = hitR;
-                    result.resourceNode = node;
-                    return result;
-                }
+                result.hasGroundHit = true;
+                result.groundPosition = bestGround.point;
             }
 
-            if (buildingMask != 0 && Physics.Raycast(ray, out RaycastHit hitB, 5000f, buildingMask))
+            if (hasBuildSite)
             {
-                result.dropOffPoint = hitB.collider.GetComponentInParent<DropOffPoint>();
-                result.buildingHealth = hitB.collider.GetComponentInParent<Health>();
-                var buildingRoot = hitB.collider.GetComponentInParent<UnitMover>() != null ? null : hitB.collider.transform.root;
-                result.buildingPosition = buildingRoot != null ? buildingRoot.position : hitB.point;
-                result.type = TargetType.Building;
-                result.hit = hitB;
+                result.type = TargetType.BuildSite;
+                result.hit = bestBuildSite;
+                result.buildSite = bestBuildSite.collider.GetComponentInParent<BuildSite>();
                 return result;
             }
 
-            if (Physics.Raycast(ray, out RaycastHit hitG, 5000f, groundMask))
+            if (hasResource)
+            {
+                result.type = TargetType.Resource;
+                result.hit = bestResource;
+                result.resourceNode = bestResource.collider.GetComponentInParent<ResourceNode>();
+                return result;
+            }
+
+            if (hasBuilding)
+            {
+                result.dropOffPoint = bestBuilding.collider.GetComponentInParent<DropOffPoint>();
+                result.buildingHealth = bestBuilding.collider.GetComponentInParent<Health>();
+                var buildingRoot = bestBuilding.collider.transform.root;
+                result.buildingPosition = buildingRoot != null ? buildingRoot.position : bestBuilding.point;
+
+                bool isActionableBuilding =
+                    result.dropOffPoint != null ||
+                    (result.buildingHealth != null && result.buildingHealth.IsAlive && result.buildingHealth.CurrentHP < result.buildingHealth.MaxHP);
+
+                if (isActionableBuilding || !hasGround)
+                {
+                    result.type = TargetType.Building;
+                    result.hit = bestBuilding;
+                    return result;
+                }
+            }
+
+            if (hasGround)
             {
                 result.type = TargetType.Ground;
-                result.hit = hitG;
-                return result;
+                result.hit = bestGround;
             }
 
             return result;

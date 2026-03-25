@@ -64,6 +64,10 @@ namespace Project.UI
         public float pollSelectionEvery = 0.10f;
         private float _pollTimer;
 
+        [Header("Capa UI (clics)")]
+        [Tooltip("Por encima del canvas de barras de vida (~100) para que los botones reciban el puntero.")]
+        [SerializeField] int nestedCanvasSortOrder = 200;
+
         void Awake()
         {
             if (selection == null) selection = FindFirstObjectByType<RTSSelectionController>();
@@ -91,6 +95,9 @@ namespace Project.UI
                 if (_unitButtons[i] != null)
                     _unitButtons[i].onClick.AddListener(() => OnUnitButtonClick(slot));
             }
+
+            UiHudInputLayer.EnsureNestedInputCanvas(transform, nestedCanvasSortOrder);
+            UiHudInputLayer.FixCanvasGroupsRecursive(transform);
 
             HideAllPanels();
         }

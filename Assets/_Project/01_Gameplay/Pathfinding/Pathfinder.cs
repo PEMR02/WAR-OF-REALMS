@@ -57,7 +57,8 @@ namespace Project.Gameplay.Pathfinding
             // Si el destino está ocupado (edificio) → buscar celda libre más cercana al borde desde la dirección de start
             if (!MapGrid.Instance.IsCellFree(goal))
             {
-                Vector2Int nearest = FindNearestWalkableCell(goal, 6, canSwim, start);
+                // Radio algo mayor: campamentos 2x2 + recurso en celda lindera; 6 a veces quedaba corto en mapas grandes.
+                Vector2Int nearest = FindNearestWalkableCell(goal, 12, canSwim, start);
                 if (nearest == goal)
                     return PathResult.Failed("Goal ocupado y sin celda libre cerca");
                 goal = nearest;
@@ -189,6 +190,9 @@ namespace Project.Gameplay.Pathfinding
                     float terrainCost = MapGrid.Instance.GetTerrainCost(neighbor);
                     if (terrainCost <= 0 || terrainCost >= 1000f)
                         continue;
+                    // Corredor de puerta abierta: ligero bonus para que A* prefiera el atajo frente a rodeos largos.
+                    if (MapGrid.Instance.IsOpenGatePassableCell(neighbor))
+                        terrainCost *= 0.92f;
                     float tentativeG = current.gCost + moveCost * terrainCost;
 
                     if (!_nodes.TryGetValue(neighbor, out Node neighborNode) || tentativeG < neighborNode.gCost)

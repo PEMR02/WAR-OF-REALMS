@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using System.Collections.Generic;
 using Project.Gameplay.Combat;
+using Project.UI;
 
 namespace Project.Gameplay.Units
 {
@@ -12,6 +13,10 @@ namespace Project.Gameplay.Units
     public class UnitStatsRuntime : MonoBehaviour
     {
         [Header("Base (asignado al spawn desde UnitSO)")]
+        [Tooltip("Opcional en prefabs colocados en escena: asigna el SO para nombre en HUD si no pasó por InitFromUnitSO.")]
+        [SerializeField] UnitSO definitionInEditor;
+        UnitSO _definitionFromSpawn;
+
         [SerializeField] int _baseMaxHP = 100;
         [SerializeField] int _baseAttack = 10;
         [SerializeField] float _baseAttackRange = 1.5f;
@@ -39,10 +44,14 @@ namespace Project.Gameplay.Units
         float _addBonusVsCavalry;
         float _mulBonusVsCavalry;
 
+        /// <summary>SO usado para stats y nombre en HUD (spawn o inspector).</summary>
+        public UnitSO ResolvedUnitDefinition => _definitionFromSpawn != null ? _definitionFromSpawn : definitionInEditor;
+
         /// <summary>Inicializa valores base desde el UnitSO (llamar al spawnear).</summary>
         public void InitFromUnitSO(UnitSO so)
         {
             if (so == null) return;
+            _definitionFromSpawn = so;
             _baseMaxHP = so.maxHP;
             _baseAttack = so.attack;
             _baseAttackRange = so.attackRange;
@@ -81,6 +90,18 @@ namespace Project.Gameplay.Units
         {
             var agent = GetComponent<NavMeshAgent>();
             if (agent != null) agent.speed = GetEffectiveMoveSpeed();
+        }
+
+        /// <summary>Nombre para HUD: displayName del SO o id/objeto humanizado.</summary>
+        public string GetHudDisplayName()
+        {
+            var so = ResolvedUnitDefinition;
+            if (so != null)
+            {
+                if (!string.IsNullOrWhiteSpace(so.displayName)) return so.displayName.Trim();
+                if (!string.IsNullOrWhiteSpace(so.id)) return SelectionDisplayName.HumanizeId(so.id);
+            }
+            return SelectionDisplayName.HumanizeId(gameObject.name);
         }
     }
 }

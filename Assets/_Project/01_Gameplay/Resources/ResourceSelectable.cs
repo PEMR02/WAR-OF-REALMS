@@ -12,11 +12,14 @@ namespace Project.Gameplay.Resources
         [Header("Visual - Selección")]
         [Tooltip("Renderers a iluminar al seleccionar. Vacío = todos los hijos.")]
         public Renderer[] renderers;
-        [Tooltip("Brillo extra al seleccionar (0.3–0.6 para que se note bien en animales).")]
-        [Range(0f, 0.8f)] public float highlightIntensity = 0.4f;
-        public Color selectionTint = new Color(0.2f, 0.5f, 0.2f, 0f);
-        [Tooltip("Si el material lo soporta, añade un poco de emisión para que 'brille' más.")]
-        [Range(0f, 0.4f)] public float selectionEmission = 0.15f;
+        [Tooltip("Si true, además del outline se altera el color del material al seleccionar. Útil para animales; para árboles suele verse como un 'blob' verde.")]
+        public bool useMaterialHighlight = false;
+        [Tooltip("Brillo extra al seleccionar (solo si useMaterialHighlight = true). 0.3–0.6 para que se note bien en animales.")]
+        [Range(0f, 0.8f)] public float highlightIntensity = 0.0f;
+        [Tooltip("Tint extra al seleccionar (solo si useMaterialHighlight = true).")]
+        public Color selectionTint = new Color(0f, 0f, 0f, 0f);
+        [Tooltip("Si el material lo soporta, añade un poco de emisión para que 'brille' más (solo si useMaterialHighlight = true).")]
+        [Range(0f, 0.4f)] public float selectionEmission = 0.0f;
 
         private Color[] _baseColors;
         private SelectableOutline _outline;
@@ -60,32 +63,35 @@ namespace Project.Gameplay.Resources
 
         public void SetSelected(bool selected)
         {
-            for (int i = 0; i < renderers.Length; i++)
+            if (useMaterialHighlight)
             {
-                var r = renderers[i];
-                if (r == null) continue;
-                var mat = r.material;
-                if (mat == null) continue;
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    var r = renderers[i];
+                    if (r == null) continue;
+                    var mat = r.material;
+                    if (mat == null) continue;
 
-                var baseCol = i < _baseColors.Length ? _baseColors[i] : GetMaterialColor(mat);
-                if (selected)
-                {
-                    Color c = baseCol + new Color(highlightIntensity, highlightIntensity, highlightIntensity, 0f) + selectionTint;
-                    c = new Color(Mathf.Clamp01(c.r), Mathf.Clamp01(c.g), Mathf.Clamp01(c.b), baseCol.a);
-                    SetMaterialColor(mat, c);
-                    if (selectionEmission > 0.001f && mat.HasProperty("_EmissionColor"))
+                    var baseCol = i < _baseColors.Length ? _baseColors[i] : GetMaterialColor(mat);
+                    if (selected)
                     {
-                        mat.SetColor("_EmissionColor", c * selectionEmission);
-                        if (!mat.IsKeywordEnabled("_EMISSION")) mat.EnableKeyword("_EMISSION");
+                        Color c = baseCol + new Color(highlightIntensity, highlightIntensity, highlightIntensity, 0f) + selectionTint;
+                        c = new Color(Mathf.Clamp01(c.r), Mathf.Clamp01(c.g), Mathf.Clamp01(c.b), baseCol.a);
+                        SetMaterialColor(mat, c);
+                        if (selectionEmission > 0.001f && mat.HasProperty("_EmissionColor"))
+                        {
+                            mat.SetColor("_EmissionColor", c * selectionEmission);
+                            if (!mat.IsKeywordEnabled("_EMISSION")) mat.EnableKeyword("_EMISSION");
+                        }
                     }
-                }
-                else
-                {
-                    SetMaterialColor(mat, baseCol);
-                    if (mat.HasProperty("_EmissionColor"))
+                    else
                     {
-                        mat.SetColor("_EmissionColor", Color.black);
-                        if (mat.IsKeywordEnabled("_EMISSION")) mat.DisableKeyword("_EMISSION");
+                        SetMaterialColor(mat, baseCol);
+                        if (mat.HasProperty("_EmissionColor"))
+                        {
+                            mat.SetColor("_EmissionColor", Color.black);
+                            if (mat.IsKeywordEnabled("_EMISSION")) mat.DisableKeyword("_EMISSION");
+                        }
                     }
                 }
             }

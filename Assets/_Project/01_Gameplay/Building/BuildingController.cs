@@ -11,6 +11,10 @@ namespace Project.Gameplay.Buildings
         [Tooltip("Activa si quieres que el edificio carve el NavMesh en runtime.")]
         public bool carveNavMesh = true;
 
+        [Header("Selección / Hover")]
+        [Tooltip("Escala del BoxCollider de selección en XZ (1 = bounds completos). Valores menores reducen el área para no robar clic a unidades junto al edificio.")]
+        [Range(0.5f, 1f)] public float selectionBoundsScaleXZ = 0.82f;
+
         [Header("Debug visualización")]
         [Tooltip("Muestra en la Scene View el límite (collider/obstáculo) que impide que las unidades se acerquen. Activa también 'Draw All' en cualquier BuildingController para ver todos.")]
         public bool debugDrawObstacleBounds = false;
@@ -90,8 +94,7 @@ namespace Project.Gameplay.Buildings
         {
             size = Vector3.zero;
             center = Vector3.zero;
-            // Combinar TODOS los renderers del edificio (excluyendo hijos utilitarios),
-            // para que el collider cubra el modelo completo y sea clickeable en toda su altura.
+            // Combinar renderers del edificio (excluyendo hijos utilitarios, decals, plataformas y decoración que inflan la "vista").
             var all = GetComponentsInChildren<Renderer>(true);
             Bounds b = default;
             bool hasBounds = false;
@@ -99,10 +102,22 @@ namespace Project.Gameplay.Buildings
             {
                 var r = all[i];
                 if (r == null) continue;
+                // No usar VFX para bounds de selección (humo, partículas, trails) porque inflan la caja.
+                if (r is ParticleSystemRenderer || r is TrailRenderer || r is LineRenderer)
+                    continue;
                 string n = r.gameObject.name;
                 if (n.Equals("DropAnchor", System.StringComparison.OrdinalIgnoreCase) ||
                     n.Equals("SpawnPoint", System.StringComparison.OrdinalIgnoreCase) ||
-                    r.gameObject.GetComponent<UnityEngine.Canvas>() != null)
+                    n.Equals("GroundDecal", System.StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("BasePlatform", System.StringComparison.OrdinalIgnoreCase) ||
+                    n.IndexOf("Decal", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    n.IndexOf("Platform", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    n.IndexOf("VFX", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    n.IndexOf("FX", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    n.IndexOf("Smoke", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    r.gameObject.GetComponent<UnityEngine.Canvas>() != null ||
+                    r.gameObject.GetComponent<BuildingGroundDecal>() != null ||
+                    r.gameObject.GetComponent<BuildingBasePlatform>() != null)
                     continue;
 
                 if (!hasBounds)
@@ -154,10 +169,36 @@ namespace Project.Gameplay.Buildings
 
         void ApplyColliderAndObstacleToVisualOrFootprint(bool preferFootprintWhenReady = false)
         {
+            var biCompound = GetComponent<BuildingInstance>();
+            if (biCompound != null && biCompound.buildingSO != null && biCompound.buildingSO.isCompound)
+            {
+                // Muros/path: NO usar bounds de todos los hijos (un solo Box enorme bloquea raycasts y clics al suelo).
+                // Huella en MapGrid + trigger: selección por segmentos (GetComponentInParent<BuildingSelectable>).
+                if (TryApplyCompoundFootprintTriggerCollider(biCompound))
+                    return;
+                var existing = GetComponent<BoxCollider>();
+                if (existing != null)
+                    existing.isTrigger = true;
+                return;
+            }
+
             Vector3 size;
             Vector3 center;
 
-            // Huella del grid cuando está listo; limitada al tamaño visual para no alejar unidades (TC del mapa = mismo tamaño que TC construido).
+            // Collider de selección/hover: priorizar bounds visuales y reducir en XZ para no robar clic a unidades cerca.
+            if (TryGetVisualBoundsSize(out Vector3 visualSize, out Vector3 visualCenter))
+            {
+                size = visualSize;
+                size.x *= Mathf.Clamp01(selectionBoundsScaleXZ);
+                size.z *= Mathf.Clamp01(selectionBoundsScaleXZ);
+                center = visualCenter;
+                ApplyBoxColliderOnly(size, center);
+                // NavMeshObstacle: usar huella del grid para que el pathfinding bloquee el área correcta.
+                ApplyObstacleFromFootprintOrVisual();
+                return;
+            }
+
+            // Sin bounds visuales: usar huella del grid.
             if (preferFootprintWhenReady && MapGrid.Instance != null && MapGrid.Instance.IsReady)
             {
                 var bi = GetComponent<BuildingInstance>();
@@ -168,27 +209,10 @@ namespace Project.Gameplay.Buildings
                     float d = bi.buildingSO.size.y * cs;
                     Vector3 lossy = transform.lossyScale;
                     size = new Vector3(w / Mathf.Max(0.001f, Mathf.Abs(lossy.x)), 2f / Mathf.Max(0.001f, Mathf.Abs(lossy.y)), d / Mathf.Max(0.001f, Mathf.Abs(lossy.z)));
-                    // Centro por defecto en la base del volumen (evita box "volando" si no hay bounds visuales).
                     center = new Vector3(0f, size.y * 0.5f, 0f);
-
-                    // Ajustar con bounds visuales para que la selección cubra todo el edificio en Y.
-                    // Mantenemos X/Z anclados a huella de grid para no romper el comportamiento RTS.
-                    if (TryGetVisualBoundsSize(out Vector3 visualSize, out Vector3 visualCenter))
-                    {
-                        size.x = Mathf.Min(size.x, visualSize.x);
-                        size.z = Mathf.Min(size.z, visualSize.z);
-                        size.y = Mathf.Max(size.y, visualSize.y);
-                        center.y = visualCenter.y;
-                    }
                     ApplySizeToBoxAndObstacle(size, center);
                     return;
                 }
-            }
-
-            if (TryGetVisualBoundsSize(out size, out center))
-            {
-                ApplySizeToBoxAndObstacle(size, center);
-                return;
             }
 
             // Fallback: huella del grid en espacio LOCAL
@@ -205,16 +229,71 @@ namespace Project.Gameplay.Buildings
             ApplySizeToBoxAndObstacle(size, center);
         }
 
-        void ApplySizeToBoxAndObstacle(Vector3 size, Vector3 center)
+        /// <summary>
+        /// Muro compuesto: un Box alineado al rect de ocupación del path, solo trigger (no bloquea Physics.Raycast por defecto ni órdenes al suelo).
+        /// </summary>
+        bool TryApplyCompoundFootprintTriggerCollider(BuildingInstance bi)
         {
-            // Asegurar collider de selección consistente en el root del edificio.
-            // Si el prefab trae solo colliders parciales (ej. torre/reloj), el clic falla en la base.
+            if (MapGrid.Instance == null || !MapGrid.Instance.IsReady) return false;
+            if (!bi.overrideOccupiedMin.HasValue || !bi.overrideOccupiedSize.HasValue) return false;
+            Vector2Int min = bi.overrideOccupiedMin.Value;
+            Vector2Int footprintSize = bi.overrideOccupiedSize.Value;
+            if (footprintSize.x <= 0 || footprintSize.y <= 0) return false;
+
+            float cs = MapGrid.Instance.cellSize;
+            Vector3 centerWorld = MapGrid.Instance.CellToWorld(new Vector2Int(min.x + footprintSize.x / 2, min.y + footprintSize.y / 2));
+            centerWorld.y = transform.position.y + 1f;
+            Vector3 sizeWorld = new Vector3(Mathf.Max(1f, footprintSize.x) * cs, 2f, Mathf.Max(1f, footprintSize.y) * cs);
+            Vector3 lossy = transform.lossyScale;
+            var box = GetComponent<BoxCollider>();
+            if (box == null) box = gameObject.AddComponent<BoxCollider>();
+            box.size = new Vector3(
+                sizeWorld.x / Mathf.Max(0.001f, Mathf.Abs(lossy.x)),
+                sizeWorld.y / Mathf.Max(0.001f, Mathf.Abs(lossy.y)),
+                sizeWorld.z / Mathf.Max(0.001f, Mathf.Abs(lossy.z)));
+            box.center = transform.InverseTransformPoint(centerWorld);
+            box.isTrigger = true;
+            return true;
+        }
+
+        void ApplyBoxColliderOnly(Vector3 size, Vector3 center)
+        {
             var box = GetComponent<BoxCollider>();
             if (box == null) box = gameObject.AddComponent<BoxCollider>();
             box.size = size;
             box.center = center;
             box.isTrigger = false;
+        }
 
+        void ApplyObstacleFromFootprintOrVisual()
+        {
+            var obs = GetComponent<NavMeshObstacle>();
+            if (obs == null) return;
+            obs.shape = NavMeshObstacleShape.Box;
+            if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
+            {
+                var bi = GetComponent<BuildingInstance>();
+                if (bi != null && bi.buildingSO != null)
+                {
+                    float cs = MapGrid.Instance.cellSize;
+                    float w = bi.buildingSO.size.x * cs;
+                    float d = bi.buildingSO.size.y * cs;
+                    Vector3 lossy = transform.lossyScale;
+                    obs.size = new Vector3(w / Mathf.Max(0.001f, Mathf.Abs(lossy.x)), 2f / Mathf.Max(0.001f, Mathf.Abs(lossy.y)), d / Mathf.Max(0.001f, Mathf.Abs(lossy.z)));
+                    obs.center = new Vector3(0f, obs.size.y * 0.5f, 0f);
+                    return;
+                }
+            }
+            if (TryGetVisualBoundsSize(out Vector3 size, out Vector3 center))
+            {
+                obs.size = size;
+                obs.center = center;
+            }
+        }
+
+        void ApplySizeToBoxAndObstacle(Vector3 size, Vector3 center)
+        {
+            ApplyBoxColliderOnly(size, center);
             var obs = GetComponent<NavMeshObstacle>();
             if (obs != null) { obs.shape = NavMeshObstacleShape.Box; obs.size = size; obs.center = center; }
         }

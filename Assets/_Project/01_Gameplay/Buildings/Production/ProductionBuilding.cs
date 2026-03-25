@@ -31,6 +31,8 @@ namespace Project.Gameplay.Buildings
         public bool useBoundsBasedSpawn = true;
         [Tooltip("Radio de búsqueda para ajustar el spawn al NavMesh.")]
         public float navMeshSampleRadius = 4f;
+        [Tooltip("Radio extra para buscar NavMesh si el punto ideal falla (evita unidades atrapadas).")]
+        public float navMeshFallbackRadius = 12f;
         [Tooltip("Fallback global si el BuildingSO no define dirección. 1 = forward, -1 = backward.")]
         [Range(-1f, 1f)] public float defaultSpawnForwardSign = -1f;
 
@@ -189,30 +191,26 @@ namespace Project.Gameplay.Buildings
 
         Vector3 ResolveSpawnPosition()
         {
-            // El rally point no define dónde aparecen; solo a dónde van después
             Vector3 fallback = spawnPoint != null ? spawnPoint.position : transform.position;
             if (!useBoundsBasedSpawn)
-                return TryProjectToNavMesh(fallback);
+                return TryProjectToNavMesh(fallback, allowInsideBuilding: false);
 
             Vector3 center = transform.position;
             if (TryGetBuildingWorldBounds(out Bounds bounds))
                 center = new Vector3(bounds.center.x, transform.position.y, bounds.center.z);
 
-            // 1) Si existe SpawnPoint, su dirección manda (permite afinar por prefab sin código).
+            // Dirección de salida: desde el centro hacia el SpawnPoint (solo XZ; no usar Y del SpawnPoint para no spawnear en balcones).
             Vector3 sideDir = Vector3.zero;
             if (spawnPoint != null)
             {
                 sideDir = spawnPoint.position - center;
                 sideDir.y = 0f;
             }
-
-            // 2) Fallback global: lado opuesto al forward (en este proyecto es el frente visual real).
             if (sideDir.sqrMagnitude < 0.0001f)
             {
                 sideDir = transform.forward * GetSpawnDirectionSign();
                 sideDir.y = 0f;
             }
-
             if (sideDir.sqrMagnitude < 0.0001f)
                 sideDir = Vector3.forward;
             sideDir.Normalize();
@@ -222,18 +220,64 @@ namespace Project.Gameplay.Buildings
                 edgeDistance = Mathf.Max(b.extents.x, b.extents.z) + Mathf.Max(0.25f, spawnClearanceWorld);
 
             Vector3 candidate = center + sideDir * edgeDistance;
-            if (spawnPoint != null)
-                candidate.y = spawnPoint.position.y;
+            // No usar spawnPoint.position.y: evita que la unidad aparezca en balcones/altura. Usar altura del suelo (NavMesh/terreno).
+            candidate.y = center.y;
 
-            return TryProjectToNavMesh(candidate);
+            return TryProjectToNavMesh(candidate, allowInsideBuilding: false);
         }
 
-        Vector3 TryProjectToNavMesh(Vector3 candidate)
+        Vector3 TryProjectToNavMesh(Vector3 candidate, bool allowInsideBuilding = false)
         {
             float radius = Mathf.Max(0.5f, navMeshSampleRadius);
             if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, radius, NavMesh.AllAreas))
-                return hit.position;
+            {
+                Vector3 pos = hit.position;
+                if (!allowInsideBuilding && IsInsideBuildingBounds(pos))
+                    return TryFindSpawnOutsideBuilding(candidate);
+                return pos;
+            }
+            // Fallback: buscar más lejos (evita unidades atrapadas si el punto ideal no tiene NavMesh).
+            float fallback = Mathf.Max(radius, navMeshFallbackRadius);
+            if (NavMesh.SamplePosition(candidate, out hit, fallback, NavMesh.AllAreas))
+            {
+                Vector3 pos = hit.position;
+                if (!allowInsideBuilding && IsInsideBuildingBounds(pos))
+                    return TryFindSpawnOutsideBuilding(candidate);
+                return pos;
+            }
             return candidate;
+        }
+
+        bool IsInsideBuildingBounds(Vector3 worldPos)
+        {
+            if (!TryGetBuildingWorldBounds(out Bounds b)) return false;
+            b.Expand(0.5f);
+            return b.Contains(worldPos);
+        }
+
+        Vector3 TryFindSpawnOutsideBuilding(Vector3 preferredDirection)
+        {
+            Vector3 center = transform.position;
+            float minDist = 3f + spawnClearanceWorld;
+            if (TryGetBuildingWorldBounds(out Bounds b))
+            {
+                center = new Vector3(b.center.x, transform.position.y, b.center.z);
+                minDist = Mathf.Max(b.extents.x, b.extents.z) + spawnClearanceWorld + 1f;
+            }
+
+            Vector3 sideDir = preferredDirection - center;
+            sideDir.y = 0f;
+            if (sideDir.sqrMagnitude < 0.0001f) sideDir = transform.forward;
+            sideDir.Normalize();
+            for (int step = 0; step < 8; step++)
+            {
+                Vector3 offset = Quaternion.Euler(0f, step * 45f, 0f) * sideDir;
+                Vector3 candidate = center + offset * (minDist + step * 1.5f);
+                candidate.y = center.y;
+                if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, navMeshFallbackRadius, NavMesh.AllAreas) && !IsInsideBuildingBounds(hit.position))
+                    return hit.position;
+            }
+            return preferredDirection;
         }
 
         bool TryGetBuildingWorldBounds(out Bounds bounds)

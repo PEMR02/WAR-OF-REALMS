@@ -34,7 +34,7 @@ namespace Project.UI
             if (selection == null) return;
             if (rtsCamera == null) rtsCamera = FindFirstObjectByType<RTSCameraController>();
 
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+            if (UiInputRaycast.IsPointerOverGameObject())
                 return;
 
             if (!kb[key].wasPressedThisFrame) return;

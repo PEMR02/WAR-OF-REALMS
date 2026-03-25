@@ -230,13 +230,17 @@ namespace Project.Gameplay.Combat
                     continue;
                 }
 
-                Vector3 screenPoint = worldCamera.WorldToScreenPoint(worldPos);
-
-                bool visible = screenPoint.z > 0f;
+                Vector3 viewport = worldCamera.WorldToViewportPoint(worldPos);
+                // z>0 = delante del plano; x,y en [0,1] = dentro del encuadre (evita barras “colgadas” fuera de Game view).
+                bool visible = viewport.z > 0f &&
+                    viewport.x >= 0f && viewport.x <= 1f &&
+                    viewport.y >= 0f && viewport.y <= 1f;
                 bar.gameObject.SetActive(visible);
 
                 if (!visible)
                     continue;
+
+                Vector3 screenPoint = worldCamera.WorldToScreenPoint(worldPos);
 
                 RectTransformUtility.ScreenPointToLocalPointInRectangle(
                     canvasRect,

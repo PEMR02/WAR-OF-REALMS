@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.EventSystems;
 
 public class BuildHotkeyRouter : MonoBehaviour
 {
@@ -18,13 +17,7 @@ public class BuildHotkeyRouter : MonoBehaviour
 
         // NO verificamos IsPointerOverGameObject() aquí
         // Las teclas deben funcionar SIEMPRE, incluso con cursor sobre HUD
-
-        // Esc = cancelar / volver atrás
-        if (kb.escapeKey.wasPressedThisFrame)
-        {
-            build.Cancel();
-            return;
-        }
+        // ESC lo gestiona RTSSelectionController (un solo Cancel por fotograma; aquí duplicaba y saltaba dos niveles).
 
         int digit = ReadDigitPressed(kb);
         if (digit == -1) return;

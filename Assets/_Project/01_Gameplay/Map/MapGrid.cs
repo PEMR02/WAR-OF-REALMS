@@ -16,6 +16,8 @@ namespace Project.Gameplay.Map
         bool[] _occupied;
         bool[] _water;
         float[] _terrainCosts;
+        /// <summary>Celdas bajo una puerta abierta: transitables para A* aunque el muro marque ocupación.</summary>
+        bool[] _openGatePassable;
 
         void Awake()
         {
@@ -40,6 +42,7 @@ namespace Project.Gameplay.Map
             _terrainCosts = new float[width * height];
             for (int i = 0; i < _terrainCosts.Length; i++)
                 _terrainCosts[i] = 1f;
+            _openGatePassable = new bool[width * height];
         }
 
         /// <summary>Costo de movimiento en la celda (1 = normal). Agua/blocked no se usan como transitables.</summary>
@@ -150,7 +153,24 @@ namespace Project.Gameplay.Map
         public bool IsCellFree(Vector2Int c)
         {
             if (!IsInBounds(c)) return false;
-            return !_blocked[Index(c)] && !_occupied[Index(c)];
+            if (_blocked[Index(c)]) return false;
+            if (_openGatePassable != null && _openGatePassable[Index(c)])
+                return true;
+            return !_occupied[Index(c)];
+        }
+
+        /// <summary>Marca celdas como paso por puerta abierta (A* puede atravesar muro en esas celdas).</summary>
+        public void SetOpenGatePassable(Vector2Int c, bool value)
+        {
+            if (!IsReady || _openGatePassable == null || !IsInBounds(c)) return;
+            _openGatePassable[Index(c)] = value;
+        }
+
+        /// <summary>True si esta celda es pasillo de puerta abierta (para coste en pathfinding).</summary>
+        public bool IsOpenGatePassableCell(Vector2Int c)
+        {
+            if (!IsReady || _openGatePassable == null || !IsInBounds(c)) return false;
+            return _openGatePassable[Index(c)];
         }
 
         public void SetBlocked(Vector2Int c, bool value)

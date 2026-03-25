@@ -13,15 +13,8 @@ namespace Project.Gameplay.Map
         {
             if (gen == null) return null;
 
-            if (gen.gridConfig == null)
-                Debug.LogWarning("⚠️ RTSMapGenerator: gridConfig NO está asignado. Asigna 'GridConfig.asset' en el Inspector. Usando fallback: cellSize=2.5");
-
             MapGenConfig c = ScriptableObject.CreateInstance<MapGenConfig>();
-            float cellSize = gen.gridConfig != null ? gen.gridConfig.gridSize : 2.5f;
-            c.gridW = gen.width;
-            c.gridH = gen.height;
-            c.cellSizeWorld = cellSize;
-            c.origin = gen.centerAtOrigin ? new Vector3(-gen.width * cellSize * 0.5f, 0f, -gen.height * cellSize * 0.5f) : gen.transform.position;
+            RTSMapGenerator.ApplyAuthoritativeGridLayout(gen, c);
             c.seed = gen.randomSeedOnPlay ? Random.Range(1, int.MaxValue) : gen.seed;
             c.maxRetries = 5;
             c.regionCount = 8;
@@ -75,6 +68,11 @@ namespace Project.Gameplay.Map
             c.waterMaskSmoothIterations = 2;
             c.waterMaskSmoothThreshold = 5;
             c.waterMsMaxCornerSamples = 250000;
+
+            c.showTerrainSkirt = true;
+            c.skirtDepth = 30f;
+            c.skirtEdgeSamples = 128;
+            c.skirtMaterial = UnityEngine.Resources.Load<Material>(TerrainSkirtBuilder.SkirtSoilMaterialResourceName);
 
             return c;
         }

@@ -27,11 +27,14 @@ namespace Project.Gameplay.Map
         [Tooltip("Preset del mapa. 'Custom' usa los valores del Inspector. Otros presets sobrescriben configuración automáticamente.")]
         public MapPresetType mapPreset = MapPresetType.Continental;
         
-        [Header("Grid")]
-        [Tooltip("⚠️ IMPORTANTE: Asigna 'GridConfig.asset' aquí. Es la fuente única de verdad para el tamaño de celda.")]
+        [Header("Grid (única fuente de verdad)")]
+        [Tooltip("Metros por celda en juego y en la grilla visual. Un solo valor para todo el proyecto (pathfinding, edificios, terreno).")]
         public GridConfig gridConfig;
+        [Tooltip("Ancho del mapa en celdas (junto con height y gridConfig define el tamaño en mundo).")]
         public int width = 256;
+        [Tooltip("Alto del mapa en celdas.")]
         public int height = 256;
+        [Tooltip("Si está activo, el mapa se centra en el mundo: origen del grid en (-W·cell/2, Y del RTS, -H·cell/2). Evita que la grilla quede solo hacia +X/+Z.")]
         public bool centerAtOrigin = true;
         [Tooltip("Offset aleatorio dentro de cada celda (0=centro, 1=máx. hasta borde). Así los recursos no quedan tan cuadrados.")]
         [Range(0f, 1f)] public float cellPlacementRandomOffset = 0.8f;
@@ -223,7 +226,7 @@ namespace Project.Gameplay.Map
         public Color ringFarColor = new Color(1f, 0.5f, 0f, 0.4f);
 
         [Header("Generador Definitivo (ÚNICO)")]
-        [Tooltip("Config del Generador Definitivo. Si no asignas, se crea uno en runtime desde los campos de este componente (grid, seed, playerCount, etc.).")]
+        [Tooltip("Plantilla: agua, ciudades, ríos, texturas, etc. En Play, gridW/gridH/cellSizeWorld/origin del asset se reemplazan siempre por width/height/gridConfig/centerAtOrigin de ESTE componente (no hay dos tamaños de celda).")]
         public MapGenConfig definitiveMapGenConfig;
 
         MapGrid _grid;
@@ -267,6 +270,45 @@ namespace Project.Gameplay.Map
         bool HasAnyBerryPrefab() { return berryPrefab != null || HasAnyIn(berryPrefabVariants); }
         bool HasAnyAnimalPrefab() { return animalPrefab != null || HasAnyIn(animalPrefabVariants); }
         static bool HasAnyIn(GameObject[] arr) { if (arr == null) return false; foreach (var p in arr) if (p != null) return true; return false; }
+
+        /// <summary>
+        /// Única fuente de verdad para tamaño de celda, dimensiones en celdas y origen del mapa.
+        /// Viene de <see cref="gridConfig"/> (metros por celda), <see cref="width"/>/<see cref="height"/> y <see cref="centerAtOrigin"/>.
+        /// Los campos de grid en <see cref="MapGenConfig"/> del proyecto solo sirven como plantilla (agua, ciudades, etc.);
+        /// en runtime se pisan con estos valores para que no haya dos definiciones distintas.
+        /// </summary>
+        public static void GetAuthoritativeGridLayout(RTSMapGenerator gen, out float cellSizeWorld, out Vector3 origin, out int gridW, out int gridH)
+        {
+            cellSizeWorld = 2.5f;
+            origin = Vector3.zero;
+            gridW = 1;
+            gridH = 1;
+            if (gen == null) return;
+
+            if (gen.gridConfig == null)
+                Debug.LogWarning("RTSMapGenerator: asigna GridConfig.asset en 'gridConfig'. Usando cellSize=2.5 hasta entonces.");
+
+            cellSizeWorld = gen.gridConfig != null ? gen.gridConfig.gridSize : 2.5f;
+            if (cellSizeWorld <= 0.0001f)
+                cellSizeWorld = 2.5f;
+            gridW = Mathf.Max(1, gen.width);
+            gridH = Mathf.Max(1, gen.height);
+            if (gen.centerAtOrigin)
+                origin = new Vector3(-gridW * cellSizeWorld * 0.5f, gen.transform.position.y, -gridH * cellSizeWorld * 0.5f);
+            else
+                origin = gen.transform.position;
+        }
+
+        /// <summary>Copia el layout autoritativo al <see cref="MapGenConfig"/> usado por <see cref="MapGenerator"/> (instancia en runtime, no el asset en disco).</summary>
+        public static void ApplyAuthoritativeGridLayout(RTSMapGenerator gen, MapGenConfig config)
+        {
+            if (gen == null || config == null) return;
+            GetAuthoritativeGridLayout(gen, out float cs, out Vector3 o, out int w, out int h);
+            config.cellSizeWorld = cs;
+            config.gridW = w;
+            config.gridH = h;
+            config.origin = o;
+        }
 
         void Awake()
         {
@@ -355,8 +397,19 @@ namespace Project.Gameplay.Map
 
         void RunDefinitiveGenerate()
         {
-            MapGenConfig config = definitiveMapGenConfig != null ? definitiveMapGenConfig : MapGenConfigFactory.CreateFrom(this);
+            MapGenConfig config = definitiveMapGenConfig != null
+                ? Instantiate(definitiveMapGenConfig)
+                : MapGenConfigFactory.CreateFrom(this);
             if (config == null) { Debug.LogError("RTSMapGenerator Definitive: no hay MapGenConfig."); return; }
+
+            if (definitiveMapGenConfig != null)
+            {
+                config.hideFlags = HideFlags.HideAndDontSave;
+                if (randomSeedOnPlay)
+                    config.seed = UnityEngine.Random.Range(1, int.MaxValue);
+            }
+
+            ApplyAuthoritativeGridLayout(this, config);
 
             var generator = GetComponent<MapGenerator>();
             if (generator == null) generator = gameObject.AddComponent<MapGenerator>();
@@ -375,6 +428,8 @@ namespace Project.Gameplay.Map
             if (!generator.Generate(config, terrain))
             {
                 Debug.LogError("RTSMapGenerator Definitive: el Generador Definitivo falló (validación o reintentos).");
+                Destroy(config);
+                generator.config = definitiveMapGenConfig;
                 return;
             }
 
@@ -415,6 +470,9 @@ namespace Project.Gameplay.Map
 
             StartCoroutine(RebuildNavMeshCoroutine());
             Log("=== Generación Definitiva completada ===");
+
+            Destroy(config);
+            generator.config = definitiveMapGenConfig;
         }
 
         /// <summary>Rango real del terreno en world Y (muestreando celdas). Para recomendar Water Height sin adivinar.</summary>
@@ -1146,15 +1204,15 @@ namespace Project.Gameplay.Map
             for (int tcIndex = 0; tcIndex < _townCenterPositions.Count && unitIndex < allAgents.Length; tcIndex++)
             {
                 Vector3 tcPos = _townCenterPositions[tcIndex];
-                
+                float radius = GetTownCenterPlacementRadius(tcIndex, tcPos);
+
                 // Mover unidades a este Town Center
                 for (int u = 0; u < unitsPerTC && unitIndex < allAgents.Length; u++, unitIndex++)
                 {
                     var agent = allAgents[unitIndex];
-                    
-                    // Calcular offset en círculo alrededor del TC
+
+                    // Offset en círculo fuera del edificio (radio desde bounds del TC + margen)
                     float angle = (u / (float)unitsPerTC) * 360f * Mathf.Deg2Rad;
-                    float radius = 8f;
                     Vector3 offset = new Vector3(Mathf.Cos(angle) * radius, 0, Mathf.Sin(angle) * radius);
                     Vector3 targetPos = tcPos + offset;
                     targetPos.y = SampleHeight(targetPos);
@@ -1169,6 +1227,48 @@ namespace Project.Gameplay.Map
             }
 
             Log($"✅ {unitIndex} unidades movidas a Town Centers");
+        }
+
+        /// <summary>Radio mínimo para colocar unidades alrededor del TC (fuera del modelo). Usa bounds del edificio + margen.</summary>
+        float GetTownCenterPlacementRadius(int tcIndex, Vector3 tcPos)
+        {
+            const float margin = 2f;
+            const float minRadius = 4f;
+            const float fallbackRadius = 8f;
+
+            var tcGo = GameObject.Find($"TownCenter_Player{tcIndex + 1}");
+            if (tcGo == null) return fallbackRadius;
+
+            if (TryGetBuildingWorldBounds(tcGo, out Bounds b))
+            {
+                float halfSize = Mathf.Max(b.extents.x, b.extents.z);
+                return Mathf.Max(minRadius, halfSize + margin);
+            }
+            return fallbackRadius;
+        }
+
+        static bool TryGetBuildingWorldBounds(GameObject root, out Bounds bounds)
+        {
+            bounds = default;
+            var all = root.GetComponentsInChildren<Renderer>(true);
+            bool has = false;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var r = all[i];
+                if (r == null) continue;
+                string n = r.gameObject.name;
+                if (n.Equals("GroundDecal", StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("BasePlatform", StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("SpawnPoint", StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("DropAnchor", StringComparison.OrdinalIgnoreCase) ||
+                    n.IndexOf("Decal", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    n.IndexOf("Platform", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    r.GetComponent<UnityEngine.Canvas>() != null)
+                    continue;
+                if (!has) { bounds = r.bounds; has = true; }
+                else bounds.Encapsulate(r.bounds);
+            }
+            return has;
         }
 
         Vector3 PolarToWorld(float radius, float angleDeg)
@@ -1297,6 +1397,20 @@ namespace Project.Gameplay.Map
             Log("Áreas de spawn aplanadas");
         }
 
+        /// <summary>
+        /// Capas que participan en el bake del NavMesh. Se excluye <see cref="resourceLayerName"/>
+        /// para que árboles y demás recursos no aporten mallas caminables (copas, rocas altas, etc.).
+        /// </summary>
+        LayerMask GetNavMeshCollectLayerMask()
+        {
+            int mask = ~0;
+            string layerName = string.IsNullOrEmpty(resourceLayerName) ? "Resource" : resourceLayerName;
+            int resourceLayer = LayerMask.NameToLayer(layerName);
+            if (resourceLayer >= 0)
+                mask &= ~(1 << resourceLayer);
+            return mask;
+        }
+
         IEnumerator RebuildNavMeshCoroutine()
         {
             if (!rebuildNavMeshOnGenerate)
@@ -1318,7 +1432,9 @@ namespace Project.Gameplay.Map
             // Con Physics Colliders el Terrain NO se recoge (Terrain=0). Usar Render Meshes para que
             // el Terrain (TerrainData) se incluya como fuente y genere geometría.
             navMeshSurface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
-            navMeshSurface.layerMask = -1; // Todas las capas
+            // Excluir la capa de recursos (árboles, piedra, oro, etc.): con RenderMeshes sus mallas
+            // (p. ej. copas) se horneaban como suelo transitable.
+            navMeshSurface.layerMask = GetNavMeshCollectLayerMask();
 
             // Asegurar referencia al Terrain (si no está asignada, buscar en la escena)
             Terrain terrainToUse = terrain != null ? terrain : FindFirstObjectByType<Terrain>();

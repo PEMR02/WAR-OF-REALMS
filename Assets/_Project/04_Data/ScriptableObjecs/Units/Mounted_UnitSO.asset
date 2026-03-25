@@ -25,7 +25,7 @@ MonoBehaviour:
   attack: 16
   attackRange: 1.8
   attackIntervalSec: 1.6
-  moveSpeed: 5.2
+  moveSpeed: 10
   armor: 7
   magicResist: 2
   bonusDamageVsCavalry: 0

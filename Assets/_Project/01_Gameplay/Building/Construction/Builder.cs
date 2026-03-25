@@ -22,6 +22,10 @@ namespace Project.Gameplay.Units
         BuildSite _target;
         readonly List<BuildSite> _buildQueue = new List<BuildSite>();
         float _defaultStoppingDistance;
+        float _lastDistToBuildPoint = float.MaxValue;
+        float _lastStuckCheckTime;
+        const float StuckCheckInterval = 2.5f;
+        const float StuckDistEpsilon = 0.15f;
 
        void Awake()
 		{
@@ -72,7 +76,7 @@ namespace Project.Gameplay.Units
 
             _target.Register(this);
             if (_agent != null) _agent.stoppingDistance = 0.2f;
-            Vector3 dest = GetBuildSiteApproachPoint(_target, transform.position, buildRangeCells);
+            Vector3 dest = GetBuildSiteApproachPoint(_target, transform.position, buildRangeCells, this);
             MoveTo(dest);
         }
 
@@ -96,26 +100,47 @@ namespace Project.Gameplay.Units
             }
 
             Vector3 a = transform.position; a.y = 0f;
-            Vector3 buildPoint = GetBuildSiteClosestPoint(_target, transform.position);
+            Vector3 buildPoint = GetBuildSiteClosestPoint(_target, transform.position, this);
             Vector3 b = buildPoint; b.y = 0f;
             float dist = Vector3.Distance(a, b);
-            float maxRange = (MapGrid.Instance != null && MapGrid.Instance.IsReady)
-                ? (buildRangeCells * MapGrid.Instance.cellSize)
-                : buildRangeWorldFallback;
+            float cellSize = MapGrid.Instance != null && MapGrid.Instance.IsReady ? MapGrid.Instance.cellSize : 2.5f;
+            // Muro: margen extra (2.5 celdas) para que si algo cruza (vaca, unidad) y tapa el waypoint, el aldeano pueda construir desde un poco más lejos y no quede un hoyo.
+            float maxRange = _target.IsCompoundPathBuilding
+                ? (cellSize * 2.5f)
+                : ((MapGrid.Instance != null && MapGrid.Instance.IsReady) ? (buildRangeCells * cellSize) : buildRangeWorldFallback);
 
             if (dist > maxRange)
             {
+                // Mientras cruza una puerta no reemitir MoveTo ni hacer recuperación por atasco:
+                // eso pisa el subflujo de puerta y provoca recalcular A* una y otra vez.
+                if (_mover != null && _mover.IsGateTransitionActive)
+                    return;
+
+                // Recuperación si el aldeano se traba: solo tras varios segundos sin acercarse al punto de trabajo.
+                if (Time.time - _lastStuckCheckTime >= StuckCheckInterval)
+                {
+                    bool notGettingCloser = dist >= _lastDistToBuildPoint - StuckDistEpsilon;
+                    if (notGettingCloser && _agent != null && _agent.isOnNavMesh && (_agent.hasPath || _agent.pathPending))
+                    {
+                        _agent.ResetPath();
+                        Vector3 approachPoint = GetBuildSiteApproachPoint(_target, transform.position, buildRangeCells, this);
+                        MoveTo(approachPoint);
+                    }
+                    _lastDistToBuildPoint = dist;
+                    _lastStuckCheckTime = Time.time;
+                }
                 if (!_agent.pathPending && (!_agent.hasPath || _agent.remainingDistance <= _agent.stoppingDistance + 0.15f))
                 {
-                    Vector3 approachPoint = GetBuildSiteApproachPoint(_target, transform.position, buildRangeCells);
+                    Vector3 approachPoint = GetBuildSiteApproachPoint(_target, transform.position, buildRangeCells, this);
                     MoveTo(approachPoint);
                 }
                 return;
             }
 
+            _lastDistToBuildPoint = float.MaxValue;
             if (_agent != null && _agent.isOnNavMesh && _agent.hasPath)
                 _agent.ResetPath();
-            _target.AddWorkSeconds(buildPower * Time.deltaTime);
+            _target.AddWorkSeconds(buildPower * Time.deltaTime, this);
         }
 
         /// <summary>
@@ -143,9 +168,11 @@ namespace Project.Gameplay.Units
         }
 
         /// <summary>Punto más cercano del BuildSite al aldeano (sobre el borde de la huella). Se usa para medir si está en rango para construir.</summary>
-        static Vector3 GetBuildSiteClosestPoint(BuildSite site, Vector3 fromPosition)
+        static Vector3 GetBuildSiteClosestPoint(BuildSite site, Vector3 fromPosition, Builder builder = null)
         {
             if (site == null) return Vector3.zero;
+            if (site.IsCompoundPathBuilding)
+                return site.GetWorkPositionForBuilder(builder);
 
             // Prioridad 1: huella del edificio usando centro alineado a celdas (mismo cálculo que OccupyCellsOnStart)
             if (site.buildingSO != null && MapGrid.Instance != null && MapGrid.Instance.IsReady)
@@ -175,9 +202,12 @@ namespace Project.Gameplay.Units
         }
 
         /// <summary>Punto donde la unidad debe ir: justo fuera del borde de la huella, en dirección al aldeano. Así el destino está en celda libre y A* no los deja lejos.</summary>
-        static Vector3 GetBuildSiteApproachPoint(BuildSite site, Vector3 fromPosition, float rangeCells)
+        static Vector3 GetBuildSiteApproachPoint(BuildSite site, Vector3 fromPosition, float rangeCells, Builder builder = null)
         {
             if (site == null) return fromPosition;
+            // Muro: waypoint del tramo asignado (varios aldeanos pueden trabajar en paralelo en distintos tramos).
+            if (site.IsCompoundPathBuilding)
+                return site.GetApproachPointForBuilder(builder);
             // Usar centro alineado a celdas para dirección y cálculo de borde (igual que OccupyCellsOnStart)
             Vector3 center = GetGridAlignedCenter(site);
             Vector3 onEdge = GetBuildSiteClosestPoint(site, fromPosition);

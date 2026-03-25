@@ -56,6 +56,7 @@ namespace Project.Gameplay.Resources
         Transform _nearestUnit;
         float _idleAnimTimer;
         float _smoothedAnimSpeed;
+        readonly Collider[] _unitDetectionBuffer = new Collider[24];
 
         void Awake()
         {
@@ -134,24 +135,29 @@ namespace Project.Gameplay.Resources
         {
             if (unitLayerMask == 0) return;
 
-            Collider[] hits = Physics.OverlapSphere(transform.position, detectionRadius, unitLayerMask);
+            int hitCount = Physics.OverlapSphereNonAlloc(transform.position, detectionRadius, _unitDetectionBuffer, unitLayerMask);
             _nearestUnit = null;
-            float nearestDist = detectionRadius + 1f;
+            float nearestDistSq = (detectionRadius + 1f) * (detectionRadius + 1f);
 
-            foreach (var c in hits)
+            for (int i = 0; i < hitCount; i++)
             {
+                var c = _unitDetectionBuffer[i];
+                if (c == null) continue;
                 if (c.isTrigger) continue;
-                float d = Vector3.Distance(transform.position, c.transform.position);
-                if (d < nearestDist)
+                float dSq = (c.transform.position - transform.position).sqrMagnitude;
+                if (dSq < nearestDistSq)
                 {
-                    nearestDist = d;
+                    nearestDistSq = dSq;
                     _nearestUnit = c.transform;
                 }
             }
 
-            if (_nearestUnit != null && nearestDist < fleeStartDistance)
+            float fleeStartDistanceSq = fleeStartDistance * fleeStartDistance;
+            float fleeStopDistanceSq = fleeStopDistance * fleeStopDistance;
+
+            if (_nearestUnit != null && nearestDistSq < fleeStartDistanceSq)
                 _state = State.Fleeing;
-            else if (_state == State.Fleeing && (_nearestUnit == null || nearestDist > fleeStopDistance))
+            else if (_state == State.Fleeing && (_nearestUnit == null || nearestDistSq > fleeStopDistanceSq))
                 _state = State.Idle;
         }
 

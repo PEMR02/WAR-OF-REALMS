@@ -1,8 +1,9 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Project.Gameplay.Players;
 using Project.Gameplay.Map;
-using UnityEngine.EventSystems;
+using Project.UI;
 
 namespace Project.Gameplay.Buildings
 {
@@ -27,6 +28,8 @@ namespace Project.Gameplay.Buildings
 
         [Header("Blocking")]
         public LayerMask blockingMask;
+        [Tooltip("Capas de unidades a desplazar fuera del área de construcción (ej. Unit). 0 = no desplazar. Aplica a edificios y muros.")]
+        public LayerMask unitDisplacementMask = 0;
 
         [Header("Terrain (footprint) — estilo Anno: edificios apoyados, sin flotar")]
         [Tooltip("Diferencia máxima de altura (m) entre puntos del footprint. 1.5–2 = más plano tipo Anno.")]
@@ -52,8 +55,27 @@ namespace Project.Gameplay.Buildings
         private bool _isPlacing;
         private float _terrainResolveTimer;
 
+        [Header("Path (muros orgánicos)")]
+        [Tooltip("Tecla para confirmar el path del muro (añadir puntos con clic, confirmar con esta tecla).")]
+        public UnityEngine.InputSystem.Key pathConfirmKey = UnityEngine.InputSystem.Key.Enter;
+        [Tooltip("Capa(s) que bloquean añadir punto: si el clic impacta aquí (ej. Unidad, Edificio), no se añade punto y la unidad puede recibir órdenes. 0 = no bloquear.")]
+        public LayerMask pathBlockingLayers = 0;
+        [Tooltip("Grosor de la línea de preview del path (más visible).")]
+        [Range(0.05f, 0.5f)] public float pathPreviewLineWidth = 0.25f;
+        [Tooltip("Permitir confirmar path con doble clic (además de Enter).")]
+        public bool pathConfirmWithDoubleClick = true;
+        private readonly List<Vector3> _pathPoints = new List<Vector3>(32);
+        private readonly List<int> _pathGatePointIndices = new List<int>(8);
+        private bool _isPlacingPath;
+        private LineRenderer _pathPreviewLine;
+        private List<GameObject> _pathGhostSegments = new List<GameObject>(64);
+        private float _pathLastClickTime = -1f;
+        private Vector2 _pathLastClickPos;
+
         public BuildSite LastPlacedSite { get; private set; }
         public bool IsPlacing => _isPlacing;
+        public bool IsPlacingPath => _isPlacingPath;
+        public int PathPointCount => _pathPoints.Count;
 
         [Header("Selection Gate")]
         public Project.Gameplay.Units.RTSSelectionController selection;
@@ -100,23 +122,25 @@ namespace Project.Gameplay.Buildings
             var mouse = Mouse.current;
             var kb = Keyboard.current;
             if (mouse == null || cam == null) return;
-			
-			if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-				return;
 
+            // En modo path (muro) no bloquear todo por UI, para que se dibuje la línea y el fantasma
+            if (!_isPlacingPath && UiInputRaycast.IsPointerOverGameObject())
+                return;
 
-              // Cancelar con ESC
-            if (kb != null && kb.escapeKey.wasPressedThisFrame)
+            // ESC lo gestiona RTSSelectionController (llama a BuildModeController.Cancel) para no desincronizar estado.
+
+            // Modo path (muros/cercas orgánicos): varios clics + confirmar
+            if (_isPlacingPath && selectedBuilding != null)
             {
-                Cancel();
+                UpdatePathPlacement(mouse, kb, cam);
                 return;
             }
 
             if (!_isPlacing || selectedBuilding == null) return;
 
-            // Rotar con Q/E
-            if (kb != null && kb.qKey.wasPressedThisFrame) _currentYaw -= rotationStep;
-            if (kb != null && kb.eKey.wasPressedThisFrame) _currentYaw += rotationStep;
+            // Rotar con Q/E (Q = horario en Y, E = antihorario; intercambiado respecto a la cámara RTS)
+            if (kb != null && kb.qKey.wasPressedThisFrame) _currentYaw += rotationStep;
+            if (kb != null && kb.eKey.wasPressedThisFrame) _currentYaw -= rotationStep;
 
             // Raycast al suelo
             Ray ray = cam.ScreenPointToRay(mouse.position.ReadValue());
@@ -128,12 +152,20 @@ namespace Project.Gameplay.Buildings
             int bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
             if (snapToGrid)
             {
-                Vector3 origin = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.origin : Vector3.zero;
-                // Compatibilidad: 1x1 mantiene el snap clásico a intersección.
-                if (bw == 1 && bh == 1)
-                    p = GridSnapUtil.SnapToGridIntersection(p, origin, gridSize);
+                // Puerta: usar MapGrid para centrar en celda (misma grilla que el muro).
+                if (selectedBuilding != null && selectedBuilding.id == GateBuildingId && MapGrid.Instance != null && MapGrid.Instance.IsReady)
+                {
+                    Vector2Int cell = MapGrid.Instance.WorldToCell(p);
+                    p = MapGrid.Instance.CellToWorld(cell);
+                }
                 else
-                    p = GridSnapUtil.SnapToBuildingGrid(p, origin, gridSize, bw, bh);
+                {
+                    Vector3 origin = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.origin : Vector3.zero;
+                    if (bw == 1 && bh == 1)
+                        p = GridSnapUtil.SnapToGridIntersection(p, origin, gridSize);
+                    else
+                        p = GridSnapUtil.SnapToBuildingGrid(p, origin, gridSize, bw, bh);
+                }
             }
             // Altura: footprint completo (FootprintTerrainSampler + TerrainPlacementValidator); BuildingAnchorSolver = única fuente de Y para ghost y site
             bool validTerrain = true;
@@ -185,19 +217,34 @@ namespace Project.Gameplay.Buildings
 
 
             // Colocar con clic izquierdo
-			if (mouse.leftButton.wasPressedThisFrame && valid)
+			if (mouse.leftButton.wasPressedThisFrame)
 			{
-				if (TryPlaceBuildSite(p, out var site))
+				// Puerta: si edificio seleccionado es puerta y clic en muro, reemplazar ese tramo por el prefab de la puerta.
+				if (selectedBuilding != null && selectedBuilding.id == GateBuildingId && selectedBuilding.prefab != null && CanAfford(selectedBuilding))
 				{
-					LastPlacedSite = site;
-					if (debugLogs) Debug.Log($"🏗️ Fundación creada: {selectedBuilding.id} en {p}");
-
-					BeginAt(p, Quaternion.Euler(0f, _currentYaw, 0f));
-					AutoAssignBuilders(site);
+					if (TryReplaceWallSegmentWithGate(ray))
+					{
+						foreach (var cost in selectedBuilding.costs)
+							owner.Subtract(cost.kind, cost.amount);
+						if (debugLogs) Debug.Log("Puerta colocada reemplazando segmento del muro.");
+						Cancel();
+						return;
+					}
 				}
-				else
+				if (valid)
 				{
-					Debug.LogWarning("No se pudo crear BuildSite (revisa Console).");
+					if (TryPlaceBuildSite(p, out var site))
+					{
+						LastPlacedSite = site;
+						if (debugLogs) Debug.Log($"🏗️ Fundación creada: {selectedBuilding.id} en {p}");
+
+						BeginAt(p, Quaternion.Euler(0f, _currentYaw, 0f));
+						AutoAssignBuilders(site);
+					}
+					else
+					{
+						Debug.LogWarning("No se pudo crear BuildSite (revisa Console).");
+					}
 				}
 			}
 
@@ -208,15 +255,34 @@ namespace Project.Gameplay.Buildings
 
         public void Begin()
         {
-            if (selectedBuilding == null || selectedBuilding.prefab == null)
+            if (selectedBuilding == null)
             {
-                Debug.LogWarning("BuildingPlacer: No hay edificio seleccionado o el prefab es null.");
+                Debug.LogWarning("BuildingPlacer: No hay edificio seleccionado.");
                 return;
             }
 
             _isPlacing = true;
             _currentYaw = 0f;
+            _pathPoints.Clear();
 
+            // Muro/cerca por path: no requiere prefab principal, solo compoundSegmentPrefab
+            if (selectedBuilding.isCompound && selectedBuilding.compoundPathMode)
+            {
+                _isPlacingPath = true;
+                DestroyPathPreview();
+                EnsurePathPreview();
+                Debug.Log($"BuildingPlacer: Modo path activado para '{selectedBuilding.id}'. Clic en el terreno = añadir punto, {pathConfirmKey} o doble clic = confirmar, derecho = quitar punto, ESC = cancelar.");
+                return;
+            }
+
+            if (selectedBuilding.prefab == null)
+            {
+                Debug.LogWarning($"BuildingPlacer: El edificio '{selectedBuilding.id}' no tiene prefab asignado.");
+                _isPlacing = false;
+                return;
+            }
+
+            _isPlacingPath = false;
             if (_ghost != null) Destroy(_ghost);
 
             try
@@ -271,7 +337,72 @@ namespace Project.Gameplay.Buildings
             _ghostPreview = null;
             _ghostPivotToBottom = 0f;
             _isPlacing = false;
+            _isPlacingPath = false;
+            _pathPoints.Clear();
+            _pathGatePointIndices.Clear();
+            DestroyPathPreview();
             _currentYaw = 0f;
+        }
+
+        /// <summary>ID del BuildingSO de la puerta (colocar puerta = reemplazar segmento de muro; usar Muro_Puerta_SO).</summary>
+        const string GateBuildingId = "Muro_Puerta";
+        /// <summary>Segmentos del muro que ocupa la puerta (la puerta reemplaza este número de bloques para que coincida el espacio).</summary>
+        const int GateReplacesSegmentCount = 3;
+
+        /// <summary>Si el rayo impacta un muro compuesto, reemplaza varios segmentos por una sola puerta. Requiere selectedBuilding = Muro_Puerta_SO.</summary>
+        bool TryReplaceWallSegmentWithGate(Ray ray)
+        {
+            RaycastHit[] hits = Physics.RaycastAll(ray, 5000f);
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            foreach (var hit in hits)
+            {
+                var site = hit.collider.GetComponentInParent<BuildSite>();
+                if (site != null && site.TryReplaceCompoundPathSegmentsWithGate(hit, selectedBuilding, selectedBuilding.prefab, selectedBuilding.gateReplacementRotationOffset))
+                    return true;
+
+                var bi = hit.collider.GetComponentInParent<BuildingInstance>();
+                if (bi == null || bi.buildingSO == null || !bi.buildingSO.isCompound) continue;
+                Transform root = bi.transform;
+                Transform segment = hit.collider.transform;
+                while (segment.parent != null && segment.parent != root) segment = segment.parent;
+                if (segment.parent != root) continue;
+
+                int midIndex = segment.GetSiblingIndex();
+                int n = Mathf.Min(GateReplacesSegmentCount, root.childCount);
+                int start = Mathf.Max(0, midIndex - (n / 2));
+                int end = start + n - 1;
+                if (end >= root.childCount) { end = root.childCount - 1; start = Mathf.Max(0, end - n + 1); }
+
+                Vector3 posSum = Vector3.zero;
+                Transform middleSegment = null;
+                for (int i = start; i <= end; i++)
+                {
+                    Transform child = root.GetChild(i);
+                    posSum += child.position;
+                    if (i == midIndex) middleSegment = child;
+                }
+                int count = end - start + 1;
+                if (middleSegment == null) middleSegment = root.GetChild(start + count / 2);
+                Vector3 centerPos = count > 0 ? posSum / count : segment.position;
+                Quaternion rot = middleSegment.rotation * Quaternion.Euler(selectedBuilding.gateReplacementRotationOffset);
+                int layer = root.gameObject.layer;
+
+                for (int i = end; i >= start; i--)
+                    Destroy(root.GetChild(i).gameObject);
+
+                GameObject gate = Instantiate(selectedBuilding.prefab, centerPos, rot, root);
+                gate.transform.localScale = Vector3.one;
+                gate.layer = layer;
+                SetLayerRecursive(gate.transform, layer);
+                if (gate.GetComponentInChildren<GateController>(true) == null)
+                    gate.AddComponent<GateController>();
+                var rootObs = root.GetComponent<UnityEngine.AI.NavMeshObstacle>();
+                if (rootObs != null) UnityEngine.Object.Destroy(rootObs);
+                var rootBox = root.GetComponent<Collider>();
+                if (rootBox != null) rootBox.isTrigger = true;
+                return true;
+            }
+            return false;
         }
 
         bool TryPlaceBuildSite(Vector3 position, out BuildSite site)
@@ -324,6 +455,9 @@ namespace Project.Gameplay.Buildings
 
 			// 🟢 OCUPAR CELDAS EN EL GRID (crítico para RTS)
 			OccupyCells(position, selectedBuilding.size, true);
+
+			// Desplazar unidades que queden dentro del footprint (igual para todas las edificaciones)
+			DisplaceUnitsInFootprint(position, selectedBuilding.size);
 
 			return true;
 		}
@@ -383,6 +517,50 @@ namespace Project.Gameplay.Buildings
 			MapGrid.Instance.SetOccupiedRect(min, size, occupy);
 
 			if (debugLogs) Debug.Log($"🔲 Grid: {(occupy ? "Ocupado" : "Liberado")} {size.x}×{size.y} en {center}");
+		}
+
+		/// <summary>Desplaza unidades que estén dentro del footprint de construcción (todas las edificaciones).</summary>
+		void DisplaceUnitsInFootprint(Vector3 worldPos, Vector2 footprintSize)
+		{
+			if (unitDisplacementMask == 0 || MapGrid.Instance == null || !MapGrid.Instance.IsReady) return;
+			Vector2Int center = MapGrid.Instance.WorldToCell(worldPos);
+			Vector2Int size = new Vector2Int(
+				Mathf.Max(1, Mathf.RoundToInt(footprintSize.x)),
+				Mathf.Max(1, Mathf.RoundToInt(footprintSize.y))
+			);
+			Vector2Int min = new Vector2Int(center.x - size.x / 2, center.y - size.y / 2);
+			DisplaceUnitsInRect(min, size);
+		}
+
+		/// <summary>Desplaza unidades dentro del rect de celdas (path de muro o footprint) fuera del área.</summary>
+		void DisplaceUnitsInRect(Vector2Int min, Vector2Int size)
+		{
+			if (unitDisplacementMask == 0 || MapGrid.Instance == null || !MapGrid.Instance.IsReady) return;
+			float cs = MapGrid.Instance.cellSize;
+			Vector3 centerWorld = MapGrid.Instance.CellToWorld(new Vector2Int(min.x + size.x / 2, min.y + size.y / 2));
+			if (terrain != null)
+				centerWorld.y = terrain.SampleHeight(centerWorld) + terrain.transform.position.y;
+			Vector3 halfExtents = new Vector3(size.x * cs * 0.5f, 5f, size.y * cs * 0.5f);
+			Collider[] hits = Physics.OverlapBox(centerWorld, halfExtents, Quaternion.identity, unitDisplacementMask, QueryTriggerInteraction.Ignore);
+			var moved = new HashSet<Project.Gameplay.Units.UnitMover>();
+			float margin = cs * 2f;
+			float distOut = Mathf.Max(size.x, size.y) * cs * 0.5f + margin;
+			for (int i = 0; i < hits.Length; i++)
+			{
+				var mover = hits[i].GetComponentInParent<Project.Gameplay.Units.UnitMover>();
+				if (mover == null || moved.Contains(mover)) continue;
+				// No desplazar aldeanos con Builder: evita que se empuje a quien va a construir y se trabe
+				if (mover.GetComponentInParent<Project.Gameplay.Units.Builder>() != null) continue;
+				moved.Add(mover);
+				Vector3 unitPos = mover.transform.position;
+				Vector3 dir = (unitPos - centerWorld);
+				dir.y = 0f;
+				if (dir.sqrMagnitude < 0.01f) dir = Vector3.forward;
+				else dir.Normalize();
+				Vector3 exitPoint = centerWorld + dir * distOut;
+				exitPoint.y = unitPos.y;
+				mover.MoveTo(exitPoint);
+			}
 		}
 
 
@@ -458,6 +636,13 @@ namespace Project.Gameplay.Buildings
                 SetLayerRecursive(t.GetChild(i), layer);
         }
 
+        static Quaternion SafeLookRotation(Vector3 forward)
+        {
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.0001f) return Quaternion.identity;
+            return Quaternion.LookRotation(forward.normalized, Vector3.up);
+        }
+
         static float ComputePivotToBottomOffset(GameObject go)
         {
             if (go == null) return 0f;
@@ -490,6 +675,361 @@ namespace Project.Gameplay.Buildings
             return go.transform.position.y - bottomY;
         }
 		
+        void EnsurePathPreview()
+        {
+            if (_pathPreviewLine != null) return;
+            var go = new GameObject("[PathPreview]");
+            go.transform.SetParent(transform);
+            _pathPreviewLine = go.AddComponent<LineRenderer>();
+            _pathPreviewLine.positionCount = 0;
+            _pathPreviewLine.useWorldSpace = true;
+            _pathPreviewLine.startWidth = pathPreviewLineWidth;
+            _pathPreviewLine.endWidth = pathPreviewLineWidth * 0.6f;
+            var shader = Shader.Find("Sprites/Default");
+            if (shader == null) shader = Shader.Find("Unlit/Color");
+            _pathPreviewLine.material = shader != null ? new Material(shader) : null;
+            _pathPreviewLine.startColor = new Color(0.3f, 1f, 0.4f, 0.95f);
+            _pathPreviewLine.endColor = new Color(0.2f, 0.85f, 0.3f, 0.9f);
+            _pathPreviewLine.numCapVertices = 4;
+            _pathPreviewLine.numCornerVertices = 4;
+        }
+
+        void DestroyPathPreview()
+        {
+            if (_pathPreviewLine != null)
+            {
+                if (_pathPreviewLine.gameObject != null)
+                    Destroy(_pathPreviewLine.gameObject);
+                _pathPreviewLine = null;
+            }
+            ClearPathGhostSegments();
+        }
+
+        void ClearPathGhostSegments()
+        {
+            for (int i = 0; i < _pathGhostSegments.Count; i++)
+            {
+                if (_pathGhostSegments[i] != null)
+                    Destroy(_pathGhostSegments[i]);
+            }
+            _pathGhostSegments.Clear();
+        }
+
+        void BuildPathGhostPreview(IReadOnlyList<Vector3> points, BuildingSO so)
+        {
+            ClearPathGhostSegments();
+            if (so == null || so.compoundSegmentPrefab == null || points == null || points.Count == 0) return;
+
+            float segLength = Mathf.Max(0.5f, so.compoundSegmentLength);
+            Transform container = transform;
+            int ghostLayer = LayerMask.NameToLayer("Ghost");
+            if (ghostLayer < 0) ghostLayer = 0;
+
+            bool hasGatePrefab = so.compoundGatePrefab != null;
+
+            // Un solo punto = cursor antes del primer clic: mostrar un segmento siguiendo el puntero (como el resto de edificios).
+            if (points.Count == 1)
+            {
+                Vector3 pos = points[0];
+                if (terrain != null)
+                    pos.y = terrain.SampleHeight(pos) + terrain.transform.position.y;
+                Quaternion rot = Quaternion.Euler(so.compoundSegmentRotationOffset);
+                GameObject seg = Instantiate(so.compoundSegmentPrefab, pos, rot, container);
+                seg.name = "PathGhost_Seg";
+                MakeGhostSafe(seg);
+                if (ghostLayer >= 0) SetLayerRecursive(seg.transform, ghostLayer);
+                var gp = seg.GetComponent<GhostPreview>();
+                if (gp == null) gp = seg.AddComponent<GhostPreview>();
+                gp.Initialize();
+                gp.SetValid(true);
+                _pathGhostSegments.Add(seg);
+                return;
+            }
+
+            for (int p = 0; p < points.Count - 1; p++)
+            {
+                Vector3 start = points[p];
+                Vector3 end = points[p + 1];
+                Vector3 toNext = end - start;
+                toNext.y = 0f;
+                float distance = toNext.magnitude;
+                if (distance < 0.01f) continue;
+                Vector3 direction = toNext / distance;
+
+                int numSegs = Mathf.Max(1, Mathf.CeilToInt(distance / segLength));
+                float step = distance / numSegs;
+
+                for (int i = 0; i < numSegs; i++)
+                {
+                    float t = (i * step + step * 0.5f) / Mathf.Max(distance, 0.001f);
+                    Vector3 worldPos = Vector3.Lerp(start, end, t);
+                    if (terrain != null)
+                        worldPos.y = terrain.SampleHeight(worldPos) + terrain.transform.position.y;
+
+                    Quaternion rot = SafeLookRotation(direction) * Quaternion.Euler(so.compoundSegmentRotationOffset);
+                    GameObject seg = Instantiate(so.compoundSegmentPrefab, worldPos, rot, container);
+                    seg.name = "PathGhost_Seg";
+                    MakeGhostSafe(seg);
+                    if (ghostLayer >= 0) SetLayerRecursive(seg.transform, ghostLayer);
+                    var gpSeg = seg.GetComponent<GhostPreview>();
+                    if (gpSeg == null) gpSeg = seg.AddComponent<GhostPreview>();
+                    gpSeg.Initialize();
+                    gpSeg.SetValid(true);
+                    _pathGhostSegments.Add(seg);
+                }
+            }
+
+            if (so.compoundCornerPrefab != null && points.Count >= 2)
+            {
+                float minAngleRad = so.compoundCornerMinAngleDeg * Mathf.Deg2Rad;
+                for (int j = 0; j < points.Count; j++)
+                {
+                    bool placeCorner = false;
+                    Vector3 forwardDir = Vector3.forward;
+
+                    if (j == 0 || j == points.Count - 1)
+                    {
+                        if (!so.compoundPlaceCornerAtEndpoints) continue;
+                        placeCorner = true;
+                        if (j == 0 && points.Count > 1)
+                            forwardDir = (points[1] - points[0]).normalized;
+                        else if (j == points.Count - 1 && points.Count > 1)
+                            forwardDir = (points[j] - points[j - 1]).normalized;
+                        forwardDir.y = 0f;
+                    }
+                    else
+                    {
+                        Vector3 dirIn = (points[j] - points[j - 1]).normalized;
+                        Vector3 dirOut = (points[j + 1] - points[j]).normalized;
+                        dirIn.y = 0f;
+                        dirOut.y = 0f;
+                        float dot = Vector3.Dot(dirIn, dirOut);
+                        float angleRad = Mathf.Acos(Mathf.Clamp(dot, -1f, 1f));
+                        if (angleRad >= minAngleRad)
+                        {
+                            placeCorner = true;
+                            Vector3 bisector = (dirIn + dirOut).normalized;
+                            if (bisector.sqrMagnitude < 0.01f)
+                                forwardDir = dirOut;
+                            else
+                                forwardDir = bisector;
+                        }
+                    }
+
+                    if (!placeCorner) continue;
+
+                    Vector3 pos = points[j];
+                    if (terrain != null)
+                        pos.y = terrain.SampleHeight(pos) + terrain.transform.position.y;
+                    Quaternion cornerRot = SafeLookRotation(forwardDir) * Quaternion.Euler(so.compoundSegmentRotationOffset);
+                    GameObject corner = Instantiate(so.compoundCornerPrefab, pos, cornerRot, container);
+                    corner.name = "PathGhost_Corner";
+                    MakeGhostSafe(corner);
+                    if (ghostLayer >= 0) SetLayerRecursive(corner.transform, ghostLayer);
+                    var gpCorner = corner.GetComponent<GhostPreview>();
+                    if (gpCorner == null) gpCorner = corner.AddComponent<GhostPreview>();
+                    gpCorner.Initialize();
+                    gpCorner.SetValid(true);
+                    _pathGhostSegments.Add(corner);
+                }
+            }
+
+            // Puertas en path: instanciar el prefab de puerta en los puntos marcados (Shift+clic).
+            if (hasGatePrefab && _pathGatePointIndices.Count > 0 && points.Count >= 2)
+            {
+                for (int i = 0; i < _pathGatePointIndices.Count; i++)
+                {
+                    int gatePointIndex = _pathGatePointIndices[i];
+                    if (gatePointIndex < 0 || gatePointIndex >= points.Count) continue;
+
+                    Vector3 pos = points[gatePointIndex];
+                    if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
+                    {
+                        Vector2Int cell = MapGrid.Instance.WorldToCell(pos);
+                        pos = MapGrid.Instance.CellToWorld(cell);
+                    }
+                    if (terrain != null)
+                        pos.y = terrain.SampleHeight(pos) + terrain.transform.position.y;
+
+                    Vector3 forwardDir = Vector3.forward;
+                    if (gatePointIndex < points.Count - 1)
+                        forwardDir = (points[gatePointIndex + 1] - points[gatePointIndex]).normalized;
+                    else if (gatePointIndex > 0)
+                        forwardDir = (points[gatePointIndex] - points[gatePointIndex - 1]).normalized;
+                    forwardDir.y = 0f;
+                    if (forwardDir.sqrMagnitude < 0.001f) forwardDir = Vector3.forward;
+
+                    Quaternion gateRot = SafeLookRotation(forwardDir) * Quaternion.Euler(so.compoundSegmentRotationOffset);
+                    GameObject gate = Instantiate(so.compoundGatePrefab, pos, gateRot, container);
+                    gate.name = "PathGhost_Gate";
+                    MakeGhostSafe(gate);
+                    if (ghostLayer >= 0) SetLayerRecursive(gate.transform, ghostLayer);
+                    var gpGate = gate.GetComponent<GhostPreview>();
+                    if (gpGate == null) gpGate = gate.AddComponent<GhostPreview>();
+                    gpGate.Initialize();
+                    gpGate.SetValid(true);
+                    _pathGhostSegments.Add(gate);
+                }
+            }
+        }
+
+        void UpdatePathPlacement(Mouse mouse, Keyboard kb, Camera camera)
+        {
+            if (camera == null || mouse == null) return;
+
+            Vector2 mousePos2 = mouse.position.ReadValue();
+            Ray ray = camera.ScreenPointToRay(mousePos2);
+            // Si groundMask es 0 (sin asignar), usar Everything para que el clic impacte algo (terreno, etc.)
+            LayerMask rayMask = groundMask != 0 ? groundMask : (LayerMask)(-1);
+            bool hitGround = Physics.Raycast(ray, out RaycastHit hit, 5000f, rayMask);
+            Vector3 p = hitGround ? hit.point : ray.GetPoint(100f);
+
+            if (snapToGrid && gridSize > 0.001f)
+            {
+                bool canSnapCellCenter = MapGrid.Instance != null && MapGrid.Instance.IsReady;
+                bool isWallPath = _isPlacingPath && selectedBuilding != null && selectedBuilding.id == "Muro";
+                bool isGatePreviewHeld = kb != null
+                    && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed)
+                    && selectedBuilding != null
+                    && selectedBuilding.compoundGatePrefab != null;
+
+                // En path del muro: el muro debe quedar "entre líneas" (centro de celda), igual que edificios.
+                // La puerta (Shift) también va al centro de celda.
+                if (_isPlacingPath && canSnapCellCenter && (isWallPath || isGatePreviewHeld))
+                {
+                    Vector2Int cell = MapGrid.Instance.WorldToCell(p);
+                    p = MapGrid.Instance.CellToWorld(cell);
+                }
+                else
+                {
+                    Vector3 origin = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.origin : Vector3.zero;
+                    p.x = Mathf.Round((p.x - origin.x) / gridSize) * gridSize + origin.x;
+                    p.z = Mathf.Round((p.z - origin.z) / gridSize) * gridSize + origin.z;
+                }
+            }
+            if (terrain != null)
+                p.y = terrain.SampleHeight(p) + terrain.transform.position.y;
+
+            // Clic derecho = quitar último punto (no cancelar todo)
+            if (mouse.rightButton.wasPressedThisFrame)
+            {
+                if (UiInputRaycast.IsPointerOverGameObject()) return;
+                if (_pathPoints.Count > 0)
+                {
+                    int lastIdx = _pathPoints.Count - 1;
+                    _pathGatePointIndices.Remove(lastIdx);
+                    _pathPoints.RemoveAt(lastIdx);
+                    if (debugLogs) Debug.Log($"Path: punto eliminado. Quedan {_pathPoints.Count}.");
+                }
+                else
+                    Cancel();
+                UpdatePathPreviewAndGhost(p);
+                return;
+            }
+
+            void TryConfirmPath()
+            {
+                if (_pathPoints.Count < 2) return;
+                if (!CanAfford(selectedBuilding)) { if (debugLogs) Debug.LogWarning("BuildingPlacer: No hay recursos para el muro."); return; }
+                if (buildSitePrefab == null) { Debug.LogError("BuildingPlacer: buildSitePrefab no asignado."); return; }
+
+                BuildSite.ComputePathOccupiedRect(_pathPoints, out Vector2Int pathMin, out Vector2Int pathSize);
+                Quaternion rot = Quaternion.identity;
+                GameObject go = Instantiate(buildSitePrefab, _pathPoints[0], rot);
+                go.name = $"[SITE] {selectedBuilding.id}";
+                var site = go.GetComponent<BuildSite>();
+                if (site == null) { Destroy(go); return; }
+
+                foreach (var cost in selectedBuilding.costs)
+                    owner.Subtract(cost.kind, cost.amount);
+
+                site.buildingSO = selectedBuilding;
+                site.finalPrefab = selectedBuilding.prefab;
+                site.buildTime = GetBuildTime(selectedBuilding);
+                site.owner = owner;
+                site.targetBaseY = _pathPoints[0].y;
+                site.SetPathPoints(_pathPoints);
+                site.SetPathPointGates(_pathGatePointIndices);
+                site.SetPathOccupiedRect(pathMin, pathSize);
+
+                // No ocupar celdas aquí: el aldeano debe poder entrar a construir. Se ocupan al completar (BuildingInstance.OccupyCellsOnStart).
+                // if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
+                //     MapGrid.Instance.SetOccupiedRect(pathMin, pathSize, true);
+
+                DisplaceUnitsInRect(pathMin, pathSize);
+
+                LastPlacedSite = site;
+                if (debugLogs) Debug.Log($"🏗️ Muro path creado: {selectedBuilding.id} con {_pathPoints.Count} puntos.");
+                AutoAssignBuilders(site);
+                Cancel();
+            }
+
+            // Confirmar path (Enter o doble clic)
+            if (kb != null && kb[pathConfirmKey].wasPressedThisFrame)
+            {
+                if (_pathPoints.Count >= 2)
+                    TryConfirmPath();
+                else if (debugLogs)
+                    Debug.Log("BuildingPlacer: Añade al menos 2 puntos antes de confirmar (Enter).");
+                else
+                    Cancel();
+                return;
+            }
+
+            // Clic izquierdo = añadir punto
+            if (mouse.leftButton.wasPressedThisFrame)
+            {
+                // Solo no añadir punto si el clic impacta una unidad/edificio (pathBlockingLayers), para poder dar órdenes
+                // Si Path Blocking Layers = Everything, no bloquear (si no, el clic en el suelo bloquearía siempre)
+                bool blockAdd = pathBlockingLayers != 0 && pathBlockingLayers != (LayerMask)(-1)
+                    && Physics.Raycast(ray, out RaycastHit blockHit, 5000f, pathBlockingLayers);
+                if (blockAdd)
+                {
+                    UpdatePathPreviewAndGhost(hitGround ? p : (Vector3?)null);
+                    return;
+                }
+
+                float timeSinceLastClick = Time.time - _pathLastClickTime;
+                bool isDoubleClick = pathConfirmWithDoubleClick && _pathPoints.Count >= 1 && timeSinceLastClick <= 0.35f && Vector2.Distance(_pathLastClickPos, mousePos2) < 24f;
+                bool asGate = kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed);
+
+                _pathPoints.Add(p);
+                if (asGate && selectedBuilding.compoundGatePrefab != null)
+                    _pathGatePointIndices.Add(_pathPoints.Count - 1);
+                _pathLastClickTime = Time.time;
+                _pathLastClickPos = mousePos2;
+                Debug.Log($"Muro: punto {_pathPoints.Count} añadido en {p}{(asGate ? " (puerta)" : "")}. Sigue clicando o pulsa Enter/doble clic para confirmar.");
+
+                if (isDoubleClick && _pathPoints.Count >= 2)
+                {
+                    TryConfirmPath();
+                    return;
+                }
+            }
+
+            UpdatePathPreviewAndGhost(hitGround ? p : (Vector3?)null);
+        }
+
+        void UpdatePathPreviewAndGhost(Vector3? currentMousePos)
+        {
+            UpdatePathPreviewLine(currentMousePos);
+            var pointsForGhost = new List<Vector3>(_pathPoints);
+            if (currentMousePos.HasValue)
+                pointsForGhost.Add(currentMousePos.Value);
+            BuildPathGhostPreview(pointsForGhost, selectedBuilding);
+        }
+
+        void UpdatePathPreviewLine(Vector3? currentMousePos)
+        {
+            if (_pathPreviewLine == null) return;
+            int count = _pathPoints.Count + (currentMousePos.HasValue ? 1 : 0);
+            _pathPreviewLine.positionCount = count;
+            for (int i = 0; i < _pathPoints.Count; i++)
+                _pathPreviewLine.SetPosition(i, _pathPoints[i]);
+            if (currentMousePos.HasValue)
+                _pathPreviewLine.SetPosition(_pathPoints.Count, currentMousePos.Value);
+        }
+
 		void AutoAssignBuilders(BuildSite site)
 		{
 			int assigned = 0;

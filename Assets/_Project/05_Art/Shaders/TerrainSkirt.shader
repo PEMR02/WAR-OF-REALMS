@@ -1,7 +1,7 @@
 Shader "Custom/TerrainSkirt"
 {
-    // ─── Capas de suelo horizontales para las paredes laterales del Terrain ───
-    // UV-V: 0 = fondo del skirt, 1 = altura máxima del terreno.
+    // ─── Fallback procedural (bandas de color). Preferir MAT_TerrainSkirt_SoilLayers + textura. ───
+    // UV-V en modo procedural: 0 = fondo del skirt; 1 = superficie del terreno en cada columna (TerrainSkirtBuilder).
     // Con depth=30 y terrainHeight=50 → totalRange=80.
     // Un borde a nivel del agua (Y≈12.5) tiene V_surface ≈ (12.5+30)/80 ≈ 0.53
     // Las bandas están calibradas para que sean visibles en ese rango [0..0.55].

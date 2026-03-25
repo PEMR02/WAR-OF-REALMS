@@ -193,6 +193,15 @@ namespace Project.Gameplay.Map
                 h = grid.height;
                 return true;
             }
+            // Misma fuente que MapGenerator tras ApplyAuthoritativeGridLayout: RTS + GridConfig + width/height.
+            var gen = mapGridSource != null ? mapGridSource.GetComponent<RTSMapGenerator>() : null;
+            if (gen == null) gen = GetComponent<RTSMapGenerator>();
+            if (gen == null && grid != null) gen = grid.GetComponent<RTSMapGenerator>();
+            if (gen != null)
+            {
+                RTSMapGenerator.GetAuthoritativeGridLayout(gen, out cellSize, out origin, out w, out h);
+                return true;
+            }
             if (gridSize > 0.0001f)
             {
                 cellSize = gridSize;
@@ -203,6 +212,18 @@ namespace Project.Gameplay.Map
             }
             cellSize = 1f; origin = Vector3.zero; w = 0; h = 0;
             return false;
+        }
+
+        void OnValidate()
+        {
+            // Si está apuntando al Terrain (que también tiene RTSMapGenerator), siempre es válido,
+            // pero ayuda a detectar cuando se olvidó de setear mapGridSource.
+            if (mapGridSource == null)
+            {
+                var gen = GetComponent<RTSMapGenerator>();
+                if (gen != null)
+                    mapGridSource = gen.gameObject;
+            }
         }
 
         Terrain GetTerrain()

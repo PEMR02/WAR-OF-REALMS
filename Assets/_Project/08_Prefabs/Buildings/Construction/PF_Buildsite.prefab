@@ -50,6 +50,10 @@ MonoBehaviour:
   finalPrefab: {fileID: 0}
   buildTime: 10
   refundOnCancel: 0.75
+  pathPoints: []
+  usePathOccupiedRect: 0
+  pathOccupiedMin: {x: 0, y: 0}
+  pathOccupiedSize: {x: 0, y: 0}
   owner: {fileID: 0}
   progress01: 0
   targetBaseY: -3.4028235e+38
@@ -73,7 +77,7 @@ BoxCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Size: {x: 2, y: 1, z: 2}
+  m_Size: {x: 1, y: 1, z: 1}
   m_Center: {x: 0, y: 0, z: 0}
 --- !u!1 &4313516766621657948
 GameObject:

@@ -36,6 +36,10 @@ namespace Project.UI
         [Header("Text Labels")]
         public TextMeshProUGUI titleText;  // Muestra estado/categoría actual
 
+        [Header("Capa UI (clics)")]
+        [Tooltip("HealthBarManager crea un Canvas overlay con orden ~100; este sub-Canvas debe ir por encima para que los botones reciban el puntero.")]
+        [SerializeField] int nestedCanvasSortOrder = 200;
+
         private Button[] _categoryButtons;
         private Button[] _slotButtons;
         private TextMeshProUGUI[] _categoryLabels;
@@ -104,6 +108,9 @@ namespace Project.UI
                 if (_slotButtons[i] != null)
                     _slotButtons[i].onClick.AddListener(() => OnSlotClick(slotIndex));
             }
+
+            UiHudInputLayer.EnsureNestedInputCanvas(transform, nestedCanvasSortOrder);
+            UiHudInputLayer.FixCanvasGroupsRecursive(transform);
 
             // Inicializar: ocultar todo al inicio
             HideAllPanels();

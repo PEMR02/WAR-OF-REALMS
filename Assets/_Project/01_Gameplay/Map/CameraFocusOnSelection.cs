@@ -1,8 +1,8 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.EventSystems;
 using Project.Gameplay.Units;
 using Project.Gameplay;
+using Project.UI;
 
 public class CameraFocusOnSelection : MonoBehaviour
 {
@@ -33,7 +33,7 @@ public class CameraFocusOnSelection : MonoBehaviour
         var kb = Keyboard.current;
         if (kb == null || selection == null) return;
 
-        if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+        if (UiInputRaycast.IsPointerOverGameObject())
             return;
 
         if (kb[key].wasPressedThisFrame)

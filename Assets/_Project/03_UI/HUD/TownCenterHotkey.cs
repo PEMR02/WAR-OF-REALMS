@@ -32,7 +32,7 @@ namespace Project.UI
         void Update()
         {
             if (Keyboard.current == null || !Keyboard.current[key].wasPressedThisFrame) return;
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
+            if (UiInputRaycast.IsPointerOverGameObject()) return;
 
             Transform tc = FindFirstTownCenter();
             if (tc != null)

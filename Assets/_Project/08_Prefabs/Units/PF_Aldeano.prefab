@@ -10900,6 +10900,11 @@ MonoBehaviour:
   canSwim: 0
   snapToNavMeshRadius: 50
   minStoppingDistance: 0.4
+  pathSmoothEpsilon: 0.55
+  enableStuckRepath: 1
+  stuckRepathSeconds: 2.25
+  stuckMinMoveDistance: 0.22
+  repathCooldownSeconds: 1.35
   debugLogs: 0
 --- !u!114 &7780282167726397865
 MonoBehaviour:
@@ -10915,7 +10920,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.Builder
   buildPower: 1
   buildRangeCells: 1
-  buildRangeWorldFallback: 2.5
+  buildRangeWorldFallback: 1
 --- !u!114 &1829679831253128845
 MonoBehaviour:
   m_ObjectHideFlags: 0

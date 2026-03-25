@@ -34,6 +34,12 @@ MonoBehaviour:
   - category: 1
     slot: 2
     building: {fileID: 11400000, guid: 2b97eb04740d7d34d9164462de7b5be0, type: 2}
+  - category: 2
+    slot: 1
+    building: {fileID: 11400000, guid: 13831979f40c45c43b6cf24ccba4e744, type: 2}
+  - category: 2
+    slot: 2
+    building: {fileID: 11400000, guid: e8a1b2c3d4e5f60718293a4b5c6d7e8f, type: 2}
   - category: 3
     slot: 1
     building: {fileID: 0}

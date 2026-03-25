@@ -19,6 +19,12 @@ namespace Project.Gameplay.Map.Generator
     {
         const string SkirtRootName = "TerrainSkirt";
 
+        /// <summary>
+        /// Material URP con <c>soil_layers.png</c> (Gen90): debe estar en una carpeta <c>Resources</c>
+        /// para fallback cuando no hay <see cref="MapGenConfig.skirtMaterial"/> (p. ej. config creada en runtime).
+        /// </summary>
+        public const string SkirtSoilMaterialResourceName = "MAT_TerrainSkirt_SoilLayers";
+
         // ─────────────────────────────────────────────────────────────
         // API pública
         // ─────────────────────────────────────────────────────────────
@@ -103,6 +109,16 @@ namespace Project.Gameplay.Map.Generator
                 _          => new Vector3( 1, 0,  0),
             };
 
+            // soil_layers.png (Gen90): atlas 4 columnas (Sur, Este, Norte, Oeste) en U ∈ [0,1].
+            // Cada cara debe muestrear solo su cuarto; el tiling del material repite a lo largo del borde.
+            float uAtlas0 = side switch
+            {
+                Side.South => 0.00f,
+                Side.East  => 0.25f,
+                Side.North => 0.50f,
+                _          => 0.75f, // West
+            };
+
             for (int i = 0; i < samples; i++)
             {
                 float t = (float)i / (samples - 1);  // 0..1 a lo largo del borde
@@ -134,23 +150,22 @@ namespace Project.Gameplay.Map.Generator
                 float surfaceLocalY = heightAt(sampleU, sampleV);   // [0..th]
                 float bottomLocalY  = -depth;                        // < 0
 
-                // UV-V: usamos coordenada de altura ABSOLUTA para que las bandas
-                // queden a alturas consistentes en el mundo (efecto corte geológico).
-                // totalRange = rango completo de Y posible: desde el fondo (-depth)
-                // hasta la altura máxima del terreno (th).
-                // V=0 → fondo, V=1 → punto al nivel máximo del terreno.
-                float totalRange = depth + th;
-                float vSurface = (surfaceLocalY + depth) / totalRange;  // [0..1]
-                float vBottom  = 0f;                                    // siempre 0
+                // UV-V: 0 = fondo del skirt, 1 = superficie del terreno en ESTA columna.
+                // Así la textura pintada (raíces arriba, musgo abajo) encaja con el borde como en el arte de referencia.
+                // (El modo antiguo normalizaba respecto a th global y recortaba V en valles / estiraba mal el atlas.)
+                const float vBottom = 0f;
+                const float vSurface = 1f;
+
+                float u = uAtlas0 + t * 0.25f;
 
                 // Vértice superior → sigue el relieve del Terrain
                 verts.Add(new Vector3(lx, surfaceLocalY, lz));
-                uvs.Add(new Vector2(t, vSurface));
+                uvs.Add(new Vector2(u, vSurface));
                 normals.Add(faceNormal);
 
                 // Vértice inferior → fondo plano
                 verts.Add(new Vector3(lx, bottomLocalY, lz));
-                uvs.Add(new Vector2(t, vBottom));
+                uvs.Add(new Vector2(u, vBottom));
                 normals.Add(faceNormal);
             }
 
@@ -239,6 +254,11 @@ namespace Project.Gameplay.Map.Generator
         static Material ResolveMaterial(MapGenConfig config)
         {
             if (config.skirtMaterial != null) return config.skirtMaterial;
+
+            // Sin MapGenConfig en disco (factory runtime) suele dejar skirtMaterial en null:
+            // cargamos el material texturado desde Resources antes que el shader procedural de bandas de color.
+            var soilMat = UnityEngine.Resources.Load<Material>(SkirtSoilMaterialResourceName);
+            if (soilMat != null) return soilMat;
 
             var shader = Shader.Find("Custom/TerrainSkirt")
                       ?? Shader.Find("Universal Render Pipeline/Lit")

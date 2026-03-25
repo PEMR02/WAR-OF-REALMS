@@ -85,12 +85,17 @@ public class BuildModeController : MonoBehaviour
 		SetState(BuildState.Placing);
 	}
 
+    /// <summary>
+    /// Un paso atrás en el menú: Colocación → menú principal (4 categorías); Categoría (slots) → mismo menú; Raíz → Idle.
+    /// </summary>
     public void Cancel()
     {
         if (state == BuildState.Placing)
         {
-            placer.Cancel();
-            SetState(BuildState.Category);
+            if (placer != null)
+                placer.Cancel();
+            SetState(BuildState.BuildRoot);
+            SetCategory(null);
             SetBuilding(null);
             return;
         }

@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Map.Generator.MapGenConfig
   gridW: 256
   gridH: 256
-  cellSizeWorld: 10
+  cellSizeWorld: 3
   origin: {x: 0, y: 0, z: 0}
   seed: 12345
   maxRetries: 5
@@ -64,3 +64,7 @@ MonoBehaviour:
   waterMaskSmoothIterations: 2
   waterMaskSmoothThreshold: 5
   waterMsMaxCornerSamples: 250000
+  showTerrainSkirt: 1
+  skirtDepth: 30
+  skirtEdgeSamples: 128
+  skirtMaterial: {fileID: 2100000, guid: f3e8a21c9d4b5e6f7a8b9c0d1e2f3a4b, type: 2}
