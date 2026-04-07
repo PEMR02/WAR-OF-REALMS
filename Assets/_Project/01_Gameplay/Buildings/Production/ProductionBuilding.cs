@@ -5,6 +5,7 @@ using UnityEngine.AI;
 using Project.Gameplay.Units;
 using Project.Gameplay.Players;
 using Project.Gameplay.Combat;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Buildings
 {
@@ -48,11 +49,11 @@ namespace Project.Gameplay.Buildings
         {
             // Auto-asignar owner si no está asignado
             if (owner == null)
-                owner = FindFirstObjectByType<PlayerResources>();
+                owner = PlayerResources.FindPrimaryHumanSkirmish();
 
             // Auto-asignar populationManager si no está asignado
             if (populationManager == null)
-                populationManager = FindFirstObjectByType<PopulationManager>();
+                populationManager = PopulationManager.ResolveForOwner(owner);
 
             // Auto-crear SpawnPoint si no existe
             if (spawnPoint == null)
@@ -171,6 +172,18 @@ namespace Project.Gameplay.Buildings
             // Siempre spawnear junto al edificio; el rally point es solo la orden de movimiento
             Vector3 pos = ResolveSpawnPosition();
             GameObject unitObj = Instantiate(unit.prefab, pos, Quaternion.identity);
+
+            var producerFaction = GetComponentInParent<FactionMember>();
+            if (producerFaction != null)
+            {
+                var fm = unitObj.GetComponent<FactionMember>();
+                if (fm == null) fm = unitObj.AddComponent<FactionMember>();
+                fm.faction = producerFaction.faction;
+            }
+
+            var vg = unitObj.GetComponent<VillagerGatherer>();
+            if (vg != null && owner != null)
+                vg.owner = owner;
 
             // Stats en partida (base + modificadores): vida, velocidad, armadura, etc.
             var stats = unitObj.GetComponent<UnitStatsRuntime>();

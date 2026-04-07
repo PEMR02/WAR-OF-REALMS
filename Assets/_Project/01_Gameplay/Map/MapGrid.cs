@@ -1,3 +1,4 @@
+using Project.Gameplay.Map.Generator;
 using UnityEngine;
 
 namespace Project.Gameplay.Map
@@ -11,10 +12,12 @@ namespace Project.Gameplay.Map
         public int height;
         public float cellSize = 1f;
         public Vector3 origin;
+        Bounds _worldBounds;
 
         bool[] _blocked;
         bool[] _occupied;
         bool[] _water;
+        bool[] _impassableWater;
         float[] _terrainCosts;
         /// <summary>Celdas bajo una puerta abierta: transitables para A* aunque el muro marque ocupación.</summary>
         bool[] _openGatePassable;
@@ -35,14 +38,54 @@ namespace Project.Gameplay.Map
             height = Mathf.Max(1, h);
             cellSize = Mathf.Max(0.01f, size);
             origin = originWorld;
+            _worldBounds = new Bounds(
+                origin + new Vector3(width * cellSize * 0.5f, 0f, height * cellSize * 0.5f),
+                new Vector3(width * cellSize, 0f, height * cellSize));
 
             _blocked = new bool[width * height];
             _occupied = new bool[width * height];
             _water = new bool[width * height];
+            _impassableWater = new bool[width * height];
             _terrainCosts = new float[width * height];
             for (int i = 0; i < _terrainCosts.Length; i++)
                 _terrainCosts[i] = 1f;
             _openGatePassable = new bool[width * height];
+
+            MatchRuntimeState.SetGeneratedWorldBounds(_worldBounds);
+        }
+
+        public void InitializeFromGridSystem(GridSystem grid)
+        {
+            if (grid == null) return;
+
+            Initialize(grid.Width, grid.Height, grid.CellSizeWorld, grid.Origin);
+            for (int x = 0; x < grid.Width; x++)
+            {
+                for (int z = 0; z < grid.Height; z++)
+                {
+                    Vector2Int c = new Vector2Int(x, z);
+                    ref CellData cell = ref grid.GetCell(c);
+                    bool ford = cell.type == CellType.River && cell.riverFord;
+                    bool isWater = cell.type == CellType.Water || (cell.type == CellType.River && !ford);
+                    WaterTraverseMode wt = cell.waterTraverse;
+                    if (isWater && wt == WaterTraverseMode.NotWater)
+                        wt = WaterTraverseMode.SwimNavigable;
+                    bool swimNavWater = isWater && wt == WaterTraverseMode.SwimNavigable;
+                    bool impassWater = wt == WaterTraverseMode.Impassable;
+                    // Agua natación: no bloquea A* (IsCellFree) para unidades con canSwim; agua infranqueable bloquea a todos.
+                    bool blocked = cell.type == CellType.Mountain
+                        || impassWater
+                        || (cell.type == CellType.Land && !cell.walkable)
+                        || (cell.type == CellType.River && !ford && !swimNavWater);
+                    SetWater(c, isWater);
+                    SetImpassableWater(c, impassWater);
+                    SetBlocked(c, blocked);
+                    if (isWater)
+                        SetTerrainCost(c, 5f);
+                    else if (ford)
+                        SetTerrainCost(c, 1.35f);
+                }
+            }
         }
 
         /// <summary>Costo de movimiento en la celda (1 = normal). Agua/blocked no se usan como transitables.</summary>
@@ -59,11 +102,21 @@ namespace Project.Gameplay.Map
             _terrainCosts[Index(c)] = Mathf.Max(0.01f, cost);
         }
 
-        public bool IsReady => _blocked != null && _occupied != null;
+        public bool IsReady =>
+            _blocked != null && _occupied != null && _water != null && _impassableWater != null && _terrainCosts != null;
+        public Bounds WorldBounds => _worldBounds;
+
+        public static float GetCellSizeOrDefault()
+        {
+            if (Instance != null && Instance.IsReady)
+                return Instance.cellSize;
+
+            return MatchRuntimeState.DefaultCellSize;
+        }
 
         public bool IsWater(Vector2Int c)
         {
-            if (!IsInBounds(c)) return false;
+            if (_water == null || !IsInBounds(c)) return false;
             return _water[Index(c)];
         }
 
@@ -71,6 +124,18 @@ namespace Project.Gameplay.Map
         {
             if (!IsInBounds(c)) return;
             _water[Index(c)] = value;
+        }
+
+        public bool IsImpassableWater(Vector2Int c)
+        {
+            if (!IsInBounds(c)) return false;
+            return _impassableWater != null && _impassableWater[Index(c)];
+        }
+
+        public void SetImpassableWater(Vector2Int c, bool value)
+        {
+            if (!IsInBounds(c) || _impassableWater == null) return;
+            _impassableWater[Index(c)] = value;
         }
 
         public bool IsInBounds(Vector2Int c)

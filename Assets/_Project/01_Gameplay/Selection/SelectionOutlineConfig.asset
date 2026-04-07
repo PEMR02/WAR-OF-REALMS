@@ -18,14 +18,14 @@ MonoBehaviour:
     ringRadius: 0.6
     ringInnerPercent: 0.8
     ringHeightOffset: 0.08
-    selectionColor: {r: 0, g: 1, b: 0, a: 1}
-    hoverColor: {r: 0, g: 0.3921569, b: 0, a: 1}
+    selectionColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+    hoverColor: {r: 1, g: 1, b: 1, a: 1}
     outlineScale: 1
   buildings:
-    selectionColor: {r: 0, g: 1, b: 0, a: 1}
-    hoverColor: {r: 0, g: 0.3921569, b: 0, a: 1}
+    selectionColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+    hoverColor: {r: 1, g: 1, b: 1, a: 1}
     outlineScale: 1.02
   resources:
-    selectionColor: {r: 0.15, g: 0.85, b: 0.35, a: 0.98}
-    hoverColor: {r: 1, g: 0.2705882, b: 0, a: 1}
+    selectionColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+    hoverColor: {r: 1, g: 1, b: 1, a: 1}
     outlineScale: 1.12

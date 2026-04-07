@@ -9,6 +9,12 @@ using Project.Gameplay.Buildings;
 using Project.Gameplay.Combat;
 using Unity.AI.Navigation;
 using Project.Gameplay.Map.Generator;
+using Project.Gameplay.Map.Generation;
+using Project.Gameplay.Map.Generation.Alpha;
+using Project.Gameplay.AI;
+using Project.Gameplay.Faction;
+using Project.Gameplay.Players;
+using Project.Gameplay.Units;
 
 namespace Project.Gameplay.Map
 {
@@ -23,14 +29,22 @@ namespace Project.Gameplay.Map
     [DefaultExecutionOrder(-200)] // Ejecutar antes que las unidades para desactivar NavMeshAgent y evitar "Failed to create agent"
     public class RTSMapGenerator : MonoBehaviour
     {
+        MatchConfig _matchUsedForLastGenerate;
+
         [Header("Map Preset (Estilo AoE2)")]
         [Tooltip("Preset del mapa. 'Custom' usa los valores del Inspector. Otros presets sobrescriben configuración automáticamente.")]
         public MapPresetType mapPreset = MapPresetType.Continental;
+
+        [Header("Match Config")]
+        [Tooltip("Configuración central de partida. Si está asignada, mapa/grid/minimapa/spawns/recursos salen de aquí.")]
+        public MatchConfig matchConfig;
+
+        [Header("Lobby / vista previa (opcional)")]
+        [Tooltip("Si hay un MapLobbyController en escena que registre diferido, Start no llama Generate() hasta que el lobby confirme.")]
+        MapLobbyController _deferredMapLobby;
+        bool _pendingLobbyRuntimeTuning;
         
-        [Header("Grid (única fuente de verdad)")]
-        [Tooltip("Metros por celda en juego y en la grilla visual. Un solo valor para todo el proyecto (pathfinding, edificios, terreno).")]
-        public GridConfig gridConfig;
-        [Tooltip("Ancho del mapa en celdas (junto con height y gridConfig define el tamaño en mundo).")]
+        [Tooltip("Ancho del mapa en celdas.")]
         public int width = 256;
         [Tooltip("Alto del mapa en celdas.")]
         public int height = 256;
@@ -94,6 +108,10 @@ namespace Project.Gameplay.Map
         [Header("NavMesh (opcional)")]
         public NavMeshSurface navMeshSurface;
         public bool rebuildNavMeshOnGenerate = true;
+        [Tooltip("Radio NavMesh.SamplePosition al recolocar unidades tras el bake (más alto = más tolerancia en mapas grandes).")]
+        [Min(1f)] public float navMeshPostBakeSampleRadius = 48f;
+        [Tooltip("Reintentos extra con radio ×1.5 por intento si el snap inicial falla.")]
+        [Range(0, 5)] public int navMeshPostBakeSampleRetries = 2;
 
         [Header("Agua (visual)")]
         [Tooltip("Offset en Y sobre waterHeight para que la malla no z-fightee con el terreno. En world units.")]
@@ -115,8 +133,34 @@ namespace Project.Gameplay.Map
         [Tooltip("Config global del borde de selección. Asigna un asset creado con Create > Project > Selection > Outline Config para controlar color y grosor desde aquí (aplica a todos).")]
         public SelectionOutlineConfig selectionOutlineConfig;
 
+        [Header("Lobby (UI pre-partida)")]
+        [Tooltip("Tamaño de celda en unidades mundo empujado al Match en runtime (>0). Tiene prioridad sobre el default legacy.")]
+        [Min(0f)] public float mapCellSizeWorld = 3f;
+        [Tooltip("Masas montañosas macro (0–4 en lobby). Se aplica al MapGen tras compilar el match.")]
+        [Range(0, 12)] public int lobbyMacroMountainMasses = 2;
+
+        [Header("Inicio de partida")]
+        [Tooltip("Prefab del aldeano inicial (3 por jugador). Si está vacío, se usa startingVillagerUnitSO.prefab.")]
+        public GameObject startingVillagerPrefab;
+        [Tooltip("Opcional: para resolver el prefab del aldeano si startingVillagerPrefab no está asignado.")]
+        public UnitSO startingVillagerUnitSO;
+        [Tooltip("Patrón de spawn en lobby: 0 esquinas, 1 radial/equilibrado, 2 opuestos/bordes.")]
+        [Range(0, 2)] public int lobbySpawnPatternUi = 1;
+        [Tooltip("Lobby: plaza 1–4 = humano si true, IA si false. Se copia a MatchConfig.players.slots al generar.")]
+        public bool[] lobbyPlayerSlotIsHuman = new bool[4] { true, true, true, true };
+        [Tooltip("Lobby: dificultad IA por plaza (0 Fácil, 1 Normal, 2 Difícil). Solo slots IA.")]
+        [Range(0, 2)] public int[] lobbyAiDifficulty = new int[4] { 1, 1, 1, 1 };
+
+        [Header("IA (skirmish)")]
+        [Tooltip("Opcional: catálogo de producción (si vacío, se intenta tomar del ProductionHUD en escena).")]
+        public ProductionCatalog aiProductionCatalog;
+        [Tooltip("Opcional: unidades/edificios para la IA. Si faltan, la IA solo economía + aldeanos.")]
+        public UnitSO aiVillagerUnitSO;
+        public BuildingSO aiHouseSO;
+        public BuildingSO aiBarracksSO;
+
         [Header("Players")]
-        [Range(2, 4)] public int playerCount = 2;
+        [Range(1, 4)] public int playerCount = 2;
         public float spawnEdgePadding = 20f;
         public float minPlayerDistance2p = 120f;
         public float minPlayerDistance4p = 100f;
@@ -199,6 +243,18 @@ namespace Project.Gameplay.Map
         public int clusterMinSize = 15;
         [Tooltip("Máximo de árboles por bosque.")]
         public int clusterMaxSize = 40;
+        [Tooltip("-1 = 75% en clusters. Si no (0–1), fracción de globalTrees que coloca el colocador en manchas.")]
+        public float globalTreesClusterFraction = -1f;
+        [Tooltip("Si true, árboles globales solo donde el alphamap del terreno favorece la capa hierba [0].")]
+        public bool preferGlobalTreesOnGrassAlphamap;
+
+        [Header("Clusters piedra / oro globales")]
+        [Tooltip("Fracción de nodos globalStone/globalGold colocados en manchas; el resto se reparte disperso si falta sitio.")]
+        [Range(0.4f, 1f)] public float globalStoneGoldClusterFraction = 0.82f;
+        [Tooltip("Tamaño de cada mancha (min–max nodos).")]
+        public Vector2Int globalMineralClusterSize = new Vector2Int(2, 6);
+        [Tooltip("Radio aproximado en celdas del grid; menor = vetas más compactas.")]
+        public float globalMineralClusterRadiusCells = 3.2f;
 
         [Header("Agua (preset / generador definitivo)")]
         [Tooltip("Número de ríos (usado por el generador cuando no hay MapGenConfig asignado o se crea desde preset).")]
@@ -219,6 +275,8 @@ namespace Project.Gameplay.Map
         [Header("Debug")]
         [Tooltip("Imprime logs informativos del generador (recomendado OFF en builds). Warnings/Errors siempre se muestran.")]
         public bool debugLogs = false;
+        [Tooltip("Si false (recomendado en mapas grandes), no fuerza ShadowCasting On en cada recurso instanciado.")]
+        public bool forceResourceShadowCasting = false;
         public bool drawGizmos = true;
         public Color spawnColor = Color.cyan;
         public Color ringNearColor = new Color(0f, 1f, 0f, 0.4f);
@@ -226,8 +284,17 @@ namespace Project.Gameplay.Map
         public Color ringFarColor = new Color(1f, 0.5f, 0f, 0.4f);
 
         [Header("Generador Definitivo (ÚNICO)")]
-        [Tooltip("Plantilla: agua, ciudades, ríos, texturas, etc. En Play, gridW/gridH/cellSizeWorld/origin del asset se reemplazan siempre por width/height/gridConfig/centerAtOrigin de ESTE componente (no hay dos tamaños de celda).")]
+        [Tooltip("DEPRECATED: preferir MatchConfig.mapGenerationProfile. Plantilla técnica en escena si no hay perfil en Match.")]
         public MapGenConfig definitiveMapGenConfig;
+
+        [Header("Generación — arquitectura")]
+        [Tooltip("OFF por defecto: presets Forest/Continental no pisan el Inspector; la fuente de verdad es MatchConfig.")]
+        public bool useLegacyMapPresets = false;
+
+        [Tooltip(
+            "Si hay MatchConfig asignado y esto está activo, riverCount / lakeCount / maxLakeCells de ESTE componente " +
+            "pisan la copia runtime (útil para probar en escena). Desactiva para que mande solo el asset MatchConfig / hydrology alpha.")]
+        public bool preferSceneHydrologyOverrides = true;
 
         MapGrid _grid;
         System.Random _rng;
@@ -245,9 +312,441 @@ namespace Project.Gameplay.Map
         // Importante: NO deben quedarse como "occupied" permanentemente porque el A* evita occupied y aleja a las unidades.
         readonly List<TownCenterReservation> _townCenterReservations = new();
         Transform _waterRoot;
+        MatchConfig _runtimeMatchConfig;
+        RuntimeMapGenerationSettings _lastCompiledSettings;
+
+        /// <summary>Último resultado de <see cref="MatchConfigCompiler.Build"/> en esta sesión de generación.</summary>
+        public RuntimeMapGenerationSettings LastCompiledMapSettings => _lastCompiledSettings;
+
+        /// <summary>Registrado por <see cref="MapLobbyController"/> en Awake (orden de ejecución más bajo que este componente).</summary>
+        public void RegisterDeferredMapLobby(MapLobbyController lobby) => _deferredMapLobby = lobby;
+
+        /// <summary>Llama antes de <see cref="Generate"/> tras el lobby para aplicar seed/ríos/lagos del panel a la copia runtime del match.</summary>
+        public void PrepareGenerateFromLobby() => _pendingLobbyRuntimeTuning = true;
 
         public MapGrid GetGrid() => _grid;
         public System.Random GetRng() => _rng;
+        MatchConfig ResolveMatchConfig()
+        {
+            if (_runtimeMatchConfig != null)
+                return _runtimeMatchConfig;
+
+            _runtimeMatchConfig = matchConfig != null
+                ? matchConfig.CreateRuntimeCopy()
+                : CreateLegacyMatchConfig();
+            if (_runtimeMatchConfig.useHighLevelAlphaConfig)
+                HighLevelMatchSynthesizer.SynthesizeIntoLegacySlots(_runtimeMatchConfig);
+            ApplySceneHydrologyToMatch(_runtimeMatchConfig);
+            if (matchConfig != null && preferSceneHydrologyOverrides)
+            {
+                _runtimeMatchConfig.map.seed = seed;
+                _runtimeMatchConfig.map.randomSeedOnPlay = randomSeedOnPlay;
+            }
+            if (_pendingLobbyRuntimeTuning)
+            {
+                PushSceneToMatchForGeneration(_runtimeMatchConfig);
+                _pendingLobbyRuntimeTuning = false;
+            }
+            MatchRuntimeState.SetCurrent(_runtimeMatchConfig);
+            return _runtimeMatchConfig;
+        }
+
+        /// <summary>
+        /// Copia hidrología del Inspector del RTS a la copia runtime del match cuando <see cref="preferSceneHydrologyOverrides"/> y hay asset.
+        /// </summary>
+        internal void ApplySceneHydrologyToMatch(MatchConfig runtimeMatch)
+        {
+            if (runtimeMatch == null || matchConfig == null || !preferSceneHydrologyOverrides) return;
+            runtimeMatch.water.riverCount = Mathf.Clamp(riverCount, 0, 8);
+            runtimeMatch.water.lakeCount = Mathf.Clamp(lakeCount, 0, 12);
+            runtimeMatch.water.maxLakeCells = Mathf.Max(50, maxLakeCells);
+            if (runtimeMatch.useHighLevelAlphaConfig)
+            {
+                runtimeMatch.hydrology.riverCount = runtimeMatch.water.riverCount;
+                runtimeMatch.hydrology.lakeCount = runtimeMatch.water.lakeCount;
+                runtimeMatch.hydrology.riversEnabled = runtimeMatch.water.riverCount > 0;
+                runtimeMatch.hydrology.lakesEnabled = runtimeMatch.water.lakeCount > 0;
+            }
+        }
+
+        /// <summary>
+        /// Copia el contador de masas montañosas del lobby/inspector al match antes de compilar,
+        /// para que ApplyHighLevelToMapGen no deje macro en 0 respecto al asset MatchConfig.
+        /// </summary>
+        internal void ApplySceneLobbyMacroToMatch(MatchConfig runtimeMatch)
+        {
+            if (runtimeMatch == null || !runtimeMatch.useHighLevelAlphaConfig) return;
+            int m = Mathf.Clamp(lobbyMacroMountainMasses, 0, 12);
+            runtimeMatch.terrainShape.mountainsEnabled = m > 0;
+            runtimeMatch.terrainShape.mountainMassCount = m;
+        }
+
+        MatchConfig CreateLegacyMatchConfig()
+        {
+            MatchConfig legacy = ScriptableObject.CreateInstance<MatchConfig>();
+            legacy.hideFlags = HideFlags.HideAndDontSave;
+            CopySceneGeneratorFieldsIntoMatchConfig(legacy);
+            // Sin asset MatchConfig: el lobby y el generador alpha deben activarse para que layout/jugadores/hidrología sincronicen bien.
+            legacy.useHighLevelAlphaConfig = true;
+            legacy.layout.mapWidth = Mathf.Max(16, width);
+            legacy.layout.mapHeight = Mathf.Max(16, height);
+            legacy.layout.gridCellSize = mapCellSizeWorld > 0.01f ? mapCellSizeWorld : 2.5f;
+            legacy.layout.playerCount = Mathf.Clamp(playerCount, 1, 8);
+            legacy.layout.seed = seed;
+            legacy.layout.randomSeedOnPlay = randomSeedOnPlay;
+            legacy.layout.centerMapAtOrigin = centerAtOrigin;
+            SyncLobbyPlayerSlotsIntoMatch(legacy);
+            return legacy;
+        }
+
+        /// <summary>
+        /// Copia el estado actual del RTS (inspector + lobby) sobre un <see cref="MatchConfig"/> runtime antes de compilar.
+        /// </summary>
+        internal void CopySceneGeneratorFieldsIntoMatchConfig(MatchConfig target)
+        {
+            if (target == null) return;
+
+            target.map.preset = mapPreset;
+            target.map.width = width;
+            target.map.height = height;
+            target.map.cellSize = mapCellSizeWorld > 0.01f ? mapCellSizeWorld : MatchRuntimeState.DefaultCellSize;
+            target.map.centerAtOrigin = centerAtOrigin;
+            target.map.randomSeedOnPlay = randomSeedOnPlay;
+            target.map.seed = seed;
+            target.geography.terrainFlatness = terrainFlatness;
+            target.geography.heightMultiplier = heightMultiplier;
+            target.geography.noiseScale = noiseScale;
+            target.geography.noiseOctaves = noiseOctaves;
+            target.geography.noisePersistence = noisePersistence;
+            target.geography.noiseLacunarity = noiseLacunarity;
+            target.geography.maxSlope = maxSlope;
+            target.geography.alignTerrainToGrid = alignTerrainToGrid;
+            target.water.waterHeight = waterHeight;
+            target.water.waterHeightRelative = waterHeightRelative;
+            target.water.riverCount = riverCount;
+            target.water.lakeCount = lakeCount;
+            target.water.maxLakeCells = maxLakeCells;
+            target.water.sandShoreCells = sandShoreCells;
+            target.water.surfaceOffset = waterSurfaceOffset;
+            target.water.chunkSize = waterChunkSize;
+            target.water.alpha = waterAlpha;
+            target.water.showWater = showWater;
+            target.water.meshMode = waterMeshMode;
+            target.water.waterLayer = waterLayerOverride;
+            target.water.material = waterMaterial;
+            target.resources.ringNear = ringNear;
+            target.resources.ringMid = ringMid;
+            target.resources.ringFar = ringFar;
+            target.resources.nearTrees = nearTrees;
+            target.resources.midTrees = midTrees;
+            target.resources.berries = berries;
+            target.resources.animals = animals;
+            target.resources.goldSafe = goldSafe;
+            target.resources.stoneSafe = stoneSafe;
+            target.resources.goldFar = goldFar;
+            target.resources.globalTrees = globalTrees;
+            target.resources.globalStone = globalStone;
+            target.resources.globalGold = globalGold;
+            target.resources.globalAnimals = globalAnimals;
+            target.resources.globalExcludeRadius = globalExcludeRadius;
+            target.resources.forestClustering = forestClustering;
+            target.resources.clusterDensity = clusterDensity;
+            target.resources.clusterMinSize = clusterMinSize;
+            target.resources.clusterMaxSize = clusterMaxSize;
+            target.resources.minWoodTrees = minWoodTrees;
+            target.resources.minGoldNodes = minGoldNodes;
+            target.resources.minStoneNodes = minStoneNodes;
+            target.resources.minFoodValue = minFoodValue;
+            target.resources.maxResourceRetries = maxResourceRetries;
+            target.resources.visuals.treePrefab = treePrefab;
+            target.resources.visuals.treePrefabVariants = treePrefabVariants;
+            target.resources.visuals.berryPrefab = berryPrefab;
+            target.resources.visuals.berryPrefabVariants = berryPrefabVariants;
+            target.resources.visuals.animalPrefab = animalPrefab;
+            target.resources.visuals.animalPrefabVariants = animalPrefabVariants;
+            target.resources.visuals.goldPrefab = goldPrefab;
+            target.resources.visuals.goldPrefabVariants = goldPrefabVariants;
+            target.resources.visuals.stonePrefab = stonePrefab;
+            target.resources.visuals.stonePrefabVariants = stonePrefabVariants;
+            target.resources.visuals.stoneMaterialOverride = stoneMaterialOverride;
+            target.resources.visuals.treeMaterialOverrides = treeMaterialOverrides;
+            target.resources.visuals.treePlacementRotation = treePlacementRotation;
+            target.resources.visuals.resourceLayerName = resourceLayerName;
+            target.resources.visuals.randomRotationPerResource = randomRotationPerResource;
+            target.resources.visuals.cellPlacementRandomOffset = cellPlacementRandomOffset;
+            target.resources.visuals.forceResourceShadowCasting = forceResourceShadowCasting;
+            target.resources.placement.globalTreesClusterFraction = globalTreesClusterFraction;
+            target.resources.placement.preferGlobalTreesOnGrassAlphamap = preferGlobalTreesOnGrassAlphamap;
+            target.resources.placement.globalStoneGoldClusterFraction = globalStoneGoldClusterFraction;
+            target.resources.placement.globalMineralClusterSize = globalMineralClusterSize;
+            target.resources.placement.globalMineralClusterRadiusCells = globalMineralClusterRadiusCells;
+            target.water.baseHeightNormalized = waterHeightRelative >= 0f && waterHeightRelative <= 1f
+                ? waterHeightRelative
+                : 0.4f;
+            target.climate.paintTerrainByHeight = paintTerrainByHeight;
+            target.climate.grassLayer = grassLayer;
+            target.climate.dirtLayer = dirtLayer;
+            target.climate.rockLayer = rockLayer;
+            target.climate.sandLayer = sandLayer;
+            target.climate.grassTileSize = grassTileSize;
+            target.climate.dirtTileSize = dirtTileSize;
+            target.climate.rockTileSize = rockTileSize;
+            target.climate.sandTileSize = sandTileSize;
+            target.climate.grassPercent = grassPercent;
+            target.climate.dirtPercent = dirtPercent;
+            target.climate.rockPercent = rockPercent;
+            target.climate.textureBlendWidth = textureBlendWidth;
+            target.players.playerCount = playerCount;
+            target.players.spawnEdgePadding = spawnEdgePadding;
+            target.players.minPlayerDistance2p = minPlayerDistance2p;
+            target.players.minPlayerDistance4p = minPlayerDistance4p;
+            target.players.spawnFlatRadius = spawnFlatRadius;
+            target.players.maxSlopeAtSpawn = maxSlopeAtSpawn;
+            target.players.waterExclusionRadius = waterExclusionRadius;
+            target.players.flattenSpawnAreas = flattenSpawnAreas;
+            target.players.flattenRadius = flattenRadius;
+            target.startingLoadout.townCenter = townCenterSO;
+            target.startingLoadout.townCenterPrefabOverride = townCenterPrefabOverride;
+            target.startingLoadout.townCenterClearRadius = tcClearRadius;
+            target.startingLoadout.townCenterSpawnYOffset = townCenterSpawnYOffset;
+            target.graphics.showWater = showWater;
+            target.graphics.debugLogs = debugLogs;
+        }
+
+        internal void EnsureLobbyPlayerSlotsArray()
+        {
+            if (lobbyPlayerSlotIsHuman == null || lobbyPlayerSlotIsHuman.Length != 4)
+                lobbyPlayerSlotIsHuman = new bool[4] { true, true, true, true };
+            if (lobbyAiDifficulty == null || lobbyAiDifficulty.Length != 4)
+                lobbyAiDifficulty = new int[4] { 1, 1, 1, 1 };
+        }
+
+        /// <summary>Rellena <see cref="MatchConfig.players.slots"/> desde el lobby (humano/IA) sin tocar el resto del asset.</summary>
+        internal void SyncLobbyPlayerSlotsIntoMatch(MatchConfig m)
+        {
+            if (m == null) return;
+            EnsureLobbyPlayerSlotsArray();
+            int n = Mathf.Clamp(playerCount, 1, 4);
+            int humans = 0;
+            for (int i = 0; i < n; i++)
+                if (lobbyPlayerSlotIsHuman[i]) humans++;
+            if (humans == 0)
+            {
+                lobbyPlayerSlotIsHuman[0] = true;
+                humans = 1;
+            }
+
+            m.players.playerCount = n;
+            if (m.players.slots == null)
+                m.players.slots = new List<MatchConfig.PlayerSlotSettings>();
+            m.players.slots.Clear();
+            for (int i = 0; i < n; i++)
+            {
+                var slot = new MatchConfig.PlayerSlotSettings
+                {
+                    id = $"Jugador {i + 1}",
+                    kind = lobbyPlayerSlotIsHuman[i] ? MatchConfig.PlayerSlotKind.Human : MatchConfig.PlayerSlotKind.AI,
+                    factionId = "Default"
+                };
+                if (slot.kind == MatchConfig.PlayerSlotKind.AI)
+                {
+                    int d = Mathf.Clamp(lobbyAiDifficulty[i], 0, 2);
+                    slot.aiDifficulty = (AIDifficulty)d;
+                }
+                m.players.slots.Add(slot);
+            }
+        }
+
+        static MapSpawnPattern LobbySpawnUiToPattern(int ui) =>
+            ui <= 0 ? MapSpawnPattern.Corners : ui == 1 ? MapSpawnPattern.Balanced : MapSpawnPattern.Edges;
+
+        /// <summary>
+        /// Alinea la copia runtime del match con los campos actuales del RTS (lobby + inspector) antes de preview o “Empezar partida”.
+        /// </summary>
+        internal void PushSceneToMatchForGeneration(MatchConfig m)
+        {
+            if (m == null) return;
+
+            if (m.useHighLevelAlphaConfig)
+            {
+                m.layout.mapWidth = width;
+                m.layout.mapHeight = height;
+                if (mapCellSizeWorld > 0.01f) m.layout.gridCellSize = mapCellSizeWorld;
+                m.layout.playerCount = Mathf.Clamp(playerCount, 1, 8);
+                m.layout.seed = seed;
+                m.layout.randomSeedOnPlay = false;
+                m.layout.centerMapAtOrigin = centerAtOrigin;
+                m.layout.spawnPattern = LobbySpawnUiToPattern(lobbySpawnPatternUi);
+
+                m.hydrology.riversEnabled = riverCount > 0;
+                m.hydrology.riverCount = riverCount;
+                m.hydrology.lakesEnabled = lakeCount > 0;
+                m.hydrology.lakeCount = lakeCount;
+                if (waterHeightRelative >= 0f && waterHeightRelative <= 1f)
+                    m.hydrology.waterBaseHeightNormalized = waterHeightRelative;
+
+                m.terrainShape.mountainsEnabled = lobbyMacroMountainMasses > 0;
+                m.terrainShape.mountainMassCount = lobbyMacroMountainMasses;
+
+                HighLevelMatchSynthesizer.SynthesizeIntoLegacySlots(m);
+
+                m.resources.globalTrees = globalTrees;
+                m.resources.globalStone = globalStone;
+                m.resources.globalGold = globalGold;
+                m.resources.globalAnimals = globalAnimals;
+                m.resources.berries = berries;
+                m.resources.nearTrees = nearTrees;
+                m.resources.midTrees = midTrees;
+            }
+            else
+                CopySceneGeneratorFieldsIntoMatchConfig(m);
+
+            m.map.seed = seed;
+            m.map.randomSeedOnPlay = false;
+            SyncLobbyPlayerSlotsIntoMatch(m);
+        }
+
+        void ApplyLobbyMacroReliefTo(MapGenConfig config)
+        {
+            if (config == null) return;
+            int m = Mathf.Clamp(lobbyMacroMountainMasses, 0, 12);
+            // Solo sobrescribir si el lobby pide montañas > 0. Si el contador del lobby es 0,
+            // respetar macroTerrainEnabled / macroMountainMassCount del Match compilado (alpha / perfil).
+            if (m > 0)
+            {
+                config.macroTerrainEnabled = true;
+                config.macroMountainMassCount = m;
+                config.macroMountainHeight01Min = Mathf.Max(config.macroMountainHeight01Min, 0.12f);
+                config.macroMountainHeight01Max = Mathf.Max(config.macroMountainHeight01Max, Mathf.Max(config.macroMountainHeight01Min + 0.04f, 0.28f));
+            }
+        }
+
+        /// <summary>Ríos ~1,5× más anchos (gameplay + ribbon visual) respecto a la plantilla compilada.</summary>
+        static void ApplyRiverWidthScale(MapGenConfig config)
+        {
+            if (config == null) return;
+            const float k = 1.5f;
+            config.riverVisualMeshHalfWidth = Mathf.Clamp(config.riverVisualMeshHalfWidth * k, 0.12f, 16f);
+            config.riverVisualHalfWidthCells = Mathf.Clamp(config.riverVisualHalfWidthCells * k, 0.12f, 2f);
+            config.riverWidthRadiusCells = Mathf.Clamp(Mathf.RoundToInt(config.riverWidthRadiusCells * k), 0, 6);
+        }
+
+        void ApplyMatchConfigToLegacyFields(MatchConfig cfg)
+        {
+            if (cfg == null) return;
+
+            mapPreset = cfg.map.preset;
+            width = cfg.map.width;
+            height = cfg.map.height;
+            centerAtOrigin = cfg.map.centerAtOrigin;
+            randomSeedOnPlay = cfg.map.randomSeedOnPlay;
+            seed = cfg.map.seed;
+            terrainFlatness = cfg.geography.terrainFlatness;
+            heightMultiplier = cfg.geography.heightMultiplier;
+            noiseScale = cfg.geography.noiseScale;
+            noiseOctaves = cfg.geography.noiseOctaves;
+            noisePersistence = cfg.geography.noisePersistence;
+            noiseLacunarity = cfg.geography.noiseLacunarity;
+            maxSlope = cfg.geography.maxSlope;
+            alignTerrainToGrid = cfg.geography.alignTerrainToGrid;
+            waterHeight = cfg.water.waterHeight;
+            // Espejo de inspector: el generador definitivo usa solo baseHeightNormalized (Match).
+            waterHeightRelative = cfg.water.baseHeightNormalized;
+            riverCount = cfg.water.riverCount;
+            lakeCount = cfg.water.lakeCount;
+            maxLakeCells = cfg.water.maxLakeCells;
+            sandShoreCells = cfg.water.sandShoreCells;
+            waterSurfaceOffset = cfg.water.surfaceOffset;
+            waterChunkSize = cfg.water.chunkSize;
+            waterAlpha = cfg.water.alpha;
+            showWater = cfg.water.showWater;
+            waterMeshMode = cfg.water.meshMode;
+            waterLayerOverride = cfg.water.waterLayer;
+            waterMaterial = cfg.water.material;
+            ringNear = cfg.resources.ringNear;
+            ringMid = cfg.resources.ringMid;
+            ringFar = cfg.resources.ringFar;
+            nearTrees = cfg.resources.nearTrees;
+            midTrees = cfg.resources.midTrees;
+            berries = cfg.resources.berries;
+            animals = cfg.resources.animals;
+            goldSafe = cfg.resources.goldSafe;
+            stoneSafe = cfg.resources.stoneSafe;
+            goldFar = cfg.resources.goldFar;
+            globalTrees = cfg.resources.globalTrees;
+            globalStone = cfg.resources.globalStone;
+            globalGold = cfg.resources.globalGold;
+            globalAnimals = cfg.resources.globalAnimals;
+            globalExcludeRadius = cfg.resources.globalExcludeRadius;
+            forestClustering = cfg.resources.forestClustering;
+            clusterDensity = cfg.resources.clusterDensity;
+            clusterMinSize = cfg.resources.clusterMinSize;
+            clusterMaxSize = cfg.resources.clusterMaxSize;
+            minWoodTrees = cfg.resources.minWoodTrees;
+            minGoldNodes = cfg.resources.minGoldNodes;
+            minStoneNodes = cfg.resources.minStoneNodes;
+            minFoodValue = cfg.resources.minFoodValue;
+            maxResourceRetries = cfg.resources.maxResourceRetries;
+            treePrefab = cfg.resources.visuals.treePrefab;
+            treePrefabVariants = cfg.resources.visuals.treePrefabVariants;
+            berryPrefab = cfg.resources.visuals.berryPrefab;
+            berryPrefabVariants = cfg.resources.visuals.berryPrefabVariants;
+            animalPrefab = cfg.resources.visuals.animalPrefab;
+            animalPrefabVariants = cfg.resources.visuals.animalPrefabVariants;
+            goldPrefab = cfg.resources.visuals.goldPrefab;
+            goldPrefabVariants = cfg.resources.visuals.goldPrefabVariants;
+            stonePrefab = cfg.resources.visuals.stonePrefab;
+            stonePrefabVariants = cfg.resources.visuals.stonePrefabVariants;
+            stoneMaterialOverride = cfg.resources.visuals.stoneMaterialOverride;
+            treeMaterialOverrides = cfg.resources.visuals.treeMaterialOverrides;
+            treePlacementRotation = cfg.resources.visuals.treePlacementRotation;
+            resourceLayerName = cfg.resources.visuals.resourceLayerName;
+            randomRotationPerResource = cfg.resources.visuals.randomRotationPerResource;
+            cellPlacementRandomOffset = cfg.resources.visuals.cellPlacementRandomOffset;
+            forceResourceShadowCasting = cfg.resources.visuals.forceResourceShadowCasting;
+            globalTreesClusterFraction = cfg.resources.placement.globalTreesClusterFraction;
+            preferGlobalTreesOnGrassAlphamap = cfg.resources.placement.preferGlobalTreesOnGrassAlphamap;
+            globalStoneGoldClusterFraction = cfg.resources.placement.globalStoneGoldClusterFraction;
+            globalMineralClusterSize = cfg.resources.placement.globalMineralClusterSize;
+            globalMineralClusterRadiusCells = cfg.resources.placement.globalMineralClusterRadiusCells;
+            paintTerrainByHeight = cfg.climate.paintTerrainByHeight;
+            grassLayer = cfg.climate.grassLayer;
+            dirtLayer = cfg.climate.dirtLayer;
+            rockLayer = cfg.climate.rockLayer;
+            sandLayer = cfg.climate.sandLayer;
+            grassTileSize = cfg.climate.grassTileSize;
+            dirtTileSize = cfg.climate.dirtTileSize;
+            rockTileSize = cfg.climate.rockTileSize;
+            sandTileSize = cfg.climate.sandTileSize;
+            grassPercent = cfg.climate.grassPercent;
+            dirtPercent = cfg.climate.dirtPercent;
+            rockPercent = cfg.climate.rockPercent;
+            textureBlendWidth = cfg.climate.textureBlendWidth;
+            playerCount = Mathf.Clamp(cfg.players.playerCount, 1, 4);
+            EnsureLobbyPlayerSlotsArray();
+            if (cfg.players.slots != null && cfg.players.slots.Count > 0)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    lobbyPlayerSlotIsHuman[i] = i < cfg.players.slots.Count
+                        && cfg.players.slots[i].kind == MatchConfig.PlayerSlotKind.Human;
+                }
+            }
+            spawnEdgePadding = cfg.players.spawnEdgePadding;
+            minPlayerDistance2p = cfg.players.minPlayerDistance2p;
+            minPlayerDistance4p = cfg.players.minPlayerDistance4p;
+            spawnFlatRadius = cfg.players.spawnFlatRadius;
+            maxSlopeAtSpawn = cfg.players.maxSlopeAtSpawn;
+            waterExclusionRadius = cfg.players.waterExclusionRadius;
+            flattenSpawnAreas = cfg.players.flattenSpawnAreas;
+            flattenRadius = cfg.players.flattenRadius;
+            townCenterSO = cfg.startingLoadout.townCenter;
+            townCenterPrefabOverride = cfg.startingLoadout.townCenterPrefabOverride;
+            tcClearRadius = cfg.startingLoadout.townCenterClearRadius;
+            townCenterSpawnYOffset = cfg.startingLoadout.townCenterSpawnYOffset;
+            debugLogs = cfg.graphics.debugLogs;
+        }
+
         public float SampleHeight(Vector3 world)
         {
             if (terrain == null) return world.y;
@@ -273,27 +772,26 @@ namespace Project.Gameplay.Map
 
         /// <summary>
         /// Única fuente de verdad para tamaño de celda, dimensiones en celdas y origen del mapa.
-        /// Viene de <see cref="gridConfig"/> (metros por celda), <see cref="width"/>/<see cref="height"/> y <see cref="centerAtOrigin"/>.
+        /// Viene del <see cref="MatchConfig"/> activo y, en compatibilidad legacy, de los campos width/height/centerAtOrigin.
         /// Los campos de grid en <see cref="MapGenConfig"/> del proyecto solo sirven como plantilla (agua, ciudades, etc.);
         /// en runtime se pisan con estos valores para que no haya dos definiciones distintas.
         /// </summary>
         public static void GetAuthoritativeGridLayout(RTSMapGenerator gen, out float cellSizeWorld, out Vector3 origin, out int gridW, out int gridH)
         {
-            cellSizeWorld = 2.5f;
+            cellSizeWorld = MatchRuntimeState.DefaultCellSize;
             origin = Vector3.zero;
             gridW = 1;
             gridH = 1;
             if (gen == null) return;
 
-            if (gen.gridConfig == null)
-                Debug.LogWarning("RTSMapGenerator: asigna GridConfig.asset en 'gridConfig'. Usando cellSize=2.5 hasta entonces.");
-
-            cellSizeWorld = gen.gridConfig != null ? gen.gridConfig.gridSize : 2.5f;
+            MatchConfig cfg = gen.ResolveMatchConfig();
+            cellSizeWorld = cfg != null ? Mathf.Max(0.01f, cfg.map.cellSize) : MatchRuntimeState.DefaultCellSize;
             if (cellSizeWorld <= 0.0001f)
-                cellSizeWorld = 2.5f;
-            gridW = Mathf.Max(1, gen.width);
-            gridH = Mathf.Max(1, gen.height);
-            if (gen.centerAtOrigin)
+                cellSizeWorld = MatchRuntimeState.DefaultCellSize;
+            gridW = cfg != null ? Mathf.Max(1, cfg.map.width) : Mathf.Max(1, gen.width);
+            gridH = cfg != null ? Mathf.Max(1, cfg.map.height) : Mathf.Max(1, gen.height);
+            bool centered = cfg != null ? cfg.map.centerAtOrigin : gen.centerAtOrigin;
+            if (centered)
                 origin = new Vector3(-gridW * cellSizeWorld * 0.5f, gen.transform.position.y, -gridH * cellSizeWorld * 0.5f);
             else
                 origin = gen.transform.position;
@@ -333,12 +831,21 @@ namespace Project.Gameplay.Map
         {
             if (navMeshSurface == null)
                 navMeshSurface = FindFirstObjectByType<NavMeshSurface>();
+            if (_deferredMapLobby != null && _deferredMapLobby.blockInitialGeneration)
+            {
+                _deferredMapLobby.Open(this);
+                return;
+            }
             Generate();
         }
 
         public void Generate()
         {
             Log("=== Iniciando generación de mapa (Definitivo) ===");
+            _runtimeMatchConfig = null;
+            MatchRuntimeState.ClearGeneratedWorldBounds();
+            MatchConfig activeMatch = ResolveMatchConfig();
+            ApplyMatchConfigToLegacyFields(activeMatch);
             if (navMeshSurface == null)
                 navMeshSurface = FindFirstObjectByType<NavMeshSurface>();
 
@@ -347,11 +854,85 @@ namespace Project.Gameplay.Map
             if (_grid == null)
                 _grid = gameObject.AddComponent<MapGrid>();
 
-            // 🟢 Aplicar preset si no es Custom
-            ApplyMapPreset();
+            if (useLegacyMapPresets)
+            {
+                ApplyMapPreset();
+                if (matchConfig == null)
+                    _runtimeMatchConfig = null;
+            }
+            else if (mapPreset != MapPresetType.Custom)
+            {
+                Debug.LogWarning(
+                    "[MapGen] mapPreset != Custom está ignorado (useLegacyMapPresets=false). " +
+                    "Edita MatchConfig (o activa useLegacyMapPresets solo para depuración legacy).");
+            }
 
             // Pipeline legacy retirado: desde ahora el proyecto usa SOLO el Generador Definitivo.
             RunDefinitiveGenerate();
+        }
+
+        /// <summary>
+        /// Ejecuta el pipeline lógico hasta recursos (sin terreno, mallas de agua ni NavMesh) y devuelve una textura 2D.
+        /// Usa <see cref="seed"/>, ríos/lagos del Inspector y <see cref="preferSceneHydrologyOverrides"/> como en la partida.
+        /// </summary>
+        public bool TryBuildMapPreview(out Texture2D preview, out string failMessage, int textureMaxSize = 400, MapPreviewOverlayMode previewOverlay = MapPreviewOverlayMode.Terrain)
+        {
+            preview = null;
+            failMessage = null;
+            _runtimeMatchConfig = null;
+            MatchConfig activeMatch = ResolveMatchConfig();
+            if (activeMatch == null)
+            {
+                failMessage = "No hay MatchConfig resuelto.";
+                return false;
+            }
+            PushSceneToMatchForGeneration(activeMatch);
+
+            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(activeMatch, definitiveMapGenConfig, this, logSummary: false);
+            MapGenConfig config = runtime.CompiledMapGen;
+            if (config == null)
+            {
+                failMessage = "Compilación: MapGenConfig null.";
+                _lastCompiledSettings = runtime;
+                return false;
+            }
+            _lastCompiledSettings = runtime;
+            ApplyLobbyMacroReliefTo(config);
+            ApplyRiverWidthScale(config);
+            if (MatchConfigCompiler.ApplyLegacyResourceFallbackFromScene(runtime.Resources, this))
+                runtime.MarkLegacyResourceFallbackFromScene();
+
+            ApplyAuthoritativeGridLayout(this, config);
+
+            var generator = GetComponent<MapGenerator>();
+            if (generator == null) generator = gameObject.AddComponent<MapGenerator>();
+            generator.config = config;
+            generator.terrain = terrain;
+            generator.terrainGrassLayerOverride = grassLayer;
+            generator.terrainDirtLayerOverride = dirtLayer;
+            generator.terrainRockLayerOverride = rockLayer;
+            generator.terrainGrassTileSize = grassTileSize;
+            generator.terrainDirtTileSize = dirtTileSize;
+            generator.terrainRockTileSize = rockTileSize;
+            generator.terrainSandLayerOverride = sandLayer;
+            generator.terrainSandTileSize = sandTileSize;
+            generator.terrainSandShoreCells = sandShoreCells;
+
+            bool ok = generator.Generate(config, null, skipSurfaceExport: true, skipRoadConnectivityValidation: true);
+            if (!ok)
+            {
+                failMessage = "Validación del generador falló; revisa la consola.";
+                Destroy(config);
+                generator.config = definitiveMapGenConfig;
+                return false;
+            }
+
+            preview = MapPreviewTextureBuilder.Build(generator.Grid, generator.Cities, textureMaxSize, generator.Grid.SemanticRegions, previewOverlay);
+            Destroy(config);
+            generator.config = definitiveMapGenConfig;
+            if (preview == null)
+                failMessage = "No se pudo rasterizar el grid.";
+            return preview != null;
         }
         
         static Vector2Int ScaleVector2Int(Vector2Int v, float multiplier)
@@ -392,23 +973,60 @@ namespace Project.Gameplay.Map
             lakeCount = preset.lakeCount;
             maxLakeCells = preset.maxLakeCells;
 
+            globalTreesClusterFraction = preset.globalTreesClusterFraction;
+            preferGlobalTreesOnGrassAlphamap = preset.preferTreesOnGrassAlphamap;
+            if (preset.overrideTerrainGrassPercent)
+            {
+                int g = Mathf.Clamp(preset.terrainGrassPercent, 10, 85);
+                grassPercent = g;
+                int remaining = 100 - g;
+                int sumDR = dirtPercent + rockPercent;
+                if (sumDR < 1)
+                {
+                    dirtPercent = remaining / 2;
+                    rockPercent = remaining - dirtPercent;
+                }
+                else
+                {
+                    dirtPercent = Mathf.RoundToInt(remaining * (dirtPercent / (float)sumDR));
+                    rockPercent = remaining - dirtPercent;
+                    if (rockPercent < 0) { rockPercent = 0; dirtPercent = remaining; }
+                    if (dirtPercent < 0) { dirtPercent = 0; rockPercent = remaining; }
+                }
+            }
+
+            if (mapPreset == MapPresetType.Forest)
+            {
+                globalStone = new Vector2Int(150, 220);
+                globalGold = new Vector2Int(38, 58);
+                globalAnimals = new Vector2Int(6, 14);
+            }
+
             Debug.Log($"🗺️ Preset aplicado: {preset.name} - {preset.description}");
         }
 
         void RunDefinitiveGenerate()
         {
-            MapGenConfig config = definitiveMapGenConfig != null
-                ? Instantiate(definitiveMapGenConfig)
-                : MapGenConfigFactory.CreateFrom(this);
-            if (config == null) { Debug.LogError("RTSMapGenerator Definitive: no hay MapGenConfig."); return; }
-
-            if (definitiveMapGenConfig != null)
+            MatchConfig activeMatch = ResolveMatchConfig();
+            _matchUsedForLastGenerate = activeMatch;
+            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(activeMatch, definitiveMapGenConfig, this, logSummary: true);
+            MapGenConfig config = runtime.CompiledMapGen;
+            if (config == null)
             {
-                config.hideFlags = HideFlags.HideAndDontSave;
-                if (randomSeedOnPlay)
-                    config.seed = UnityEngine.Random.Range(1, int.MaxValue);
+                Debug.LogError("RTSMapGenerator Definitive: MatchConfigCompiler no produjo MapGenConfig.");
+                _lastCompiledSettings = runtime;
+                return;
             }
 
+            _lastCompiledSettings = runtime;
+
+            if (MatchConfigCompiler.ApplyLegacyResourceFallbackFromScene(runtime.Resources, this))
+                runtime.MarkLegacyResourceFallbackFromScene();
+
+            MatchConfigCompiler.LogResourcePlacementSummary(runtime);
+
+            ApplyLobbyMacroReliefTo(config);
+            ApplyRiverWidthScale(config);
             ApplyAuthoritativeGridLayout(this, config);
 
             var generator = GetComponent<MapGenerator>();
@@ -433,7 +1051,14 @@ namespace Project.Gameplay.Map
                 return;
             }
 
-            MapGeneratorBridge.SyncGridToMapGrid(generator.Grid, _grid);
+            if (runtime.TerrainFeatures != null)
+                TerrainFeatureSummaryBuilder.AppendFromGrid(generator.Grid, config, runtime.TerrainFeatures);
+            runtime.SemanticRegions = generator.Grid.SemanticRegions;
+            MapGenerationPipelineLogger.LogPostGenerate(runtime, generator.Grid, config);
+            if (runtime.UsedHighLevelAlphaConfig)
+                MapVisualBinder.LogBindingPlan(activeMatch.visualBinding);
+
+            _grid.InitializeFromGridSystem(generator.Grid);
             _spawns.Clear();
             int spawnCount = Mathf.Min(playerCount, generator.Cities != null ? generator.Cities.Count : 0);
             for (int i = 0; i < spawnCount; i++)
@@ -456,17 +1081,27 @@ namespace Project.Gameplay.Map
             Log($"Definitive: {_spawns.Count} spawns desde ciudades.");
 
             _rng = new System.Random(config.seed);
-            PlaceTownCenters();
-            MoveExistingUnitsToTownCenters();
-            // Definitivo: colocar recursos desde el grid definitivo (evita duplicar lógicas legacy).
-            MapResourcePlacer.PlaceFromDefinitiveGrid(generator.Grid, this);
-            // Además: dispersión global (árboles/piedra/oro) fuera de TCs, usando parámetros del RTSMapGenerator.
-            MapResourcePlacer.PlaceGlobalOnly(_spawns, this);
+            DestroyPrePlacedVillagersInScene();
+            PlaceTownCenters(activeMatch);
+            SpawnStartingVillagersAroundTownCenters(activeMatch);
+            var popMgr = PopulationManager.FindPrimaryHumanSkirmish();
+            if (popMgr != null)
+                popMgr.RegisterExistingVillagers();
+            float cellSz = mapCellSizeWorld > 0.01f ? mapCellSizeWorld : MapGrid.GetCellSizeOrDefault();
+            float tcFootprintRadius = 0f;
+            if (townCenterSO != null)
+                tcFootprintRadius = Mathf.Max(townCenterSO.size.x, townCenterSO.size.y) * cellSz * 0.5f;
+            float minDistFromTc = Mathf.Max(tcClearRadius, tcFootprintRadius) + cellSz * 2f;
+            MapResourcePlacer.PlaceFromDefinitiveGrid(generator.Grid, this, runtime.Resources, _townCenterPositions, minDistFromTc);
+            MapResourcePlacer.PlaceGlobalOnly(_spawns, this, runtime.Resources);
             ReleaseTownCenterReservations();
 
             // Notificar cámara RTS (si existe) para que actualice bounds al tamaño del mapa generado.
             var camCtrl = FindFirstObjectByType<Project.Gameplay.RTSCameraController>();
             if (camCtrl != null) camCtrl.RefreshBoundsFromMap();
+
+            if (!rebuildNavMeshOnGenerate)
+                AIPlayerBootstrap.SpawnForMatch(_matchUsedForLastGenerate, this);
 
             StartCoroutine(RebuildNavMeshCoroutine());
             Log("=== Generación Definitiva completada ===");
@@ -934,7 +1569,51 @@ namespace Project.Gameplay.Map
             return true;
         }
 
-        void PlaceTownCenters()
+        static bool IsLobbySlotHuman(MatchConfig m, int playerIndex)
+        {
+            if (m?.players?.slots == null || playerIndex < 0 || playerIndex >= m.players.slots.Count)
+                return true;
+            return m.players.slots[playerIndex].kind != MatchConfig.PlayerSlotKind.AI;
+        }
+
+        static void ApplySkirmishFactionToRoot(GameObject root, bool humanPlayerSlot)
+        {
+            if (root == null) return;
+            var fm = root.GetComponent<FactionMember>();
+            if (fm == null) fm = root.AddComponent<FactionMember>();
+            fm.faction = humanPlayerSlot ? FactionId.Player : FactionId.Enemy;
+        }
+
+        /// <summary>Humano: el PlayerResources global de escena (HUD). IA: uno por Town Center enemigo.</summary>
+        static PlayerResources ResolveGathererOwnerResources(int townCenterIndexZero, bool humanSlot)
+        {
+            if (humanSlot)
+            {
+                var global = PlayerResources.FindPrimaryHumanSkirmish();
+                if (global != null) return global;
+            }
+
+            var tcGo = GameObject.Find($"TownCenter_Player{townCenterIndexZero + 1}");
+            if (tcGo == null)
+                return PlayerResources.FindPrimaryHumanSkirmish();
+            var onTc = tcGo.GetComponent<PlayerResources>();
+            if (onTc != null) return onTc;
+            return tcGo.AddComponent<PlayerResources>();
+        }
+
+        void DestroyPrePlacedVillagersInScene()
+        {
+            var gatherers = FindObjectsByType<VillagerGatherer>(FindObjectsSortMode.None);
+            for (int i = 0; i < gatherers.Length; i++)
+            {
+                if (gatherers[i] == null) continue;
+                Destroy(gatherers[i].gameObject);
+            }
+            if (gatherers.Length > 0)
+                Log($"DestroyPrePlacedVillagersInScene: eliminados {gatherers.Length} aldeanos previos (solo TC + 3 nuevos por jugador).");
+        }
+
+        void PlaceTownCenters(MatchConfig match)
         {
             _townCenterPositions.Clear();
             _townCenterReservations.Clear();
@@ -1004,6 +1683,7 @@ namespace Project.Gameplay.Map
                     Vector3 world = _grid.CellToWorld(cell);
                     world.y = terrain != null ? SampleHeight(world) : 0f;
                     GameObject tc = Instantiate(prefab, world, Quaternion.identity);
+                    NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(tc);
                     AlignTownCenterToTerrain(tc);
                     EnsureWorldBarAnchor(tc);
                     SetLayerRecursive(tc.transform, tc.layer);
@@ -1011,6 +1691,7 @@ namespace Project.Gameplay.Map
                         tc.AddComponent<BuildingSelectable>();
                     tc.name = $"TownCenter_Player{i + 1}";
                     world = tc.transform.position;
+                    ApplySkirmishFactionToRoot(tc, IsLobbySlotHuman(match, i));
 
                     // Si el prefab es Static, el bake de NavMesh incluye su collider con margen → las unidades no se acercan.
                     // Forzar no-static para que solo el NavMeshObstacle tallen en runtime (igual que edificios construidos después).
@@ -1045,6 +1726,33 @@ namespace Project.Gameplay.Map
                                 spawnObj.transform.localPosition = new Vector3(0f, 0f, (3f * sign) / safeScaleZ);
                                 prod.spawnPoint = spawnObj.transform;
                             }
+                        }
+
+                        bool humanSlot = IsLobbySlotHuman(match, i);
+                        if (humanSlot)
+                        {
+                            var globalPr = PlayerResources.FindPrimaryHumanSkirmish();
+                            if (globalPr != null)
+                                prod.owner = globalPr;
+                            prod.populationManager = PopulationManager.FindPrimaryHumanSkirmish();
+                            if (townCenterSO != null && townCenterSO.populationProvided > 0)
+                            {
+                                var pm = PopulationManager.FindPrimaryHumanSkirmish();
+                                if (pm != null)
+                                    pm.AddHousingCapacity(townCenterSO.populationProvided);
+                            }
+                        }
+                        else
+                        {
+                            var prAi = tc.GetComponent<PlayerResources>();
+                            if (prAi == null) prAi = tc.AddComponent<PlayerResources>();
+                            prod.owner = prAi;
+                            var pmAi = tc.GetComponent<PopulationManager>();
+                            if (pmAi == null) pmAi = tc.AddComponent<PopulationManager>();
+                            pmAi.skipAutoRegisterPopulation = true;
+                            prod.populationManager = pmAi;
+                            if (townCenterSO != null)
+                                pmAi.SetInitialStateForAiTownCenter(townCenterSO.populationProvided, 0);
                         }
                     }
 
@@ -1176,6 +1884,66 @@ namespace Project.Gameplay.Map
                 _grid.SetOccupiedCircle(r.centerWorldXZ, tcClearRadius, false);
                 _grid.SetOccupiedRect(r.min, r.size, true);
             }
+        }
+
+        GameObject ResolveStartingVillagerPrefab()
+        {
+            if (startingVillagerPrefab != null) return startingVillagerPrefab;
+            if (startingVillagerUnitSO != null && startingVillagerUnitSO.prefab != null)
+                return startingVillagerUnitSO.prefab;
+            return null;
+        }
+
+        /// <summary>3 aldeanos por Town Center (humano = bando Player; IA = Enemy para enfrentamiento). Población HUD solo humano.</summary>
+        void SpawnStartingVillagersAroundTownCenters(MatchConfig match)
+        {
+            GameObject villPrefab = ResolveStartingVillagerPrefab();
+            if (villPrefab == null)
+            {
+                Log("SpawnStartingVillagers: asigna startingVillagerPrefab o startingVillagerUnitSO (p. ej. Villager_UnitSO).");
+                return;
+            }
+
+            if (_townCenterPositions.Count == 0)
+                return;
+
+            const int villagersPerPlayer = 3;
+            int spawned = 0;
+            for (int tcIndex = 0; tcIndex < _townCenterPositions.Count; tcIndex++)
+            {
+                bool humanSlot = IsLobbySlotHuman(match, tcIndex);
+                Vector3 tcPos = _townCenterPositions[tcIndex];
+                float radius = GetTownCenterPlacementRadius(tcIndex, tcPos);
+                for (int v = 0; v < villagersPerPlayer; v++)
+                {
+                    float angle = (v / (float)villagersPerPlayer) * 360f * Mathf.Deg2Rad;
+                    Vector3 offset = new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius);
+                    Vector3 targetPos = tcPos + offset;
+                    targetPos.y = SampleHeight(targetPos);
+                    GameObject u = Instantiate(villPrefab, targetPos, Quaternion.identity);
+                    NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(u);
+                    u.name = $"Villager_Player{tcIndex + 1}_{v + 1}";
+                    ApplySkirmishFactionToRoot(u, humanSlot);
+                    var gatherer = u.GetComponent<VillagerGatherer>();
+                    if (gatherer != null)
+                        gatherer.owner = ResolveGathererOwnerResources(tcIndex, humanSlot);
+                    if (!u.activeSelf) u.SetActive(true);
+                    spawned++;
+                }
+
+                if (!humanSlot)
+                {
+                    var tcGo = GameObject.Find($"TownCenter_Player{tcIndex + 1}");
+                    var pmAi = tcGo != null ? tcGo.GetComponent<PopulationManager>() : null;
+                    if (pmAi != null)
+                    {
+                        for (int z = 0; z < villagersPerPlayer; z++)
+                            pmAi.TryAddPopulation(1);
+                    }
+                }
+            }
+
+            Log($"SpawnStartingVillagers: {spawned} aldeanos ({villagersPerPlayer} por TC).");
         }
 
         void MoveExistingUnitsToTownCenters()
@@ -1583,8 +2351,10 @@ namespace Project.Gameplay.Map
             var agents = FindObjectsByType<UnityEngine.AI.NavMeshAgent>(FindObjectsSortMode.None);
             int fixedCount = 0;
             int failedCount = 0;
+            float baseR = Mathf.Max(1f, navMeshPostBakeSampleRadius);
+            int extraRetries = Mathf.Clamp(navMeshPostBakeSampleRetries, 0, 5);
             
-            Log($"Intentando recolocar {agents.Length} unidades...");
+            Log($"Intentando recolocar {agents.Length} unidades (snap radius={baseR:F1}, retries={extraRetries})...");
             
             foreach (var agent in agents)
             {
@@ -1596,11 +2366,25 @@ namespace Project.Gameplay.Map
                     continue;
                 }
 
+                bool TrySnapToNavMesh(out UnityEngine.AI.NavMeshHit hitOut)
+                {
+                    Vector3 p = agent.transform.position;
+                    float r = baseR;
+                    for (int t = 0; t <= extraRetries; t++)
+                    {
+                        if (UnityEngine.AI.NavMesh.SamplePosition(p, out hitOut, r, UnityEngine.AI.NavMesh.AllAreas))
+                            return true;
+                        r *= 1.5f;
+                    }
+                    hitOut = default;
+                    return false;
+                }
+
                 // Si el agente está deshabilitado, primero recolocar en NavMesh y LUEGO activar
                 // (activar antes de recolocar provoca "Failed to create agent because it is not close enough to the NavMesh")
                 if (!agent.enabled)
                 {
-                    if (UnityEngine.AI.NavMesh.SamplePosition(agent.transform.position, out var hitDisabled, 100f, UnityEngine.AI.NavMesh.AllAreas))
+                    if (TrySnapToNavMesh(out var hitDisabled))
                     {
                         agent.transform.position = hitDisabled.position;
                         agent.enabled = true;
@@ -1609,9 +2393,8 @@ namespace Project.Gameplay.Map
                     }
                     else
                     {
-                        agent.enabled = true; // activar igual para no dejarla bloqueada
                         failedCount++;
-                        Debug.LogWarning($"❌ Unidad {agent.name} no se encontró NavMesh cerca, activada en posición actual.");
+                        // Mantener desactivado: activar aquí reproduce el error de Unity en masa.
                     }
                     continue;
                 }
@@ -1623,7 +2406,7 @@ namespace Project.Gameplay.Map
                 }
                     
                 // Agente activo pero no en NavMesh: Warp a posición válida
-                if (UnityEngine.AI.NavMesh.SamplePosition(agent.transform.position, out var hit, 100f, UnityEngine.AI.NavMesh.AllAreas))
+                if (TrySnapToNavMesh(out var hit))
                 {
                     agent.Warp(hit.position);
                     fixedCount++;
@@ -1631,18 +2414,18 @@ namespace Project.Gameplay.Map
                 }
                 else
                 {
+                    agent.enabled = false;
                     failedCount++;
-                    Debug.LogWarning($"❌ Unidad {agent.name} NO pudo ser recolocada. Posición: {agent.transform.position}");
                 }
             }
             
-            if (fixedCount > 0 || failedCount > 0)
-            {
-                if (failedCount > 0)
-                    Debug.LogError($"⚠️ Unidades recolocadas: {fixedCount} exitosas, {failedCount} FALLIDAS");
-                else
-            Log($"✅ Unidades recolocadas: {fixedCount} exitosas, {failedCount} fallidas");
-            }
+            if (failedCount > 0)
+                Debug.LogWarning($"NavMesh post-bake: {fixedCount} unidades OK, {failedCount} sin posición válida (agentes dejados desactivados; revisar radio o terreno).");
+            else if (fixedCount > 0)
+                Log($"✅ Unidades recolocadas: {fixedCount} exitosas.");
+
+            if (_matchUsedForLastGenerate != null)
+                AIPlayerBootstrap.SpawnForMatch(_matchUsedForLastGenerate, this);
         }
 
         [ContextMenu("Debug: Estado del Generador")]
@@ -1650,7 +2433,7 @@ namespace Project.Gameplay.Map
         {
             Log("=== ESTADO DEL GENERADOR ===");
             Log($"Terrain asignado: {terrain != null}");
-            Log($"Grid Config: {gridConfig != null}");
+            Log($"Match Config: {matchConfig != null}");
             Log($"Grid inicializado: {_grid != null && _grid.IsReady}");
             Log($"Spawns generados: {_spawns?.Count ?? 0}");
             Log($"NavMeshSurface: {navMeshSurface != null}");

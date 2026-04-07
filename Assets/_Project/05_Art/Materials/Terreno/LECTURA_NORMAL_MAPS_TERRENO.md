@@ -11,9 +11,11 @@ En los **Terrain Layers** del proyecto (`Texture_Grass`, `Texture_Dirt`, `Textur
 | Texture_Rock  | Rock.png                     | **Default** (color) |
 | Texture_Sand  | Sand.png                     | **Default** (color) |
 
-En los `.meta` de esas texturas, **textureType: 1** = **Default (Texture)**. Es decir, son texturas de **color/difuso**, no mapas de normales.
+En Unity, en el importador de texturas, **Texture Type = Normal map** corresponde a `textureType: 1` en el `.meta`; **Default** es `textureType: 0`.
 
-Cuando Unity usa una textura de color como si fuera un normal map, interpreta el R,G,B como vectores de normal (X,Y,Z). Eso produce iluminación rara, “planos” o artefactos, que es lo que estás viendo.
+`Sand.png` y `Dirt.png` en este proyecto son **color / detalle**, no normales tangentes. Si las marcas como Normal map **y** las pones en el slot Normal del Terrain Layer, Unity trata cada píxel como vector → **manchas en cuadrícula**, sombras raras en la arena, etc.
+
+**Normales válidos** (tangent-space, tonos azul/violeta típicos): `Grass_01.png` y `Rock.png` siguen como Normal map (`textureType: 1`, sin sRGB).
 
 ---
 

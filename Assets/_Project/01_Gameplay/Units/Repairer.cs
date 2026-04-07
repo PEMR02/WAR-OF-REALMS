@@ -36,7 +36,7 @@ namespace Project.Gameplay.Units
         {
             _agent = GetComponent<NavMeshAgent>();
             _mover = GetComponent<UnitMover>();
-            if (owner == null) owner = FindFirstObjectByType<PlayerResources>();
+            if (owner == null) owner = PlayerResources.FindPrimaryHumanSkirmish();
         }
 
         /// <summary>Asigna un edificio (Health) para reparar. Null = dejar de reparar.</summary>

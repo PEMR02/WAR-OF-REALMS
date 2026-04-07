@@ -1,5 +1,6 @@
 using UnityEngine;
 using Project.Gameplay;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Units
 {
@@ -12,6 +13,8 @@ namespace Project.Gameplay.Units
         [Range(0f, 0.5f)] public float highlightIntensity = 0.2f;
         [Tooltip("Tinte de color al seleccionar (ej. cyan para que se note el outline).")]
         public Color selectionTint = new Color(0.15f, 0.35f, 0.5f, 0f);
+        [Tooltip("Tinte al seleccionar unidades enemigas (rojo oscuro).")]
+        public Color enemySelectionTint = new Color(0.38f, 0.06f, 0.05f, 0f);
 
         private Color[] _baseColors;
         private SelectableOutline _outline;
@@ -64,6 +67,8 @@ namespace Project.Gameplay.Units
 
         public void SetSelected(bool selected)
         {
+            bool hostile = FactionMember.IsHostileToPlayer(gameObject);
+            Color tint = hostile ? enemySelectionTint : selectionTint;
             for (int i = 0; i < renderers.Length; i++)
             {
                 var r = renderers[i];
@@ -72,7 +77,7 @@ namespace Project.Gameplay.Units
                 var baseCol = _baseColors[i];
                 if (selected)
                 {
-                    Color c = baseCol + new Color(highlightIntensity, highlightIntensity, highlightIntensity, 0f) + selectionTint;
+                    Color c = baseCol + new Color(highlightIntensity, highlightIntensity, highlightIntensity, 0f) + tint;
                     r.material.color = new Color(Mathf.Clamp01(c.r), Mathf.Clamp01(c.g), Mathf.Clamp01(c.b), baseCol.a);
                 }
                 else

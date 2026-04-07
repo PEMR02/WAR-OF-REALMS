@@ -9473,6 +9473,7 @@ GameObject:
   - component: {fileID: 6800205668216886950}
   - component: {fileID: 3442593718931192512}
   - component: {fileID: -3774900923939249368}
+  - component: {fileID: 4886661011015318526}
   m_Layer: 8
   m_Name: PF_Swordman
   m_TagString: Untagged
@@ -9655,6 +9656,11 @@ MonoBehaviour:
   canSwim: 0
   snapToNavMeshRadius: 50
   minStoppingDistance: 0.4
+  pathSmoothEpsilon: 0.55
+  enableStuckRepath: 1
+  stuckRepathSeconds: 2.25
+  stuckMinMoveDistance: 0.22
+  repathCooldownSeconds: 1.35
   debugLogs: 0
 --- !u!114 &6649447479825875485
 MonoBehaviour:
@@ -9735,6 +9741,27 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitVisualGroundOffset
   visualOffsetDown: 0.8
+--- !u!114 &4886661011015318526
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 155132}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e3634e6c65556c84e9e10d005ac3a81e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitStatsRuntime
+  definitionInEditor: {fileID: 11400000, guid: e5afedc769a97444b8e2c7f2c583287a, type: 2}
+  _baseMaxHP: 100
+  _baseAttack: 10
+  _baseAttackRange: 1.5
+  _baseAttackIntervalSec: 1.3
+  _baseMoveSpeed: 3.8
+  _baseArmor: 0
+  _baseMagicResist: 0
+  _baseBonusDamageVsCavalry: 0
 --- !u!1 &156456
 GameObject:
   m_ObjectHideFlags: 0

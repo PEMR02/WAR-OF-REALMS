@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Map.Generator;
+using Project.Gameplay.Map.Generation;
 
 namespace Project.Gameplay.Map
 {
@@ -13,9 +14,13 @@ namespace Project.Gameplay.Map
     public static class MapResourcePlacer
     {
         /// <summary>Coloca prefabs de recursos según CellData.resourceType del Generador Definitivo. Usar cuando useDefinitiveGenerator = true.</summary>
-        public static void PlaceFromDefinitiveGrid(GridSystem definitiveGrid, RTSMapGenerator gen)
+        /// <param name="townCenterWorldPositionsExclude">Opcional: no colocar recursos en XZ dentro de <paramref name="minDistanceFromTownCenters"/> de estos puntos (evita árboles dentro del centro urbano).</param>
+        public static void PlaceFromDefinitiveGrid(GridSystem definitiveGrid, RTSMapGenerator gen, ResourceRuntimeSettings resources, IList<Vector3> townCenterWorldPositionsExclude = null, float minDistanceFromTownCenters = 0f)
         {
             if (definitiveGrid == null || gen == null) return;
+            ResourceRuntimeSettings res = resources ?? ResourceRuntimeSettings.FromLegacySceneGenerator(gen);
+            if (resources == null)
+                Debug.LogWarning("[MapGen] PlaceFromDefinitiveGrid: resources null — fallback legacy desde RTSMapGenerator (deprecated).");
             var mapGrid = gen.GetGrid();
             if (mapGrid == null || !mapGrid.IsReady) return;
 
@@ -26,22 +31,30 @@ namespace Project.Gameplay.Map
                 {
                     ref var cell = ref definitiveGrid.GetCell(x, z);
                     if (cell.resourceType == ResourceType.None) continue;
-                    if (!mapGrid.IsCellFree(new Vector2Int(x, z))) continue;
+                    if (cell.resourceType == ResourceType.Wood &&
+                        (cell.type == CellType.Water || cell.type == CellType.River))
+                        continue;
+                    var placeCell = new Vector2Int(x, z);
+                    if (!mapGrid.IsCellFree(placeCell)) continue;
+                    if (cell.resourceType == ResourceType.Wood && mapGrid.IsWater(placeCell)) continue;
 
                     Vector3 world = definitiveGrid.CellToWorldCenter(x, z);
                     world.y = gen.terrain != null ? gen.SampleHeight(world) : world.y;
-                    GameObject prefab = GetPrefabForResourceType(cell.resourceType, gen);
+                    if (minDistanceFromTownCenters > 0.01f && IsWithinMinDistanceXZ(world, townCenterWorldPositionsExclude, minDistanceFromTownCenters))
+                        continue;
+                    GameObject prefab = GetPrefabForResourceType(cell.resourceType, gen, res);
                     if (prefab == null) continue;
                     ResourceKind kind = ToResourceKind(cell.resourceType);
-                    Quaternion rot = GetPlacementRotation(kind, prefab, gen);
-                    if (kind != ResourceKind.Food && gen.randomRotationPerResource && gen.GetRng() != null)
+                    Quaternion rot = GetPlacementRotation(kind, prefab, gen, res);
+                    if (kind != ResourceKind.Food && res.randomRotationPerResource && gen.GetRng() != null)
                         rot = rot * Quaternion.Euler(0f, (float)(gen.GetRng().NextDouble() * 360.0), 0f);
                     GameObject go = UnityEngine.Object.Instantiate(prefab, world, rot);
+                    NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
                     if (!go.activeSelf) go.SetActive(true);
                     SnapResourceBottomToTerrain(go, gen);
-                    EnsureResourceCollectable(go, kind, gen);
+                    EnsureResourceCollectable(go, kind, gen, res);
                     go.name = $"{cell.resourceType}_{x}_{z}";
-                    mapGrid.SetOccupied(new Vector2Int(x, z), true);
+                    mapGrid.SetOccupied(placeCell, true);
                     switch (cell.resourceType) { case ResourceType.Wood: wood++; break; case ResourceType.Stone: stone++; break; case ResourceType.Gold: gold++; break; case ResourceType.Food: food++; break; }
                 }
             }
@@ -53,41 +66,57 @@ namespace Project.Gameplay.Map
         /// Coloca SOLO recursos globales (fuera de los Town Centers) usando los rangos globalTrees/globalStone/globalGold del RTSMapGenerator.
         /// Útil cuando el mapa es definitivo pero quieres mantener dispersión global "legacy" (sin duplicar recursos de spawn).
         /// </summary>
-        public static void PlaceGlobalOnly(IList<Vector3> spawns, RTSMapGenerator gen)
+        public static void PlaceGlobalOnly(IList<Vector3> spawns, RTSMapGenerator gen, ResourceRuntimeSettings resources)
         {
             if (gen == null) return;
+            ResourceRuntimeSettings res = resources ?? ResourceRuntimeSettings.FromLegacySceneGenerator(gen);
+            if (resources == null)
+                Debug.LogWarning("[MapGen] PlaceGlobalOnly: resources null — fallback legacy (deprecated).");
             var grid = gen.GetGrid();
             if (grid == null || !grid.IsReady) return;
             if (spawns == null) spawns = Array.Empty<Vector3>();
-            PlaceGlobalResources(spawns, gen);
+            PlaceGlobalResources(spawns, gen, res);
         }
 
-        static GameObject GetPrefabForResourceType(ResourceType type, RTSMapGenerator gen)
+        static bool IsWithinMinDistanceXZ(Vector3 world, IList<Vector3> centers, float minDist)
+        {
+            if (centers == null || centers.Count == 0 || minDist <= 0f) return false;
+            float d2 = minDist * minDist;
+            for (int i = 0; i < centers.Count; i++)
+            {
+                float dx = world.x - centers[i].x;
+                float dz = world.z - centers[i].z;
+                if (dx * dx + dz * dz < d2) return true;
+            }
+            return false;
+        }
+
+        static GameObject GetPrefabForResourceType(ResourceType type, RTSMapGenerator gen, ResourceRuntimeSettings s)
         {
             switch (type)
             {
-                case ResourceType.Wood: return GetPrefabForPlacement(gen.treePrefab, gen.treePrefabVariants, gen);
-                case ResourceType.Stone: return GetPrefabForPlacement(gen.stonePrefab, gen.stonePrefabVariants, gen);
-                case ResourceType.Gold: return GetPrefabForPlacement(gen.goldPrefab, gen.goldPrefabVariants, gen);
-                case ResourceType.Food: return GetPrefabForFood(gen);
+                case ResourceType.Wood: return GetPrefabForPlacement(s.treePrefab, s.treePrefabVariants, gen);
+                case ResourceType.Stone: return GetPrefabForPlacement(s.stonePrefab, s.stonePrefabVariants, gen);
+                case ResourceType.Gold: return GetPrefabForPlacement(s.goldPrefab, s.goldPrefabVariants, gen);
+                case ResourceType.Food: return GetPrefabForFood(gen, s);
                 default: return null;
             }
         }
 
-        /// <summary>Para Food: si hay berry y animal, alternar al azar; si no, usar el que exista.</summary>
-        static GameObject GetPrefabForFood(RTSMapGenerator gen)
+        /// <summary>Para Food: si hay bayas y animales, sesgo ~65% a bayas (incl. variantes como Tree_06); si no, el que exista.</summary>
+        static GameObject GetPrefabForFood(RTSMapGenerator gen, ResourceRuntimeSettings s)
         {
-            bool hasBerry = gen.berryPrefab != null || (gen.berryPrefabVariants != null && gen.berryPrefabVariants.Length > 0);
-            bool hasAnimal = gen.animalPrefab != null || (gen.animalPrefabVariants != null && gen.animalPrefabVariants.Length > 0);
+            bool hasBerry = s.berryPrefab != null || (s.berryPrefabVariants != null && s.berryPrefabVariants.Length > 0);
+            bool hasAnimal = s.animalPrefab != null || (s.animalPrefabVariants != null && s.animalPrefabVariants.Length > 0);
             var rng = gen.GetRng();
             if (hasBerry && hasAnimal)
             {
-                if (rng != null && rng.Next(2) == 0)
-                    return GetPrefabForPlacement(gen.animalPrefab, gen.animalPrefabVariants, gen);
-                return GetPrefabForPlacement(gen.berryPrefab, gen.berryPrefabVariants, gen);
+                if (rng == null || rng.Next(100) < 65)
+                    return GetPrefabForPlacement(s.berryPrefab, s.berryPrefabVariants, gen);
+                return GetPrefabForPlacement(s.animalPrefab, s.animalPrefabVariants, gen);
             }
-            if (hasAnimal) return GetPrefabForPlacement(gen.animalPrefab, gen.animalPrefabVariants, gen);
-            return GetPrefabForPlacement(gen.berryPrefab, gen.berryPrefabVariants, gen);
+            if (hasAnimal) return GetPrefabForPlacement(s.animalPrefab, s.animalPrefabVariants, gen);
+            return GetPrefabForPlacement(s.berryPrefab, s.berryPrefabVariants, gen);
         }
 
         static ResourceKind ToResourceKind(ResourceType type)
@@ -102,17 +131,18 @@ namespace Project.Gameplay.Map
             }
         }
 
-        public static void Place(IList<Vector3> spawns, RTSMapGenerator gen)
+        public static void Place(IList<Vector3> spawns, RTSMapGenerator gen, ResourceRuntimeSettings resources = null)
         {
             if (gen == null) return;
+            ResourceRuntimeSettings res = resources ?? ResourceRuntimeSettings.FromLegacySceneGenerator(gen);
             var grid = gen.GetGrid();
             if (grid == null || !grid.IsReady) return;
 
-            PlaceResourcesPerPlayer(spawns, gen);
-            PlaceGlobalResources(spawns, gen);
+            PlaceResourcesPerPlayer(spawns, gen, res);
+            PlaceGlobalResources(spawns, gen, res);
         }
 
-        static void PlaceResourcesPerPlayer(IList<Vector3> spawns, RTSMapGenerator gen)
+        static void PlaceResourcesPerPlayer(IList<Vector3> spawns, RTSMapGenerator gen, ResourceRuntimeSettings s)
         {
             var grid = gen.GetGrid();
             var rng = gen.GetRng();
@@ -120,115 +150,204 @@ namespace Project.Gameplay.Map
 
             Debug.Log($"PlaceResourcesPerPlayer: {spawns.Count} jugadores");
 
-            if (gen.treePrefab == null)
+            if (s.treePrefab == null)
                 Debug.LogWarning("RTS Map Generator: treePrefab no asignado.");
-            if (gen.berryPrefab == null) Debug.LogWarning("RTS Map Generator: berryPrefab no asignado.");
-            if (gen.goldPrefab == null) Debug.LogWarning("RTS Map Generator: goldPrefab no asignado.");
-            if (!HasAnyStonePrefab(gen)) Debug.LogWarning("RTS Map Generator: stonePrefab (o stonePrefabVariants) no asignado.");
-            if (gen.animalPrefab == null) Debug.LogWarning("RTS Map Generator: animalPrefab no asignado.");
+            if (s.berryPrefab == null) Debug.LogWarning("RTS Map Generator: berryPrefab no asignado.");
+            if (s.goldPrefab == null) Debug.LogWarning("RTS Map Generator: goldPrefab no asignado.");
+            if (!HasAnyStonePrefab(s)) Debug.LogWarning("RTS Map Generator: stonePrefab (o stonePrefabVariants) no asignado.");
+            if (s.animalPrefab == null) Debug.LogWarning("RTS Map Generator: animalPrefab no asignado.");
 
             for (int i = 0; i < spawns.Count; i++)
             {
                 int attempts = 0;
-                while (attempts < gen.maxResourceRetries)
+                while (attempts < s.maxResourceRetries)
                 {
                     attempts++;
                     var stats = new PlayerResourcesStats();
                     var spawned = new List<GameObject>();
                     var occupiedCells = new List<Vector2Int>();
-                    bool ok = PlaceResourcesForSpawn(spawns[i], stats, spawned, occupiedCells, gen);
-                    bool fair = stats.WoodTrees >= gen.minWoodTrees &&
-                        stats.GoldNodes >= gen.minGoldNodes &&
-                        stats.StoneNodes >= gen.minStoneNodes &&
-                        stats.FoodValue >= gen.minFoodValue;
+                    bool ok = PlaceResourcesForSpawn(spawns[i], stats, spawned, occupiedCells, gen, s);
+                    bool fair = stats.WoodTrees >= s.minWoodTrees &&
+                        stats.GoldNodes >= s.minGoldNodes &&
+                        stats.StoneNodes >= s.minStoneNodes &&
+                        stats.FoodValue >= s.minFoodValue;
 
                     if (ok)
                     {
                         if (fair)
                             Debug.Log($"Player {i + 1} recursos: Wood={stats.WoodTrees}, Gold={stats.GoldNodes}, Stone={stats.StoneNodes}, Food={stats.FoodValue}, Total={spawned.Count}");
                         else
-                            Debug.LogWarning($"Player {i + 1}: recursos colocados pero por debajo del mínimo deseado (Wood={stats.WoodTrees}/{gen.minWoodTrees}).");
+                            Debug.LogWarning($"Player {i + 1}: recursos colocados pero por debajo del mínimo deseado (Wood={stats.WoodTrees}/{s.minWoodTrees}).");
                         break;
                     }
-                    for (int s = 0; s < spawned.Count; s++)
-                        if (spawned[s] != null) UnityEngine.Object.Destroy(spawned[s]);
+                    for (int si = 0; si < spawned.Count; si++)
+                        if (spawned[si] != null) UnityEngine.Object.Destroy(spawned[si]);
                     for (int c = 0; c < occupiedCells.Count; c++)
                         grid.SetOccupied(occupiedCells[c], false);
-                    if (attempts == gen.maxResourceRetries)
-                        Debug.LogWarning($"Player {i + 1}: No se pudieron colocar recursos después de {gen.maxResourceRetries} intentos.");
+                    if (attempts == s.maxResourceRetries)
+                        Debug.LogWarning($"Player {i + 1}: No se pudieron colocar recursos después de {s.maxResourceRetries} intentos.");
                 }
             }
         }
 
-        static void PlaceGlobalResources(IList<Vector3> spawns, RTSMapGenerator gen)
+        static void PlaceGlobalResources(IList<Vector3> spawns, RTSMapGenerator gen, ResourceRuntimeSettings s)
         {
             var grid = gen.GetGrid();
             var rng = gen.GetRng();
             if (grid == null || rng == null) return;
-            if (!HasAnyTreePrefab(gen) && !HasAnyGoldPrefab(gen) && !HasAnyStonePrefab(gen) && !HasAnyAnimalPrefab(gen)) return;
+            if (!HasAnyTreePrefab(s) && !HasAnyGoldPrefab(s) && !HasAnyStonePrefab(s) && !HasAnyAnimalPrefab(s)) return;
 
-            int treesTarget = rng.Next(gen.globalTrees.x, gen.globalTrees.y + 1);
-            int stoneTarget = rng.Next(gen.globalStone.x, gen.globalStone.y + 1);
-            int goldTarget = rng.Next(gen.globalGold.x, gen.globalGold.y + 1);
-            int animalsTarget = rng.Next(gen.globalAnimals.x, gen.globalAnimals.y + 1);
+            int treesTarget = rng.Next(s.globalTrees.x, s.globalTrees.y + 1);
+            int stoneTarget = rng.Next(s.globalStone.x, s.globalStone.y + 1);
+            int goldTarget = rng.Next(s.globalGold.x, s.globalGold.y + 1);
+            int animalsTarget = rng.Next(s.globalAnimals.x, s.globalAnimals.y + 1);
             int treesPlaced = 0, stonePlaced = 0, goldPlaced = 0, animalsPlaced = 0;
 
             // Árboles: con clustering se agrupan en bosques densos + resto dispersos
-            if (HasAnyTreePrefab(gen) && treesTarget > 0)
+            if (HasAnyTreePrefab(s) && treesTarget > 0)
             {
-                if (gen.forestClustering && gen.clusterMaxSize > 0 && gen.clusterMinSize < gen.clusterMaxSize)
+                if (s.forestClustering && s.clusterMaxSize > 0 && s.clusterMinSize < s.clusterMaxSize)
                 {
-                    treesPlaced = PlaceGlobalTreesWithClustering(spawns, treesTarget, gen);
+                    treesPlaced = PlaceGlobalTreesWithClustering(spawns, treesTarget, gen, s);
                 }
                 else
                 {
-                    treesPlaced = PlaceGlobalTreesScattered(spawns, treesTarget, gen);
+                    treesPlaced = PlaceGlobalTreesScattered(spawns, treesTarget, gen, s);
                 }
             }
 
-            // Piedra, oro y animales: dispersos
-            int maxAttempts = (stoneTarget + goldTarget + animalsTarget) * 25;
+            // Piedra y oro: manchas (clusters); animales: dispersos
+            if (HasAnyStonePrefab(s) && stoneTarget > 0)
+                stonePlaced = PlaceGlobalMineralClustered(spawns, stoneTarget, gen, s, ResourceKind.Stone);
+            if (HasAnyGoldPrefab(s) && goldTarget > 0)
+                goldPlaced = PlaceGlobalMineralClustered(spawns, goldTarget, gen, s, ResourceKind.Gold);
+
+            int maxAttempts = animalsTarget * 35;
             int attempts = 0;
-            while ((stonePlaced < stoneTarget || goldPlaced < goldTarget || animalsPlaced < animalsTarget) && attempts < maxAttempts)
+            while (animalsPlaced < animalsTarget && attempts < maxAttempts)
             {
                 attempts++;
                 Vector2Int cell = new Vector2Int(rng.Next(0, grid.width), rng.Next(0, grid.height));
                 if (!grid.IsCellFree(cell)) continue;
                 Vector3 world = grid.CellToWorld(cell);
-                if (IsWithinExcludeRadius(world, spawns, gen.globalExcludeRadius)) continue;
-
-                if (stonePlaced < stoneTarget && GetRandomStonePrefab(gen) != null && TryPlaceSingleGlobal(GetRandomStonePrefab(gen), cell, ResourceKind.Stone, gen))
-                { stonePlaced++; continue; }
-                if (goldPlaced < goldTarget && GetRandomGoldPrefab(gen) != null && TryPlaceSingleGlobal(GetRandomGoldPrefab(gen), cell, ResourceKind.Gold, gen))
-                { goldPlaced++; continue; }
-                if (animalsPlaced < animalsTarget && GetRandomAnimalPrefab(gen) != null && TryPlaceSingleGlobal(GetRandomAnimalPrefab(gen), cell, ResourceKind.Food, gen))
-                { animalsPlaced++; continue; }
+                if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius)) continue;
+                if (GetRandomAnimalPrefab(s, gen) != null && TryPlaceSingleGlobal(GetRandomAnimalPrefab(s, gen), cell, ResourceKind.Food, gen, s))
+                    animalsPlaced++;
             }
             Debug.Log($"Recursos en el mapa: árboles={treesPlaced}, piedra={stonePlaced}, oro={goldPlaced}, animales={animalsPlaced}");
         }
 
+        /// <summary>Piedra u oro global en vetas/filones compactos + remate disperso si hace falta.</summary>
+        static int PlaceGlobalMineralClustered(IList<Vector3> spawns, int target, RTSMapGenerator gen, ResourceRuntimeSettings s, ResourceKind kind)
+        {
+            if (target <= 0 || gen == null) return 0;
+            if (kind != ResourceKind.Stone && kind != ResourceKind.Gold) return 0;
+            bool stone = kind == ResourceKind.Stone;
+            if (stone && !HasAnyStonePrefab(s)) return 0;
+            if (!stone && !HasAnyGoldPrefab(s)) return 0;
+
+            var grid = gen.GetGrid();
+            var rng = gen.GetRng();
+
+            float frac = s.globalStoneGoldClusterFraction;
+            if (frac < 0.4f || frac > 1f) frac = 0.82f;
+            int clusterBudget = Mathf.RoundToInt(target * frac);
+            int placed = 0;
+
+            float radius = Mathf.Clamp(s.globalMineralClusterRadiusCells, 1.2f, 10f);
+            int minK = Mathf.Max(2, s.globalMineralClusterSize.x);
+            int maxK = Mathf.Max(minK, s.globalMineralClusterSize.y);
+            int maxDeposits = Mathf.Clamp(Mathf.Max(6, target / 2), 4, 64);
+
+            for (int d = 0; d < maxDeposits && clusterBudget > 0 && placed < target; d++)
+            {
+                int clusterSize = rng.Next(minK, maxK + 1);
+                clusterSize = Mathf.Min(clusterSize, clusterBudget, target - placed);
+                if (clusterSize < 1) break;
+
+                if (!TryFindClusterCenterPass(spawns, gen, s, filterGrass: false, maxTries: 160, out Vector2Int centerCell))
+                    break;
+
+                int localPlaced = 0;
+                int innerAttempts = 0;
+                int innerMax = Mathf.Max(clusterSize * 24, 48);
+                while (localPlaced < clusterSize && innerAttempts < innerMax && placed < target)
+                {
+                    innerAttempts++;
+                    float angle = (float)(rng.NextDouble() * 2.0 * Math.PI);
+                    float dist = (float)(rng.NextDouble() * radius);
+                    int dx = Mathf.RoundToInt(Mathf.Cos(angle) * dist);
+                    int dz = Mathf.RoundToInt(Mathf.Sin(angle) * dist);
+                    Vector2Int cell = new Vector2Int(centerCell.x + dx, centerCell.y + dz);
+                    if (cell.x < 0 || cell.x >= grid.width || cell.y < 0 || cell.y >= grid.height) continue;
+                    if (!grid.IsCellFree(cell)) continue;
+                    Vector3 w = grid.CellToWorld(cell);
+                    if (IsWithinExcludeRadius(w, spawns, s.globalExcludeRadius)) continue;
+
+                    GameObject prefab = stone ? GetRandomStonePrefab(s, gen) : GetRandomGoldPrefab(s, gen);
+                    if (prefab != null && TryPlaceSingleGlobal(prefab, cell, kind, gen, s))
+                    {
+                        placed++;
+                        localPlaced++;
+                        clusterBudget--;
+                    }
+                }
+            }
+
+            int scatterNeed = target - placed;
+            if (scatterNeed > 0)
+                placed += PlaceGlobalMineralScattered(spawns, scatterNeed, gen, s, kind);
+            return placed;
+        }
+
+        static int PlaceGlobalMineralScattered(IList<Vector3> spawns, int need, RTSMapGenerator gen, ResourceRuntimeSettings s, ResourceKind kind)
+        {
+            if (need <= 0) return 0;
+            var grid = gen.GetGrid();
+            var rng = gen.GetRng();
+            int placed = 0;
+            int attempts = 0;
+            int maxAttempts = Mathf.Max(need * 40, 80);
+            bool stone = kind == ResourceKind.Stone;
+            while (placed < need && attempts < maxAttempts)
+            {
+                attempts++;
+                Vector2Int cell = new Vector2Int(rng.Next(0, grid.width), rng.Next(0, grid.height));
+                if (!grid.IsCellFree(cell)) continue;
+                Vector3 world = grid.CellToWorld(cell);
+                if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius)) continue;
+                GameObject prefab = stone ? GetRandomStonePrefab(s, gen) : GetRandomGoldPrefab(s, gen);
+                if (prefab != null && TryPlaceSingleGlobal(prefab, cell, kind, gen, s))
+                    placed++;
+            }
+            return placed;
+        }
+
         /// <summary>Coloca árboles globales en bosques (clusters) densos y el resto dispersos.</summary>
-        static int PlaceGlobalTreesWithClustering(IList<Vector3> spawns, int treesTarget, RTSMapGenerator gen)
+        static int PlaceGlobalTreesWithClustering(IList<Vector3> spawns, int treesTarget, RTSMapGenerator gen, ResourceRuntimeSettings s)
         {
             var grid = gen.GetGrid();
             var rng = gen.GetRng();
             int placed = 0;
-            int inClusters = (int)(treesTarget * 0.75f); // 75% en bosques, resto dispersos
+            float clusterFrac = s.globalTreesClusterFraction >= 0f && s.globalTreesClusterFraction <= 1f
+                ? s.globalTreesClusterFraction
+                : 0.75f;
+            int inClusters = Mathf.RoundToInt(treesTarget * clusterFrac);
 
             // Radio del cluster en celdas: alta densidad = radio pequeño (árboles muy juntos), baja = radio mayor
-            float clusterRadiusCells = Mathf.Lerp(6f, 2.5f, gen.clusterDensity);
-            int minSize = Mathf.Clamp(gen.clusterMinSize, 2, 200);
-            int maxSize = Mathf.Clamp(gen.clusterMaxSize, minSize, 200);
+            float clusterRadiusCells = Mathf.Lerp(6f, 2.5f, s.clusterDensity);
+            int minSize = Mathf.Clamp(s.clusterMinSize, 2, 200);
+            int maxSize = Mathf.Clamp(s.clusterMaxSize, minSize, 200);
 
             int clusterBudget = inClusters;
-            int maxClusters = 20;
+            int maxClusters = Mathf.Clamp(Mathf.Max(20, treesTarget / 30), 16, 56);
             for (int c = 0; c < maxClusters && clusterBudget > 0; c++)
             {
                 int clusterSize = rng.Next(minSize, maxSize + 1);
                 clusterSize = Mathf.Min(clusterSize, clusterBudget);
                 if (clusterSize < 2) break;
 
-                if (!TryFindClusterCenter(spawns, gen, out Vector2Int centerCell))
+                if (!TryFindClusterCenter(spawns, gen, s, out Vector2Int centerCell))
                     break;
 
                 for (int t = 0; t < clusterSize; t++)
@@ -240,11 +359,13 @@ namespace Project.Gameplay.Map
                     Vector2Int cell = new Vector2Int(centerCell.x + dx, centerCell.y + dz);
                     if (cell.x < 0 || cell.x >= grid.width || cell.y < 0 || cell.y >= grid.height) continue;
                     if (!grid.IsCellFree(cell)) continue;
+                    if (grid.IsWater(cell)) continue;
                     Vector3 w = grid.CellToWorld(new Vector2Int(cell.x, cell.y));
-                    if (IsWithinExcludeRadius(w, spawns, gen.globalExcludeRadius)) continue;
+                    if (IsWithinExcludeRadius(w, spawns, s.globalExcludeRadius)) continue;
+                    if (!IsWorldOkForGlobalTree(gen, s, w)) continue;
 
-                    GameObject prefab = GetRandomTreePrefab(gen);
-                    if (prefab != null && TryPlaceSingleGlobal(prefab, cell, ResourceKind.Wood, gen))
+                    GameObject prefab = GetRandomTreePrefab(s, gen);
+                    if (prefab != null && TryPlaceSingleGlobal(prefab, cell, ResourceKind.Wood, gen, s))
                     {
                         placed++;
                         clusterBudget--;
@@ -255,20 +376,34 @@ namespace Project.Gameplay.Map
             // Resto dispersos (hasta completar treesTarget)
             int remaining = treesTarget - placed;
             if (remaining > 0)
-                placed += PlaceGlobalTreesScattered(spawns, remaining, gen);
+                placed += PlaceGlobalTreesScattered(spawns, remaining, gen, s);
             return placed;
         }
 
-        static bool TryFindClusterCenter(IList<Vector3> spawns, RTSMapGenerator gen, out Vector2Int centerCell)
+        static bool TryFindClusterCenter(IList<Vector3> spawns, RTSMapGenerator gen, ResourceRuntimeSettings s, out Vector2Int centerCell)
+        {
+            if (TryFindClusterCenterPass(spawns, gen, s, filterGrass: s.preferGlobalTreesOnGrassAlphamap,
+                    maxTries: s.preferGlobalTreesOnGrassAlphamap ? 220 : 60, out centerCell))
+                return true;
+            if (s.preferGlobalTreesOnGrassAlphamap &&
+                TryFindClusterCenterPass(spawns, gen, s, filterGrass: false, maxTries: 100, out centerCell))
+                return true;
+            centerCell = Vector2Int.zero;
+            return false;
+        }
+
+        static bool TryFindClusterCenterPass(IList<Vector3> spawns, RTSMapGenerator gen, ResourceRuntimeSettings s, bool filterGrass, int maxTries, out Vector2Int centerCell)
         {
             var grid = gen.GetGrid();
             var rng = gen.GetRng();
-            for (int i = 0; i < 60; i++)
+            for (int i = 0; i < maxTries; i++)
             {
                 Vector2Int cell = new Vector2Int(rng.Next(0, grid.width), rng.Next(0, grid.height));
                 Vector3 world = grid.CellToWorld(cell);
                 if (!grid.IsCellFree(cell)) continue;
-                if (IsWithinExcludeRadius(world, spawns, gen.globalExcludeRadius)) continue;
+                if (grid.IsWater(cell)) continue;
+                if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius)) continue;
+                if (filterGrass && !IsWorldOkForGlobalTree(gen, s, world)) continue;
                 centerCell = cell;
                 return true;
             }
@@ -277,42 +412,92 @@ namespace Project.Gameplay.Map
         }
 
         /// <summary>Coloca árboles globales uno a uno en celdas aleatorias (sin clustering).</summary>
-        static int PlaceGlobalTreesScattered(IList<Vector3> spawns, int treesTarget, RTSMapGenerator gen)
+        static int PlaceGlobalTreesScattered(IList<Vector3> spawns, int treesTarget, RTSMapGenerator gen, ResourceRuntimeSettings s)
+        {
+            int maxAttempts = treesTarget * (s.preferGlobalTreesOnGrassAlphamap ? 40 : 25);
+            int placed = PlaceGlobalTreesScatteredInner(spawns, treesTarget, gen, s, maxAttempts, filterGrass: s.preferGlobalTreesOnGrassAlphamap);
+            if (s.preferGlobalTreesOnGrassAlphamap && placed < treesTarget)
+            {
+                int left = treesTarget - placed;
+                placed += PlaceGlobalTreesScatteredInner(spawns, left, gen, s, left * 35, filterGrass: false);
+            }
+            return placed;
+        }
+
+        static int PlaceGlobalTreesScatteredInner(IList<Vector3> spawns, int treesTarget, RTSMapGenerator gen, ResourceRuntimeSettings s, int maxAttempts, bool filterGrass)
         {
             var grid = gen.GetGrid();
             var rng = gen.GetRng();
             int treesPlaced = 0;
-            int maxAttempts = treesTarget * 25;
             int attempts = 0;
             while (treesPlaced < treesTarget && attempts < maxAttempts)
             {
                 attempts++;
                 Vector2Int cell = new Vector2Int(rng.Next(0, grid.width), rng.Next(0, grid.height));
                 if (!grid.IsCellFree(cell)) continue;
+                if (grid.IsWater(cell)) continue;
                 Vector3 world = grid.CellToWorld(cell);
-                if (IsWithinExcludeRadius(world, spawns, gen.globalExcludeRadius)) continue;
+                if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius)) continue;
+                if (filterGrass && !IsWorldOkForGlobalTree(gen, s, world)) continue;
 
-                if (GetRandomTreePrefab(gen) != null && TryPlaceSingleGlobal(GetRandomTreePrefab(gen), cell, ResourceKind.Wood, gen))
+                if (GetRandomTreePrefab(s, gen) != null && TryPlaceSingleGlobal(GetRandomTreePrefab(s, gen), cell, ResourceKind.Wood, gen, s))
                     treesPlaced++;
             }
             return treesPlaced;
         }
 
-        static bool PlaceResourcesForSpawn(Vector3 spawn, PlayerResourcesStats stats, List<GameObject> spawned, List<Vector2Int> occupied, RTSMapGenerator gen)
+        /// <summary>Capa [0] del Terrain = grass en RTSMapGenerator (orden grass, dirt, rock…).</summary>
+        static bool IsWorldOkForGlobalTree(RTSMapGenerator gen, ResourceRuntimeSettings s, Vector3 worldXZ)
         {
-            PlaceCluster(spawn, gen.ringNear, gen.berries, gen.berryPrefab, stats, spawned, occupied, ResourceKind.Food, gen, gen.berryPrefabVariants);
-            PlaceScatter(spawn, gen.ringNear, gen.animals, gen.animalPrefab, stats, spawned, occupied, ResourceKind.Food, gen, gen.animalPrefabVariants);
-            PlaceCluster(spawn, gen.ringNear, gen.nearTrees, gen.treePrefab, stats, spawned, occupied, ResourceKind.Wood, gen, gen.treePrefabVariants);
-            PlaceCluster(spawn, gen.ringMid, gen.midTrees, gen.treePrefab, stats, spawned, occupied, ResourceKind.Wood, gen, gen.treePrefabVariants);
-            PlaceCluster(spawn, gen.ringMid, gen.goldSafe, gen.goldPrefab, stats, spawned, occupied, ResourceKind.Gold, gen, gen.goldPrefabVariants);
-            PlaceCluster(spawn, gen.ringMid, gen.stoneSafe, gen.stonePrefab, stats, spawned, occupied, ResourceKind.Stone, gen, gen.stonePrefabVariants);
-            PlaceCluster(spawn, gen.ringFar, gen.goldFar, gen.goldPrefab, stats, spawned, occupied, ResourceKind.Gold, gen, gen.goldPrefabVariants);
+            if (gen == null)
+                return true;
+            var mg = gen.GetGrid();
+            if (mg != null && mg.IsReady)
+            {
+                Vector2Int c = mg.WorldToCell(gen.SnapToGrid(worldXZ));
+                if (mg.IsWater(c)) return false;
+            }
+            if (!s.preferGlobalTreesOnGrassAlphamap)
+                return true;
+            Terrain t = gen.terrain;
+            if (t == null || t.terrainData == null)
+                return true;
+            TerrainData td = t.terrainData;
+            if (td.alphamapWidth < 1 || td.alphamapHeight < 1 || td.alphamapLayers < 1)
+                return true;
+
+            Vector3 local = worldXZ - t.transform.position;
+            float nx = local.x / td.size.x;
+            float nz = local.z / td.size.z;
+            if (nx < 0f || nx > 1f || nz < 0f || nz > 1f)
+                return false;
+            int ax = Mathf.Clamp((int)(nx * td.alphamapWidth), 0, td.alphamapWidth - 1);
+            int az = Mathf.Clamp((int)(nz * td.alphamapHeight), 0, td.alphamapHeight - 1);
+            float[,,] mix = td.GetAlphamaps(ax, az, 1, 1);
+            float grassW = mix[0, 0, 0];
+            for (int i = 1; i < td.alphamapLayers; i++)
+            {
+                if (mix[0, 0, i] > grassW + 0.02f)
+                    return false;
+            }
+            return grassW >= 0.22f;
+        }
+
+        static bool PlaceResourcesForSpawn(Vector3 spawn, PlayerResourcesStats stats, List<GameObject> spawned, List<Vector2Int> occupied, RTSMapGenerator gen, ResourceRuntimeSettings s)
+        {
+            PlaceCluster(spawn, s.ringNear, s.berries, s.berryPrefab, stats, spawned, occupied, ResourceKind.Food, gen, s.berryPrefabVariants, s);
+            PlaceScatter(spawn, s.ringNear, s.animals, s.animalPrefab, stats, spawned, occupied, ResourceKind.Food, gen, s.animalPrefabVariants, s);
+            PlaceCluster(spawn, s.ringNear, s.nearTrees, s.treePrefab, stats, spawned, occupied, ResourceKind.Wood, gen, s.treePrefabVariants, s);
+            PlaceCluster(spawn, s.ringMid, s.midTrees, s.treePrefab, stats, spawned, occupied, ResourceKind.Wood, gen, s.treePrefabVariants, s);
+            PlaceCluster(spawn, s.ringMid, s.goldSafe, s.goldPrefab, stats, spawned, occupied, ResourceKind.Gold, gen, s.goldPrefabVariants, s);
+            PlaceCluster(spawn, s.ringMid, s.stoneSafe, s.stonePrefab, stats, spawned, occupied, ResourceKind.Stone, gen, s.stonePrefabVariants, s);
+            PlaceCluster(spawn, s.ringFar, s.goldFar, s.goldPrefab, stats, spawned, occupied, ResourceKind.Gold, gen, s.goldPrefabVariants, s);
             return true;
         }
 
         static void PlaceCluster(Vector3 spawn, Vector2 ring, Vector2Int countRange, GameObject prefab,
             PlayerResourcesStats stats, List<GameObject> spawned, List<Vector2Int> occupied, ResourceKind kind,
-            RTSMapGenerator generator, GameObject[] prefabVariants = null)
+            RTSMapGenerator generator, GameObject[] prefabVariants, ResourceRuntimeSettings res)
         {
             GameObject p = GetPrefabForPlacement(prefab, prefabVariants, generator);
             if (p == null) { Debug.LogWarning($"PlaceCluster: prefab null para {kind}"); return; }
@@ -328,13 +513,13 @@ namespace Project.Gameplay.Map
                 float rx = (float)(rng.NextDouble() * 2.0 - 1.0) * 2.5f;
                 float rz = (float)(rng.NextDouble() * 2.0 - 1.0) * 2.5f;
                 Vector3 pos = clusterCenter + new Vector3(rx, 0f, rz);
-                TryPlaceSingle(pos, pPrefab, stats, spawned, occupied, kind, generator);
+                TryPlaceSingle(pos, pPrefab, stats, spawned, occupied, kind, generator, res);
             }
         }
 
         static void PlaceScatter(Vector3 spawn, Vector2 ring, Vector2Int countRange, GameObject prefab,
             PlayerResourcesStats stats, List<GameObject> spawned, List<Vector2Int> occupied, ResourceKind kind,
-            RTSMapGenerator generator, GameObject[] prefabVariants = null)
+            RTSMapGenerator generator, GameObject[] prefabVariants, ResourceRuntimeSettings res)
         {
             if (GetPrefabForPlacement(prefab, prefabVariants, generator) == null)
             { Debug.LogWarning($"PlaceScatter: prefab null para {kind}"); return; }
@@ -345,26 +530,28 @@ namespace Project.Gameplay.Map
                 if (!TryFindPointInRing(spawn, ring, generator, out Vector3 p)) continue;
                 GameObject pPrefab = GetPrefabForPlacement(prefab, prefabVariants, generator);
                 if (pPrefab == null) continue;
-                TryPlaceSingle(p, pPrefab, stats, spawned, occupied, kind, generator);
+                TryPlaceSingle(p, pPrefab, stats, spawned, occupied, kind, generator, res);
             }
         }
 
         static bool TryPlaceSingle(Vector3 world, GameObject prefab, PlayerResourcesStats stats,
-            List<GameObject> spawned, List<Vector2Int> occupied, ResourceKind kind, RTSMapGenerator generator)
+            List<GameObject> spawned, List<Vector2Int> occupied, ResourceKind kind, RTSMapGenerator generator, ResourceRuntimeSettings res)
         {
             var grid = generator.GetGrid();
             Vector3 snapped = generator.SnapToGrid(world);
             Vector2Int cell = grid.WorldToCell(snapped);
             if (!grid.IsCellFree(cell)) return false;
+            if (kind == ResourceKind.Wood && grid.IsWater(cell)) return false;
             Vector3 w = grid.CellToWorld(cell);
-            ApplyRandomOffsetInCell(ref w, generator);
+            ApplyRandomOffsetInCell(ref w, generator, res);
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
-            Quaternion rot = GetPlacementRotation(kind, prefab, generator);
-            rot = ApplyRandomRotation(rot, generator, kind);
+            Quaternion rot = GetPlacementRotation(kind, prefab, generator, res);
+            rot = ApplyRandomRotation(rot, generator, kind, res);
             GameObject go = UnityEngine.Object.Instantiate(prefab, w, rot);
+            NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
             SnapResourceBottomToTerrain(go, generator);
-            EnsureResourceCollectable(go, kind, generator);
+            EnsureResourceCollectable(go, kind, generator, res);
             go.name = $"{kind}_{spawned.Count}";
             spawned.Add(go);
             occupied.Add(cell);
@@ -373,19 +560,21 @@ namespace Project.Gameplay.Map
             return true;
         }
 
-        static bool TryPlaceSingleGlobal(GameObject prefab, Vector2Int cell, ResourceKind kind, RTSMapGenerator generator)
+        static bool TryPlaceSingleGlobal(GameObject prefab, Vector2Int cell, ResourceKind kind, RTSMapGenerator generator, ResourceRuntimeSettings res)
         {
             var grid = generator.GetGrid();
             if (!grid.IsCellFree(cell)) return false;
+            if (kind == ResourceKind.Wood && grid.IsWater(cell)) return false;
             Vector3 w = grid.CellToWorld(cell);
-            ApplyRandomOffsetInCell(ref w, generator);
+            ApplyRandomOffsetInCell(ref w, generator, res);
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
-            Quaternion rot = GetPlacementRotation(kind, prefab, generator);
-            rot = ApplyRandomRotation(rot, generator, kind);
+            Quaternion rot = GetPlacementRotation(kind, prefab, generator, res);
+            rot = ApplyRandomRotation(rot, generator, kind, res);
             GameObject go = UnityEngine.Object.Instantiate(prefab, w, rot);
+            NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
             SnapResourceBottomToTerrain(go, generator);
-            EnsureResourceCollectable(go, kind, generator);
+            EnsureResourceCollectable(go, kind, generator, res);
             go.name = $"Global_{kind}_{cell.x}_{cell.y}";
             grid.SetOccupied(cell, true);
             return true;
@@ -403,7 +592,7 @@ namespace Project.Gameplay.Map
                 Vector3 p = center + new Vector3(Mathf.Cos(angle * Mathf.Deg2Rad), 0f, Mathf.Sin(angle * Mathf.Deg2Rad)) * dist;
                 p = generator.SnapToGrid(p);
                 Vector2Int cell = grid.WorldToCell(p);
-                if (grid.IsCellFree(cell))
+                if (grid.IsCellFree(cell) && !grid.IsWater(cell))
                 {
                     result = p;
                     return true;
@@ -438,10 +627,10 @@ namespace Project.Gameplay.Map
             return basePrefab;
         }
 
-        static GameObject GetRandomTreePrefab(RTSMapGenerator g) => GetRandomPrefab(g.treePrefab, g.treePrefabVariants, g);
-        static GameObject GetRandomStonePrefab(RTSMapGenerator g) => GetRandomPrefab(g.stonePrefab, g.stonePrefabVariants, g);
-        static GameObject GetRandomGoldPrefab(RTSMapGenerator g) => GetRandomPrefab(g.goldPrefab, g.goldPrefabVariants, g);
-        static GameObject GetRandomAnimalPrefab(RTSMapGenerator g) => GetRandomPrefab(g.animalPrefab, g.animalPrefabVariants, g);
+        static GameObject GetRandomTreePrefab(ResourceRuntimeSettings s, RTSMapGenerator g) => GetRandomPrefab(s.treePrefab, s.treePrefabVariants, g);
+        static GameObject GetRandomStonePrefab(ResourceRuntimeSettings s, RTSMapGenerator g) => GetRandomPrefab(s.stonePrefab, s.stonePrefabVariants, g);
+        static GameObject GetRandomGoldPrefab(ResourceRuntimeSettings s, RTSMapGenerator g) => GetRandomPrefab(s.goldPrefab, s.goldPrefabVariants, g);
+        static GameObject GetRandomAnimalPrefab(ResourceRuntimeSettings s, RTSMapGenerator g) => GetRandomPrefab(s.animalPrefab, s.animalPrefabVariants, g);
 
         static GameObject GetRandomPrefab(GameObject basePrefab, GameObject[] variants, RTSMapGenerator generator)
         {
@@ -457,10 +646,10 @@ namespace Project.Gameplay.Map
             return basePrefab;
         }
 
-        static bool HasAnyTreePrefab(RTSMapGenerator g) => g.treePrefab != null || HasAnyIn(g.treePrefabVariants);
-        static bool HasAnyStonePrefab(RTSMapGenerator g) => g.stonePrefab != null || HasAnyIn(g.stonePrefabVariants);
-        static bool HasAnyGoldPrefab(RTSMapGenerator g) => g.goldPrefab != null || HasAnyIn(g.goldPrefabVariants);
-        static bool HasAnyAnimalPrefab(RTSMapGenerator g) => g.animalPrefab != null || HasAnyIn(g.animalPrefabVariants);
+        static bool HasAnyTreePrefab(ResourceRuntimeSettings s) => s.treePrefab != null || HasAnyIn(s.treePrefabVariants);
+        static bool HasAnyStonePrefab(ResourceRuntimeSettings s) => s.stonePrefab != null || HasAnyIn(s.stonePrefabVariants);
+        static bool HasAnyGoldPrefab(ResourceRuntimeSettings s) => s.goldPrefab != null || HasAnyIn(s.goldPrefabVariants);
+        static bool HasAnyAnimalPrefab(ResourceRuntimeSettings s) => s.animalPrefab != null || HasAnyIn(s.animalPrefabVariants);
         static bool HasAnyIn(GameObject[] arr)
         {
             if (arr == null) return false;
@@ -487,7 +676,7 @@ namespace Project.Gameplay.Map
             go.transform.position = go.transform.position + Vector3.up * delta;
         }
 
-        static void EnsureResourceCollectable(GameObject go, ResourceKind kind, RTSMapGenerator generator)
+        static void EnsureResourceCollectable(GameObject go, ResourceKind kind, RTSMapGenerator generator, ResourceRuntimeSettings res)
         {
             if (go == null) return;
             var node = go.GetComponent<ResourceNode>();
@@ -504,7 +693,7 @@ namespace Project.Gameplay.Map
                 node.kind = kind;
                 if (node.amount <= 0) node.amount = 300;
             }
-            if (go.GetComponent<Collider>() == null)
+            if (go.GetComponentInChildren<Collider>(true) == null)
             {
                 var cap = go.AddComponent<CapsuleCollider>();
                 cap.radius = 0.5f;
@@ -514,18 +703,81 @@ namespace Project.Gameplay.Map
             if (go.GetComponent<ResourceSelectable>() == null)
                 go.AddComponent<ResourceSelectable>();
 
-            EnsureResourceCastsShadows(go);
+            if (generator != null && res.forceResourceShadowCasting)
+                EnsureResourceCastsShadows(go);
 
-            string layerName = !string.IsNullOrEmpty(generator.resourceLayerName) ? generator.resourceLayerName : "Resource";
+            string layerName = !string.IsNullOrEmpty(res.resourceLayerName) ? res.resourceLayerName : "Resource";
             int resourceLayer = LayerMask.NameToLayer(layerName);
             if (resourceLayer < 0) resourceLayer = 11;
             SetLayerRecursively(go, resourceLayer);
-            if (kind == ResourceKind.Stone && generator.stoneMaterialOverride != null)
-                ApplyMaterialToRenderers(go, generator.stoneMaterialOverride);
-            if (kind == ResourceKind.Wood && generator.treeMaterialOverrides != null && generator.treeMaterialOverrides.Length > 0)
-                ApplyTreeMaterialOverrides(go, generator);
+            if (kind == ResourceKind.Stone && res.stoneMaterialOverride != null)
+                ApplyMaterialToRenderers(go, res.stoneMaterialOverride);
+            if (kind == ResourceKind.Wood && res.treeMaterialOverrides != null && res.treeMaterialOverrides.Length > 0)
+                ApplyTreeMaterialOverrides(go, generator, res);
             if (kind == ResourceKind.Wood && go.GetComponent<FadeableByCamera>() == null)
                 go.AddComponent<FadeableByCamera>();
+
+            EnsureRobustResourcePickCollider(go);
+        }
+
+        /// <summary>
+        /// Árboles con mesh en hijos y pivot en el suelo suelen dejar un Capsule en el raíz que no envuelve el follaje:
+        /// raycast/hover fallan. Ajusta o añade un <see cref="BoxCollider"/> en el raíz según bounds de renderers.
+        /// </summary>
+        static void EnsureRobustResourcePickCollider(GameObject go)
+        {
+            if (go == null) return;
+            var renderers = go.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0) return;
+
+            Bounds wb = default;
+            bool have = false;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                if (r == null || !r.enabled) continue;
+                if (!have) { wb = r.bounds; have = true; }
+                else wb.Encapsulate(r.bounds);
+            }
+            if (!have) return;
+
+            float pickQuality = 0f;
+            float bestVolume = 0f;
+            var allCols = go.GetComponentsInChildren<Collider>(true);
+            if (allCols != null)
+            {
+                for (int i = 0; i < allCols.Length; i++)
+                {
+                    var c = allCols[i];
+                    if (c == null || !c.enabled || c.isTrigger) continue;
+                    var s = c.bounds.size;
+                    float md = Mathf.Max(s.x, s.y, s.z);
+                    pickQuality = Mathf.Max(pickQuality, md);
+                    bestVolume = Mathf.Max(bestVolume, s.x * s.y * s.z);
+                }
+            }
+            // Umbral más bajo: colliders altos y delgados (follaje) tenían maxDim alto pero mal centrados para raycast desde arriba.
+            const float minGoodPick = 0.45f;
+            const float minVolume = 0.06f;
+            if (pickQuality >= minGoodPick && bestVolume >= minVolume) return;
+
+            var rootCols = go.GetComponents<Collider>();
+            for (int i = 0; i < rootCols.Length; i++)
+            {
+                if (rootCols[i] != null)
+                    UnityEngine.Object.Destroy(rootCols[i]);
+            }
+
+            var box = go.AddComponent<BoxCollider>();
+            Vector3 lossy = go.transform.lossyScale;
+            float sx = Mathf.Max(0.001f, Mathf.Abs(lossy.x));
+            float sy = Mathf.Max(0.001f, Mathf.Abs(lossy.y));
+            float sz = Mathf.Max(0.001f, Mathf.Abs(lossy.z));
+            box.center = go.transform.InverseTransformPoint(wb.center);
+            box.size = new Vector3(
+                Mathf.Max(0.55f, wb.size.x / sx),
+                Mathf.Max(0.85f, wb.size.y / sy),
+                Mathf.Max(0.55f, wb.size.z / sz));
         }
 
         /// <summary>Asegura que los recursos (árboles, animales, piedra, oro) proyecten sombras aunque el prefab tenga Off.</summary>
@@ -545,46 +797,46 @@ namespace Project.Gameplay.Map
         }
 
         /// <summary>Para árboles usa treePlacementRotation del generador; para el resto respeta la rotación del prefab (ej. ciervo con X=270 para que quede derecho).</summary>
-        static Quaternion GetPlacementRotation(ResourceKind kind, GameObject prefab, RTSMapGenerator generator)
+        static Quaternion GetPlacementRotation(ResourceKind kind, GameObject prefab, RTSMapGenerator generator, ResourceRuntimeSettings res)
         {
             if (kind == ResourceKind.Wood)
-                return Quaternion.Euler(generator.treePlacementRotation);
+                return Quaternion.Euler(res.treePlacementRotation);
             if (prefab != null)
                 return prefab.transform.rotation;
             return Quaternion.identity;
         }
 
         /// <summary>Añade rotación Y aleatoria solo para árboles/piedra/oro; los animales (Food) mantienen la orientación del prefab para no tumbarlos.</summary>
-        static Quaternion ApplyRandomRotation(Quaternion baseRot, RTSMapGenerator generator, ResourceKind kind)
+        static Quaternion ApplyRandomRotation(Quaternion baseRot, RTSMapGenerator generator, ResourceKind kind, ResourceRuntimeSettings res)
         {
             if (kind == ResourceKind.Food) return baseRot;
-            if (generator == null || !generator.randomRotationPerResource) return baseRot;
+            if (generator == null || !res.randomRotationPerResource) return baseRot;
             var rng = generator.GetRng();
             if (rng == null) return baseRot;
             float randomY = (float)(rng.NextDouble() * 360.0);
             return baseRot * Quaternion.Euler(0f, randomY, 0f);
         }
 
-        static void ApplyRandomOffsetInCell(ref Vector3 w, RTSMapGenerator generator)
+        static void ApplyRandomOffsetInCell(ref Vector3 w, RTSMapGenerator generator, ResourceRuntimeSettings res)
         {
-            if (generator == null || generator.cellPlacementRandomOffset <= 0.0001f) return;
+            if (generator == null || res.cellPlacementRandomOffset <= 0.0001f) return;
             var rng = generator.GetRng();
             var grid = generator.GetGrid();
             if (rng == null || grid == null) return;
-            float half = grid.cellSize * 0.5f * generator.cellPlacementRandomOffset;
+            float half = grid.cellSize * 0.5f * res.cellPlacementRandomOffset;
             w.x += (float)(rng.NextDouble() * 2.0 - 1.0) * half;
             w.z += (float)(rng.NextDouble() * 2.0 - 1.0) * half;
         }
 
-        static void ApplyTreeMaterialOverrides(GameObject go, RTSMapGenerator generator)
+        static void ApplyTreeMaterialOverrides(GameObject go, RTSMapGenerator generator, ResourceRuntimeSettings res)
         {
-            if (go == null || generator.treeMaterialOverrides == null || generator.treeMaterialOverrides.Length == 0) return;
+            if (go == null || res.treeMaterialOverrides == null || res.treeMaterialOverrides.Length == 0) return;
             var renderers = go.GetComponentsInChildren<MeshRenderer>(true);
             for (int i = 0; i < renderers.Length; i++)
             {
                 if (renderers[i] == null) continue;
-                int matIndex = GetTreeMaterialIndexForRenderer(renderers[i].gameObject, i, generator.treeMaterialOverrides.Length);
-                Material mat = generator.treeMaterialOverrides[matIndex];
+                int matIndex = GetTreeMaterialIndexForRenderer(renderers[i].gameObject, i, res.treeMaterialOverrides.Length);
+                Material mat = res.treeMaterialOverrides[matIndex];
                 if (mat != null) renderers[i].sharedMaterial = mat;
             }
         }

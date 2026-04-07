@@ -27,9 +27,7 @@ namespace Project.Gameplay.Buildings
             var result = new SampleResult { valid = false };
             if (terrain == null) return result;
 
-            float cellSize = MapGrid.Instance != null && MapGrid.Instance.IsReady
-                ? MapGrid.Instance.cellSize
-                : 2.5f;
+            float cellSize = MapGrid.GetCellSizeOrDefault();
 
             float wx = sizeInCells.x * cellSize;
             float wz = sizeInCells.y * cellSize;

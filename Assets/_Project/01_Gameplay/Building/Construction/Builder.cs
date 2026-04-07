@@ -103,7 +103,7 @@ namespace Project.Gameplay.Units
             Vector3 buildPoint = GetBuildSiteClosestPoint(_target, transform.position, this);
             Vector3 b = buildPoint; b.y = 0f;
             float dist = Vector3.Distance(a, b);
-            float cellSize = MapGrid.Instance != null && MapGrid.Instance.IsReady ? MapGrid.Instance.cellSize : 2.5f;
+            float cellSize = MapGrid.GetCellSizeOrDefault();
             // Muro: margen extra (2.5 celdas) para que si algo cruza (vaca, unidad) y tapa el waypoint, el aldeano pueda construir desde un poco más lejos y no quede un hoyo.
             float maxRange = _target.IsCompoundPathBuilding
                 ? (cellSize * 2.5f)
@@ -211,7 +211,7 @@ namespace Project.Gameplay.Units
             // Usar centro alineado a celdas para dirección y cálculo de borde (igual que OccupyCellsOnStart)
             Vector3 center = GetGridAlignedCenter(site);
             Vector3 onEdge = GetBuildSiteClosestPoint(site, fromPosition);
-            float cs = MapGrid.Instance != null && MapGrid.Instance.IsReady ? MapGrid.Instance.cellSize : 2.5f;
+            float cs = MapGrid.GetCellSizeOrDefault();
             // Offset de exactamente media celda: coloca el destino en el centro de la celda adyacente al edificio,
             // garantizando que A* recibe una celda libre y el waypoint final coincide con el destino calculado.
             float offset = cs * 0.5f;

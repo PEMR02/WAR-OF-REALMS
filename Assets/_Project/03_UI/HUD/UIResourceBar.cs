@@ -41,9 +41,9 @@ namespace Project.UI
             BindItemsFromHierarchyNames();
 
             if (player == null)
-                player = FindFirstObjectByType<PlayerResources>();
+                player = PlayerResources.FindPrimaryHumanSkirmish();
             if (populationManager == null)
-                populationManager = FindFirstObjectByType<PopulationManager>();
+                populationManager = PopulationManager.FindPrimaryHumanSkirmish();
 
             ApplyStaticItemPresentation();
         }

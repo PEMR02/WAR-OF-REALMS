@@ -28,7 +28,7 @@ namespace Project.UI
         void Awake()
         {
             if (placer == null) placer = FindFirstObjectByType<BuildingPlacer>();
-            if (owner == null) owner = FindFirstObjectByType<PlayerResources>();
+            if (owner == null) owner = PlayerResources.FindPrimaryHumanSkirmish();
 
             if (placer != null && placer.owner == null)
                 placer.owner = owner;

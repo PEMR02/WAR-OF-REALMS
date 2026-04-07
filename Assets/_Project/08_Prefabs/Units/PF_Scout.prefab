@@ -14963,6 +14963,7 @@ GameObject:
   - component: {fileID: 2112121880695218442}
   - component: {fileID: 4726237682410630291}
   - component: {fileID: 3112905940504259114}
+  - component: {fileID: -8898866779914879664}
   m_Layer: 8
   m_Name: PF_Scout
   m_TagString: Untagged
@@ -15153,6 +15154,11 @@ MonoBehaviour:
   canSwim: 0
   snapToNavMeshRadius: 50
   minStoppingDistance: 0.4
+  pathSmoothEpsilon: 0.55
+  enableStuckRepath: 1
+  stuckRepathSeconds: 2.25
+  stuckMinMoveDistance: 0.22
+  repathCooldownSeconds: 1.35
   debugLogs: 0
 --- !u!114 &3928177689452043622
 MonoBehaviour:
@@ -15233,6 +15239,27 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitVisualGroundOffset
   visualOffsetDown: 0.8
+--- !u!114 &-8898866779914879664
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 172856}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e3634e6c65556c84e9e10d005ac3a81e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitStatsRuntime
+  definitionInEditor: {fileID: 11400000, guid: dc24629c051530746a3044f3a2e08d7b, type: 2}
+  _baseMaxHP: 100
+  _baseAttack: 10
+  _baseAttackRange: 1.5
+  _baseAttackIntervalSec: 1.3
+  _baseMoveSpeed: 3.8
+  _baseArmor: 0
+  _baseMagicResist: 0
+  _baseBonusDamageVsCavalry: 0
 --- !u!1 &172872
 GameObject:
   m_ObjectHideFlags: 0

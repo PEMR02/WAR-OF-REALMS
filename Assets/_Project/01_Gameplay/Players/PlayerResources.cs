@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using Project.Gameplay.Resources;
 
@@ -5,6 +6,28 @@ namespace Project.Gameplay.Players
 {
     public class PlayerResources : MonoBehaviour
     {
+        /// <summary>
+        /// HUD y economía del jugador humano en escaramuza: el primer <see cref="PlayerResources"/> que no
+        /// viva en un Town Center de IA (<c>TownCenter_PlayerN</c>). Evita que <c>FindFirstObjectByType</c>
+        /// devuelva el banco de la IA cuando hay varias instancias.
+        /// </summary>
+        public static PlayerResources FindPrimaryHumanSkirmish()
+        {
+            var all = FindObjectsByType<PlayerResources>(FindObjectsSortMode.None);
+            PlayerResources fallback = null;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var pr = all[i];
+                if (pr == null) continue;
+                if (pr.gameObject.name.StartsWith("TownCenter_Player", StringComparison.Ordinal))
+                    continue;
+                if (pr.gameObject.name == "Player_01")
+                    return pr;
+                fallback ??= pr;
+            }
+            return fallback;
+        }
+
         /// <summary>Se dispara cuando cualquier recurso cambia de valor.</summary>
         public event System.Action OnResourceChanged;
 

@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEditor;
 using Project.Gameplay.Buildings;
+using Project.Gameplay.Map;
 
 namespace ProjectEditor.Buildings
 {
@@ -117,16 +118,16 @@ namespace ProjectEditor.Buildings
                 SetLayerRecursively(t.GetChild(i), layer);
         }
 
-        /// <summary>CellSize en editor: GridConfig.gridSize si existe, si no 2.5f.</summary>
+        /// <summary>CellSize en editor: MatchConfig.map.cellSize si existe.</summary>
         static float GetEditorCellSize()
         {
-            var guids = AssetDatabase.FindAssets("t:GridConfig");
+            var guids = AssetDatabase.FindAssets("t:MatchConfig");
             if (guids.Length > 0)
             {
-                var config = AssetDatabase.LoadAssetAtPath<GridConfig>(AssetDatabase.GUIDToAssetPath(guids[0]));
-                if (config != null) return config.gridSize;
+                var config = AssetDatabase.LoadAssetAtPath<MatchConfig>(AssetDatabase.GUIDToAssetPath(guids[0]));
+                if (config != null) return Mathf.Max(0.01f, config.map.cellSize);
             }
-            return 2.5f;
+            return MatchRuntimeState.DefaultCellSize;
         }
     }
 

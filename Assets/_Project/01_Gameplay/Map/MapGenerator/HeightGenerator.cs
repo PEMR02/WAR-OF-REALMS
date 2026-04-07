@@ -21,21 +21,45 @@ namespace Project.Gameplay.Map.Generator
                 for (int z = 0; z < h; z++)
                 {
                     ref var cell = ref grid.GetCell(x, z);
-                    if (cell.type == CellType.Water || cell.type == CellType.River)
+                    if (cell.type == CellType.Water)
                     {
                         cell.height01 = waterH;
+                        cell.slopeDeg = 0f;
+                        continue;
+                    }
+                    if (cell.type == CellType.River)
+                    {
+                        float depth = cell.riverFord
+                            ? Mathf.Clamp(config.riverFordDepthBelowWater01, 0.002f, 0.12f)
+                            : Mathf.Clamp(config.riverBedDepthBelowWater01, 0.004f, 0.18f);
+                        cell.height01 = Mathf.Clamp01(waterH - depth);
                         cell.slopeDeg = 0f;
                         continue;
                     }
                     float nx = (x + seedOff) * scale;
                     float nz = (z + seedOff * 2) * scale;
                     float noise = Mathf.PerlinNoise(nx, nz);
-                    cell.height01 = Mathf.Clamp01(0.3f + 0.5f * noise + 0.1f * (cell.regionId % 5) / 5f);
-                    cell.slopeDeg = 0f; // se recalcula abajo
+                    float baseH = Mathf.Clamp01(0.3f + 0.5f * noise + 0.1f * (cell.regionId % 5) / 5f);
+                    float hillMul = 1f;
+                    if (config.macroTerrainEnabled)
+                        hillMul = Mathf.Lerp(0.82f, 1.18f, config.macroHillDensity);
+                    cell.height01 = Mathf.Clamp01(baseH * hillMul);
+                    cell.slopeDeg = 0f;
                 }
             }
 
-            // Slope aproximado desde vecinos 4
+            RecalculateLandSlopes(grid, config);
+
+            if (config.debugLogs)
+                Debug.Log($"Fase4 Heights: listo. Agua plana a {waterH:F2}. Slope calculado.");
+        }
+
+        /// <summary>Recalcula pendiente en tierra (no agua/río). Tras <see cref="MacroTerrainSculptor"/>.</summary>
+        public static void RecalculateLandSlopes(GridSystem grid, MapGenConfig config)
+        {
+            if (grid == null) return;
+            int w = grid.Width;
+            int h = grid.Height;
             for (int x = 0; x < w; x++)
             {
                 for (int z = 0; z < h; z++)
@@ -52,9 +76,6 @@ namespace Project.Gameplay.Map.Generator
                     cell.slopeDeg = Mathf.Clamp(maxDiff * 90f, 0f, 90f);
                 }
             }
-
-            if (config.debugLogs)
-                Debug.Log($"Fase4 Heights: listo. Agua plana a {waterH:F2}. Slope calculado.");
         }
     }
 }

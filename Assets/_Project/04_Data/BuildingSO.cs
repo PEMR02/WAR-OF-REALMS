@@ -20,7 +20,7 @@ namespace Project.Gameplay.Buildings
             string.IsNullOrWhiteSpace(displayName) ? SelectionDisplayName.HumanizeId(id) : displayName.Trim();
 
         [Header("Footprint")]
-        [Tooltip("Tamaño en celdas de la grilla (ej. 2x2 = 2 celdas de ancho x 2 de fondo). El tamaño en metros = size × cellSize del MapGrid/GridConfig.")]
+        [Tooltip("Tamaño en celdas de la grilla (ej. 2x2 = 2 celdas de ancho x 2 de fondo). El tamaño en metros = size × cellSize del MapGrid/MatchConfig.")]
         public Vector2 size = new Vector2(4, 4);
 
         [Header("Placement")]

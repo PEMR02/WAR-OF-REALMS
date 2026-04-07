@@ -1,0 +1,260 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8d76436b2e654de4a0b642c2c9d8a3f1, type: 3}
+  m_Name: MatchConfig
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Map.MatchConfig
+  useHighLevelAlphaConfig: 0
+  layout:
+    mapWidth: 256
+    mapHeight: 256
+    gridCellSize: 3
+    playerCount: 2
+    randomSeedOnPlay: 1
+    seed: 12345
+    centerMapAtOrigin: 1
+    playableMarginCells: 8
+    baseFlattenRadiusWorld: 15
+    spawnPattern: 2
+  terrainShape:
+    mountainsEnabled: 1
+    mountainMassCount: 2
+    mountainHeight01Range: {x: 0.08, y: 0.18}
+    mountainRadiusCellsRange: {x: 10, y: 28}
+    hillsEnabled: 1
+    hillDensity: 0.45
+    basinCount: 1
+    basinDepth01: 0.05
+    valleyStrength: 0.35
+    plateauChance: 0.15
+    terrainRoughness: 0.5
+    flattenSpawnZones: 1
+    mountainExclusionNearSpawn: 1
+  hydrology:
+    riversEnabled: 1
+    riverCount: 3
+    riverWidthCellsRange: {x: 1, y: 3}
+    riverDepthHint01: 0.04
+    lakesEnabled: 1
+    lakeCount: 2
+    lakeSizeCellsRange: {x: 120, y: 800}
+    waterBaseHeightNormalized: 0.4
+    waterCoverageBias: 0
+    shorelineBlend: 1.2
+    avoidSpawnFlooding: 1
+    connectRiversToLakesIfPossible: 1
+    wetCorridorWidthCells: 8
+  regionClassification:
+    mountainHeightThreshold01: 0.78
+    mountainSlopeThresholdDeg: 28
+    hillHeightThreshold01: 0.58
+    nearWaterDistanceCells: 4
+    shorelineDistanceCells: 2
+    rockyZoneSlopeThresholdDeg: 22
+    fertileZoneHumidityBonus: 0.25
+    floodplainNearRiverDistanceCells: 5
+  resourceDistribution:
+    forestDensity: 2
+    goldAbundance: 2
+    stoneAbundance: 2
+    berryAbundance: 2
+    animalsEnabled: 1
+    animalDensity: 2
+    playerResourceFairness: 0.85
+    perPlayerStartResourcesEnabled: 1
+    globalResourceClustersEnabled: 1
+    clusterDensity: 0.55
+    minResourceDistanceCells: 2
+    avoidOvercrowding: 1
+    forestNearWaterBonus: 1.2
+    rockNearMountainBonus: 1.35
+    goldNearMountainBonus: 1.25
+    animalNearWaterBonus: 1.15
+    useTerrainDrivenPlacement: 1
+  playerSpawn:
+    spawnPattern: 2
+    minSpawnDistanceWorld: 100
+    avoidMountains: 1
+    preferPlains: 1
+    avoidDeepWater: 1
+    ensureAccessToNearbyResources: 1
+    ensureFairStartZones: 1
+    teamLayoutMode: 0
+  visualBinding:
+    riverConstructionProfile: Default
+    lakeConstructionProfile: Default
+    mountainDecorationProfile: Default
+    terrainDecorationProfile: Default
+    waterMaterialProfile: Default
+    shorelineProfile: Default
+    forestVisualProfile: Default
+    rockVisualProfile: Default
+    animalSpawnProfile: Default
+    treePrefab: {fileID: 0}
+    treePrefabVariants: []
+    berryPrefab: {fileID: 0}
+    berryPrefabVariants: []
+    animalPrefab: {fileID: 0}
+    animalPrefabVariants: []
+    goldPrefab: {fileID: 0}
+    goldPrefabVariants: []
+    stonePrefab: {fileID: 0}
+    stonePrefabVariants: []
+    stoneMaterialOverride: {fileID: 0}
+    treeMaterialOverrides: []
+  map:
+    preset: 1
+    width: 256
+    height: 256
+    cellSize: 2.5
+    centerAtOrigin: 1
+    randomSeedOnPlay: 1
+    seed: 12345
+    mapType: Continental
+  geography:
+    terrainFlatness: 0.6
+    heightMultiplier: 8
+    noiseScale: 0.02
+    noiseOctaves: 3
+    noisePersistence: 0.5
+    noiseLacunarity: 2
+    maxSlope: 15
+    alignTerrainToGrid: 1
+  water:
+    baseHeightNormalized: 0.4
+    waterHeight: -999
+    waterHeightRelative: -1
+    riverCount: 3
+    lakeCount: 2
+    maxLakeCells: 800
+    riverWidthRadiusCells: 2
+    riverWidthNoiseAmplitudeCells: 1
+    lakeRiverMouthBlendCells: 3
+    sandShoreCells: 3
+    surfaceOffset: 0.05
+    chunkSize: 32
+    alpha: 0.88
+    showWater: 1
+    meshMode: 1
+    waterLayer: -1
+    material: {fileID: 0}
+  mapGenerationProfile: {fileID: 0}
+  resources:
+    ringNear: {x: 6, y: 12}
+    ringMid: {x: 12, y: 20}
+    ringFar: {x: 30, y: 50}
+    nearTrees: {x: 8, y: 12}
+    midTrees: {x: 12, y: 20}
+    berries: {x: 6, y: 8}
+    animals: {x: 2, y: 4}
+    goldSafe: {x: 6, y: 8}
+    stoneSafe: {x: 4, y: 6}
+    goldFar: {x: 8, y: 12}
+    globalTrees: {x: 80, y: 120}
+    globalStone: {x: 8, y: 14}
+    globalGold: {x: 10, y: 16}
+    globalAnimals: {x: 8, y: 20}
+    globalExcludeRadius: 55
+    forestClustering: 1
+    clusterDensity: 0.6
+    clusterMinSize: 15
+    clusterMaxSize: 40
+    minWoodTrees: 15
+    minGoldNodes: 6
+    minStoneNodes: 4
+    minFoodValue: 8
+    maxResourceRetries: 5
+    visuals:
+      treePrefab: {fileID: 0}
+      treePrefabVariants: []
+      berryPrefab: {fileID: 0}
+      berryPrefabVariants: []
+      animalPrefab: {fileID: 0}
+      animalPrefabVariants: []
+      goldPrefab: {fileID: 0}
+      goldPrefabVariants: []
+      stonePrefab: {fileID: 0}
+      stonePrefabVariants: []
+      stoneMaterialOverride: {fileID: 0}
+      treeMaterialOverrides: []
+      treePlacementRotation: {x: 0, y: 0, z: 0}
+      resourceLayerName: Resource
+      randomRotationPerResource: 1
+      cellPlacementRandomOffset: 0.8
+      forceResourceShadowCasting: 0
+    placement:
+      globalTreesClusterFraction: -1
+      preferGlobalTreesOnGrassAlphamap: 0
+      globalStoneGoldClusterFraction: 0.82
+      globalMineralClusterSize: {x: 2, y: 6}
+      globalMineralClusterRadiusCells: 3.2
+  climate:
+    climateId: Temperate
+    grassLayer: {fileID: 0}
+    dirtLayer: {fileID: 0}
+    rockLayer: {fileID: 0}
+    sandLayer: {fileID: 0}
+    paintTerrainByHeight: 0
+    grassTileSize: {x: 0, y: 0}
+    dirtTileSize: {x: 0, y: 0}
+    rockTileSize: {x: 0, y: 0}
+    sandTileSize: {x: 0, y: 0}
+    grassPercent: 60
+    dirtPercent: 20
+    rockPercent: 20
+    textureBlendWidth: 0.08
+    terrainBlendSharpness: 0.2
+    terrainMacroNoiseScale: 0.012
+    terrainMacroNoiseStrength: 0.08
+    grassDryLayer: {fileID: 0}
+    grassDryBlendStrength: 0.55
+    grassDryNoiseScale: 0.009
+    wetDirtLayer: {fileID: 0}
+    terrainMoistureRadius: 10
+    terrainMoistureStrength: 0.65
+    terrainMoistureNoiseScale: 0.14
+    terrainMoistureNoiseStrength: 0.35
+    sandEdgeNoiseScale: 0.22
+    sandEdgeNoiseStrength: 0.85
+    debugTerrainMoisture: 0
+    debugTerrainMacro: 0
+    debugTerrainGrassDry: 0
+  players:
+    playerCount: 2
+    slots: []
+    spawnEdgePadding: 20
+    minPlayerDistance2p: 120
+    minPlayerDistance4p: 100
+    spawnFlatRadius: 8
+    maxSlopeAtSpawn: 60
+    waterExclusionRadius: 12
+    flattenSpawnAreas: 1
+    flattenRadius: 15
+  startingLoadout:
+    townCenter: {fileID: 0}
+    townCenterPrefabOverride: {fileID: 0}
+    townCenterClearRadius: 6
+    townCenterSpawnYOffset: 0
+    units: []
+    buildings: []
+  graphics:
+    profileId: Default
+    showGridInBuildMode: 1
+    showWater: 1
+    debugLogs: 0
+  minimap:
+    autoFitWorld: 1
+    useFixedOrthographicSize: 0
+    fixedOrthographicSize: 160
+    mapPaddingFactor: 1.05
+    boundsRefreshEvery: 1
+    cropUvHorizontal: 0
+    uvHorizontalInset: 0

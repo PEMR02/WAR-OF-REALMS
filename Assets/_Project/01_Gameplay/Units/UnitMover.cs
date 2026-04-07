@@ -67,10 +67,14 @@ namespace Project.Gameplay.Units
         Vector3 _stuckLastPos;
         bool _stuckTrackingInitialized;
 
+        /// <summary>Reutilizado para comprobar si el path del NavMesh cruza agua lógica (el mesh suele existir bajo lagos).</summary>
+        NavMeshPath _navWaterCheckPath;
+
         void Awake()
         {
             _agent = GetComponent<NavMeshAgent>();
             _pathfinder = new Pathfinder();
+            _navWaterCheckPath = new NavMeshPath();
             if (_agent != null)
             {
                 _agent.autoBraking = false;
@@ -182,7 +186,8 @@ namespace Project.Gameplay.Units
                 if (!result.success || result.cells == null)
                 {
                     if (debugLogs)
-                        Debug.Log($"{name}: A* sin ruta ({result.error}). No se mueve.");
+                        Debug.Log($"{name}: A* sin ruta ({result.error}). Fallback NavMesh directo.", this);
+                    SendAgentTo(worldPos);
                     return;
                 }
 
@@ -256,6 +261,13 @@ namespace Project.Gameplay.Units
         {
             if (_agent == null || !_agent.isOnNavMesh)
                 return;
+
+            if (MapGrid.Instance != null && MapGrid.Instance.IsReady && !canSwim
+                && MapGrid.Instance.IsWater(MapGrid.Instance.WorldToCell(transform.position))
+                && (_followingAStarPath || _hasAStarGoal))
+            {
+                TryRecoverFromWaterCell();
+            }
 
             // Puerta: al alcanzar el punto intermedio (Entry/Exit) retomamos el destino real.
             // Usar distancia real al destino además de remainingDistance: cuando hay varias unidades apelotonadas
@@ -373,10 +385,26 @@ namespace Project.Gameplay.Units
                 return false;
             PathResult result = _pathfinder.FindPath(transform.position, _astarGoalWorld, canSwim);
             if (!result.success || result.cells == null || result.cells.Count == 0)
-                return false;
+            {
+                if (debugLogs)
+                    Debug.Log($"{name}: Repath A* falló → NavMesh al objetivo guardado.", this);
+                _followingAStarPath = false;
+                _waypoints = null;
+                _waypointIndex = 0;
+                _hasAStarGoal = false;
+                SendAgentTo(_astarGoalWorld);
+                return true;
+            }
             var newWaypoints = CellsToWorldPoints(result.cells);
             if (newWaypoints.Count == 0)
-                return false;
+            {
+                _followingAStarPath = false;
+                _waypoints = null;
+                _waypointIndex = 0;
+                _hasAStarGoal = false;
+                SendAgentTo(_astarGoalWorld);
+                return true;
+            }
             _waypoints = newWaypoints;
             _waypointIndex = 0;
             ResetStuckTracking();
@@ -392,12 +420,12 @@ namespace Project.Gameplay.Units
         {
             if (_agent == null || !_agent.isOnNavMesh) return;
 
-            // Buscar punto válido en NavMesh cerca del destino
+            float snapR = EffectiveSnapRadiusForDestination();
             Vector3 navDest = worldPos;
-            if (NavMesh.SamplePosition(worldPos, out NavMeshHit hit, snapToNavMeshRadius, NavMesh.AllAreas))
-            {
+            if (NavMesh.SamplePosition(worldPos, out NavMeshHit hit, snapR, NavMesh.AllAreas))
                 navDest = hit.position;
-            }
+
+            RejectDestinationOnWaterCell(ref navDest, snapR, worldPos);
 
             // Integración puertas: solo forzar paso si unidad y destino están en LADOS OPUESTOS de la puerta (evita bucle al recalcular tras cruzar).
             if (_isHeadingToGateIntermediate && _hasPostGateDestination && (navDest - _gateIntermediateDestination).sqrMagnitude < 4f)
@@ -449,6 +477,9 @@ namespace Project.Gameplay.Units
                 }
             }
 
+            Vector3 pathFrom = _agent.nextPosition;
+            TryClampNavDestinationToAvoidGridWater(pathFrom, ref navDest);
+
             _agent.isStopped = false;
             _agent.SetDestination(navDest);
         }
@@ -457,12 +488,140 @@ namespace Project.Gameplay.Units
         {
             if (_agent == null || !_agent.isOnNavMesh) return;
 
+            float snapR = EffectiveSnapRadiusForDestination();
             Vector3 navDest = worldPos;
-            if (NavMesh.SamplePosition(worldPos, out NavMeshHit hit, snapToNavMeshRadius, NavMesh.AllAreas))
+            if (NavMesh.SamplePosition(worldPos, out NavMeshHit hit, snapR, NavMesh.AllAreas))
                 navDest = hit.position;
+            RejectDestinationOnWaterCell(ref navDest, snapR, worldPos);
+
+            Vector3 pathFrom = _agent.nextPosition;
+            TryClampNavDestinationToAvoidGridWater(pathFrom, ref navDest);
 
             _agent.isStopped = false;
             _agent.SetDestination(navDest);
+        }
+
+        /// <summary>Con A* activo, limita el snap para no “saltar” a la otra orilla del lago en el NavMesh.</summary>
+        float EffectiveSnapRadiusForDestination()
+        {
+            if (!useGridPathfinding || MapGrid.Instance == null || !MapGrid.Instance.IsReady)
+                return snapToNavMeshRadius;
+            float cs = MapGrid.GetCellSizeOrDefault();
+            return _followingAStarPath || _hasAStarGoal
+                ? Mathf.Min(snapToNavMeshRadius, Mathf.Max(0.65f, cs * 0.85f))
+                : snapToNavMeshRadius;
+        }
+
+        void RejectDestinationOnWaterCell(ref Vector3 navDest, float snapR, Vector3 originalWorld)
+        {
+            if (MapGrid.Instance == null || !MapGrid.Instance.IsReady || canSwim)
+                return;
+            var c = MapGrid.Instance.WorldToCell(navDest);
+            if (!MapGrid.Instance.IsWater(c))
+                return;
+            for (float f = 0.35f; f <= 1.01f; f += 0.22f)
+            {
+                float r = Mathf.Max(0.25f, snapR * f);
+                if (NavMesh.SamplePosition(originalWorld, out NavMeshHit h2, r, NavMesh.AllAreas))
+                {
+                    var c2 = MapGrid.Instance.WorldToCell(h2.position);
+                    if (!MapGrid.Instance.IsWater(c2))
+                    {
+                        navDest = h2.position;
+                        return;
+                    }
+                }
+            }
+        }
+
+        /// <summary>El NavMesh suele ser continuo bajo el agua: recorta el destino al último vértice del path que no cruce celdas de agua según MapGrid.</summary>
+        void TryClampNavDestinationToAvoidGridWater(Vector3 fromWorld, ref Vector3 navDestWorld)
+        {
+            Vector3 desired = navDestWorld;
+            if (MapGrid.Instance == null || !MapGrid.Instance.IsReady || _isHeadingToGateIntermediate)
+                return;
+
+            if (_navWaterCheckPath == null)
+                _navWaterCheckPath = new NavMeshPath();
+
+            _navWaterCheckPath.ClearCorners();
+            if (!NavMesh.CalculatePath(fromWorld, navDestWorld, NavMesh.AllAreas, _navWaterCheckPath))
+                return;
+            if (_navWaterCheckPath.status == NavMeshPathStatus.PathInvalid)
+                return;
+
+            Vector3[] corners = _navWaterCheckPath.corners;
+            if (corners == null || corners.Length < 2)
+                return;
+
+            float minProgressSq = Mathf.Max(0.04f, MapGrid.GetCellSizeOrDefault() * 0.2f);
+            minProgressSq *= minProgressSq;
+
+            for (int i = 0; i < corners.Length - 1; i++)
+            {
+                if (!NavMeshSegmentViolatesWaterOnGrid(corners[i], corners[i + 1]))
+                    continue;
+
+                Vector3 safe = corners[i];
+                float tight = Mathf.Max(0.35f, MapGrid.GetCellSizeOrDefault() * 0.45f);
+                if (NavMesh.SamplePosition(safe, out NavMeshHit sh, tight, NavMesh.AllAreas))
+                    navDestWorld = sh.position;
+                else
+                    navDestWorld = safe;
+
+                if ((navDestWorld - fromWorld).sqrMagnitude < minProgressSq)
+                    navDestWorld = desired;
+                return;
+            }
+        }
+
+        bool NavMeshSegmentViolatesWaterOnGrid(Vector3 a, Vector3 b)
+        {
+            if (canSwim)
+                return WorldXZSegmentCrossesImpassableWater(a, b);
+            return WorldXZSegmentCrossesWater(a, b);
+        }
+
+        bool TryRecoverFromWaterCell()
+        {
+            if (MapGrid.Instance == null || !MapGrid.Instance.IsReady || !_agent.isOnNavMesh)
+                return false;
+            Vector2Int c = MapGrid.Instance.WorldToCell(transform.position);
+            if (!MapGrid.Instance.IsWater(c))
+                return false;
+
+            for (int r = 1; r <= 14; r++)
+            {
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    for (int dy = -r; dy <= r; dy++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) != r)
+                            continue;
+                        var nc = new Vector2Int(c.x + dx, c.y + dy);
+                        if (!MapGrid.Instance.IsInBounds(nc))
+                            continue;
+                        if (MapGrid.Instance.IsWater(nc))
+                            continue;
+                        if (!MapGrid.Instance.IsCellFree(nc))
+                            continue;
+                        Vector3 w = MapGrid.Instance.CellToWorld(nc);
+                        if (NavMesh.SamplePosition(w, out NavMeshHit hit, Mathf.Max(0.5f, MapGrid.GetCellSizeOrDefault() * 0.75f), NavMesh.AllAreas))
+                        {
+                            _agent.Warp(hit.position);
+                            _repathCooldownTimer = 0f;
+                            ResetStuckTracking();
+                            if (_followingAStarPath && _hasAStarGoal)
+                                TryRepathToStoredGoal();
+                            if (debugLogs)
+                                Debug.Log($"{name}: Recuperación desde celda de agua → Warp a tierra cercana.", this);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
         }
 
         bool ShouldIgnoreGate(GateController gate)
@@ -502,6 +661,11 @@ namespace Project.Gameplay.Units
 
             List<Vector2Int> simplifiedCells = SimplifyCellPath(cells);
             var smoothed = PathSmoother.SmoothPath(simplifiedCells, MapGrid.Instance, pathSmoothEpsilon);
+            // Douglas–Peucker en mundo puede dejar solo 2 puntos y el NavMesh corta en línea recta por lagos/ríos.
+            if (!canSwim && smoothed != null && smoothed.Count >= 2 && SmoothedWorldPathCrossesWater(smoothed))
+                smoothed = null;
+            if (canSwim && smoothed != null && smoothed.Count >= 2 && SmoothedWorldPathCrossesImpassableWater(smoothed))
+                smoothed = null;
             if (smoothed != null && smoothed.Count >= 2)
                 return smoothed;
             if (smoothed != null && smoothed.Count == 1)
@@ -560,6 +724,10 @@ namespace Project.Gameplay.Units
                 Vector2Int c = new Vector2Int(x0, y0);
                 if (!MapGrid.Instance.IsInBounds(c))
                     return false;
+                if (MapGrid.Instance.IsImpassableWater(c))
+                    return false;
+                if (!canSwim && MapGrid.Instance.IsWater(c))
+                    return false;
                 // Línea de visión en grid: celdas de puerta abierta cuentan como libres.
                 if (!MapGrid.Instance.IsCellFree(c) && !MapGrid.Instance.IsOpenGatePassableCell(c))
                     return false;
@@ -574,6 +742,95 @@ namespace Project.Gameplay.Units
                     x0 += sx;
                 }
                 if (e2 < dx)
+                {
+                    err += dx;
+                    y0 += sy;
+                }
+            }
+        }
+
+        /// <summary>
+        /// True si algún segmento XZ atraviesa celda con agua lógica (lago / río no vado). Evita atajos del NavMesh sobre el terreno bajo el agua.
+        /// </summary>
+        bool SmoothedWorldPathCrossesWater(List<Vector3> worldPts)
+        {
+            if (worldPts == null || MapGrid.Instance == null || !MapGrid.Instance.IsReady)
+                return false;
+            for (int i = 0; i < worldPts.Count - 1; i++)
+            {
+                if (WorldXZSegmentCrossesWater(worldPts[i], worldPts[i + 1]))
+                    return true;
+            }
+            return false;
+        }
+
+        static bool WorldXZSegmentCrossesWater(Vector3 a, Vector3 b)
+        {
+            var g = MapGrid.Instance;
+            if (g == null || !g.IsReady)
+                return false;
+            Vector2Int c0 = g.WorldToCell(a);
+            Vector2Int c1 = g.WorldToCell(b);
+            foreach (var c in BresenhamLineCells(c0, c1))
+            {
+                if (!g.IsInBounds(c))
+                    continue;
+                if (g.IsWater(c))
+                    return true;
+            }
+            return false;
+        }
+
+        bool SmoothedWorldPathCrossesImpassableWater(List<Vector3> worldPts)
+        {
+            if (worldPts == null || MapGrid.Instance == null || !MapGrid.Instance.IsReady)
+                return false;
+            for (int i = 0; i < worldPts.Count - 1; i++)
+            {
+                if (WorldXZSegmentCrossesImpassableWater(worldPts[i], worldPts[i + 1]))
+                    return true;
+            }
+            return false;
+        }
+
+        static bool WorldXZSegmentCrossesImpassableWater(Vector3 a, Vector3 b)
+        {
+            var g = MapGrid.Instance;
+            if (g == null || !g.IsReady)
+                return false;
+            Vector2Int c0 = g.WorldToCell(a);
+            Vector2Int c1 = g.WorldToCell(b);
+            foreach (var c in BresenhamLineCells(c0, c1))
+            {
+                if (!g.IsInBounds(c))
+                    continue;
+                if (g.IsImpassableWater(c))
+                    return true;
+            }
+            return false;
+        }
+
+        static IEnumerable<Vector2Int> BresenhamLineCells(Vector2Int from, Vector2Int to)
+        {
+            int x0 = from.x, y0 = from.y;
+            int x1 = to.x, y1 = to.y;
+            int dx = Mathf.Abs(x1 - x0);
+            int sx = x0 < x1 ? 1 : -1;
+            int dy = -Mathf.Abs(y1 - y0);
+            int sy = y0 < y1 ? 1 : -1;
+            int err = dx + dy;
+            while (true)
+            {
+                yield return new Vector2Int(x0, y0);
+                if (x0 == x1 && y0 == y1)
+                    yield break;
+                int e2 = 2 * err;
+                if (e2 >= dy)
+                {
+                    err += dy;
+                    x0 += sx;
+                }
+                if (e2 <= dx)
                 {
                     err += dx;
                     y0 += sy;

@@ -1760,6 +1760,7 @@ GameObject:
   - component: {fileID: 9123456789012345680}
   - component: {fileID: -3942926866679175394}
   - component: {fileID: -9012563287587894274}
+  - component: {fileID: -2770528957131004148}
   m_Layer: 8
   m_Name: PF_Mounted_King
   m_TagString: Untagged
@@ -1950,6 +1951,11 @@ MonoBehaviour:
   canSwim: 0
   snapToNavMeshRadius: 50
   minStoppingDistance: 0.4
+  pathSmoothEpsilon: 0.55
+  enableStuckRepath: 1
+  stuckRepathSeconds: 2.25
+  stuckMinMoveDistance: 0.22
+  repathCooldownSeconds: 1.35
   debugLogs: 0
 --- !u!114 &1324161170738146487
 MonoBehaviour:
@@ -2030,6 +2036,27 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitVisualGroundOffset
   visualOffsetDown: 0.8
+--- !u!114 &-2770528957131004148
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 110684}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e3634e6c65556c84e9e10d005ac3a81e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitStatsRuntime
+  definitionInEditor: {fileID: 11400000, guid: 47cf8b845e9d1004a92c2f1407157702, type: 2}
+  _baseMaxHP: 100
+  _baseAttack: 10
+  _baseAttackRange: 1.5
+  _baseAttackIntervalSec: 1.3
+  _baseMoveSpeed: 3.8
+  _baseArmor: 0
+  _baseMagicResist: 0
+  _baseBonusDamageVsCavalry: 0
 --- !u!1 &111348
 GameObject:
   m_ObjectHideFlags: 0

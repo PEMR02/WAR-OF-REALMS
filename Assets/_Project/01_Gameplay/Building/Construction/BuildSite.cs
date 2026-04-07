@@ -5,6 +5,7 @@ using UnityEngine.AI;
 using UnityEngine.UI;
 using Project.Gameplay.Map;
 using Project.Gameplay.Combat;
+using Project.Gameplay.Faction;
 using Project.Gameplay.Players;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Units;
@@ -646,7 +647,7 @@ namespace Project.Gameplay.Buildings
 		void ComputeApproachWaypointsParallel()
 		{
 			if (_compoundSegments == null || _compoundSegments.Count == 0) return;
-			float cellSize = MapGrid.Instance != null && MapGrid.Instance.IsReady ? MapGrid.Instance.cellSize : 2.5f;
+			float cellSize = MapGrid.GetCellSizeOrDefault();
 			float offsetDist = cellSize * 1.5f;
 			// Lado del muro: usar la "derecha" del primer segmento para todos (mismo lado en todo el path).
 			Vector3 side = _compoundSegments[0].rot * Vector3.right;
@@ -696,7 +697,7 @@ namespace Project.Gameplay.Buildings
 
 			if (!TryComputeRendererBoundsIgnoringUI(root.transform, out Bounds worldBounds))
 			{
-				float s = MapGrid.Instance != null && MapGrid.Instance.IsReady ? MapGrid.Instance.cellSize : 2.5f;
+				float s = MapGrid.GetCellSizeOrDefault();
 				worldBounds = new Bounds(root.transform.position, new Vector3(s, 0.6f, s));
 			}
 
@@ -920,6 +921,8 @@ namespace Project.Gameplay.Buildings
                     built.AddComponent<ProductionBuilding>();
 
                 ConfigureBuiltBuildingRuntime(built, buildingSO);
+                WireProductionBuildingFromOwner(built);
+                ApplyOwnerFactionToBuilding(built);
 
                 var buildingCtrl = built.GetComponent<BuildingController>();
                 if (buildingCtrl != null) buildingCtrl.RefreshObstacleAndCollider();
@@ -927,7 +930,7 @@ namespace Project.Gameplay.Buildings
                 // ✅ Aumentar límite de población si el edificio lo proporciona
                 if (buildingSO != null && buildingSO.populationProvided > 0)
                 {
-                    var popManager = Object.FindFirstObjectByType<Project.Gameplay.Players.PopulationManager>();
+                    var popManager = Project.Gameplay.Players.PopulationManager.ResolveForOwner(owner);
                     if (popManager != null)
                     {
                         popManager.AddHousingCapacity(buildingSO.populationProvided);
@@ -1423,7 +1426,8 @@ namespace Project.Gameplay.Buildings
             else if (root.GetComponent<Collider>() == null)
             {
                 var box = root.AddComponent<BoxCollider>();
-                box.size = new Vector3(so.size.x * 2.5f, 2f, so.size.y * 2.5f);
+                float cs = MapGrid.GetCellSizeOrDefault();
+                box.size = new Vector3(so.size.x * cs, 2f, so.size.y * cs);
                 box.center = new Vector3(0f, 1f, 0f);
                 box.isTrigger = so.isCompound;
             }
@@ -1447,10 +1451,29 @@ namespace Project.Gameplay.Buildings
 
             if (so.populationProvided > 0)
             {
-                var popManager = Object.FindFirstObjectByType<Project.Gameplay.Players.PopulationManager>();
+                var popManager = Project.Gameplay.Players.PopulationManager.ResolveForOwner(owner);
                 if (popManager != null)
                     popManager.AddHousingCapacity(so.populationProvided);
             }
+        }
+
+        void WireProductionBuildingFromOwner(GameObject built)
+        {
+            if (built == null || owner == null) return;
+            var prod = built.GetComponent<ProductionBuilding>();
+            if (prod == null) return;
+            prod.owner = owner;
+            prod.populationManager = Project.Gameplay.Players.PopulationManager.ResolveForOwner(owner);
+        }
+
+        void ApplyOwnerFactionToBuilding(GameObject built)
+        {
+            if (built == null || owner == null) return;
+            var src = owner.GetComponentInParent<FactionMember>();
+            if (src == null) return;
+            var fm = built.GetComponent<FactionMember>();
+            if (fm == null) fm = built.AddComponent<FactionMember>();
+            fm.faction = src.faction;
         }
 
         static void SetLayerRecursive(Transform root, int layer)
@@ -1465,7 +1488,7 @@ namespace Project.Gameplay.Buildings
         static void EnsureSegmentBlocksPassage(GameObject segment, float segmentLength)
         {
             if (segment == null) return;
-            float cellSize = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.cellSize : 2.5f;
+            float cellSize = MapGrid.GetCellSizeOrDefault();
             float sizeXZ = Mathf.Min(Mathf.Max(0.5f, segmentLength * 0.85f), cellSize) * 0.9f;
 
             Vector3 boxSize;

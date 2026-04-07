@@ -10,6 +10,18 @@ namespace Project.Gameplay.Map.Generator
         Mountain = 3
     }
 
+    /// <summary>Reglas de paso sobre agua (independiente del tipo visual River/Water tras confluencias).</summary>
+    public enum WaterTraverseMode : byte
+    {
+        NotWater = 0,
+        /// <summary>Vado / tramo transitable a pie.</summary>
+        FordShallow = 1,
+        /// <summary>Lago o cauce profundo: no a pie; sí con canSwim / futuros barcos.</summary>
+        SwimNavigable = 2,
+        /// <summary>Infranqueable para todas las unidades (abismo, borde ilegal, etc.).</summary>
+        Impassable = 3
+    }
+
     public enum ResourceType
     {
         None = 0,
@@ -35,6 +47,10 @@ namespace Project.Gameplay.Map.Generator
         public ResourceType resourceType;
         /// <summary>0 = ninguno, 1 = trail, 2 = main road, etc.</summary>
         public byte roadLevel;
+        /// <summary>Celda de río transitable (vado); el lecho es menos profundo. Solo si type == River.</summary>
+        public bool riverFord;
+        /// <summary>Travesía en celdas de agua; NotWater en tierra.</summary>
+        public WaterTraverseMode waterTraverse;
 
         public static CellData Default()
         {
@@ -45,6 +61,8 @@ namespace Project.Gameplay.Map.Generator
                 type = CellType.Land,
                 walkable = true,
                 buildable = true,
+                riverFord = false,
+                waterTraverse = WaterTraverseMode.NotWater,
                 occupied = false,
                 regionId = 0,
                 biomeId = 0,

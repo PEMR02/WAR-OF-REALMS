@@ -33,10 +33,12 @@ namespace Project.Gameplay.Resources
 
             if (!snapToNavMeshOnAwake) return;
 
+            var tri = NavMesh.CalculateTriangulation();
+            if (tri.indices == null || tri.indices.Length < 3)
+                return;
+
             if (NavMesh.SamplePosition(transform.position, out var hit, snapRadius, NavMesh.AllAreas))
-            {
                 transform.position = hit.position;
-            }
         }
 
         public int MaxAmount => maxAmount > 0 ? maxAmount : _initialMax;

@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using Project.Gameplay.Faction;
 using Project.Gameplay.Players;
 using Project.Gameplay.Map;
+using Project.Gameplay.Units;
 using Project.UI;
 
 namespace Project.Gameplay.Buildings
@@ -11,10 +13,6 @@ namespace Project.Gameplay.Buildings
     {
         [Header("Grid")]
         public bool snapToGrid = true;
-        [Tooltip("Referencia al ScriptableObject con configuración del grid. Se sincroniza automáticamente con MapGrid.")]
-        public GridConfig gridConfig;
-        [Tooltip("Tamaño de celda en metros (auto-sync con MapGrid si existe). 2.5 es típico para RTS.")]
-        public float gridSize = 2.5f;
 
         [Header("Rotation")]
         public float rotationStep = 90f;
@@ -83,31 +81,19 @@ namespace Project.Gameplay.Buildings
         void Awake()
         {
             if (cam == null) cam = Camera.main;
-            if (owner == null) owner = FindFirstObjectByType<PlayerResources>();
+            if (owner == null) owner = PlayerResources.FindPrimaryHumanSkirmish();
             if (selection == null) selection = FindFirstObjectByType<Project.Gameplay.Units.RTSSelectionController>();
             if (terrain == null) terrain = FindFirstObjectByType<Terrain>();
 
-            RefreshGridSize();
         }
 
-        /// <summary>Usa MapGrid.cellSize si existe (Play), si no gridConfig.gridSize, si no gridSize. Una sola fuente de verdad para el snap.</summary>
-        void RefreshGridSize()
+        float GetCellSize()
         {
-            if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
-                gridSize = MapGrid.Instance.cellSize;
-            else if (gridConfig != null)
-                gridSize = gridConfig.gridSize;
+            return MapGrid.GetCellSizeOrDefault();
         }
 
         void Update()
         {
-            // Grid size: actualizar solo si MapGrid está listo y cambió (evita trabajo por frame).
-            if (MapGrid.Instance != null && MapGrid.Instance.IsReady)
-            {
-                float cs = MapGrid.Instance.cellSize;
-                if (Mathf.Abs(gridSize - cs) > 0.001f) gridSize = cs;
-            }
-
             // Terrain puede crearse en runtime; resolverlo con throttle (no cada frame).
             if (terrain == null)
             {
@@ -148,6 +134,7 @@ namespace Project.Gameplay.Buildings
                 return;
 
             Vector3 p = hit.point;
+            float cellSize = GetCellSize();
             int bw = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.x));
             int bh = Mathf.Max(1, Mathf.RoundToInt(selectedBuilding.size.y));
             if (snapToGrid)
@@ -162,9 +149,9 @@ namespace Project.Gameplay.Buildings
                 {
                     Vector3 origin = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.origin : Vector3.zero;
                     if (bw == 1 && bh == 1)
-                        p = GridSnapUtil.SnapToGridIntersection(p, origin, gridSize);
+                        p = GridSnapUtil.SnapToGridIntersection(p, origin, cellSize);
                     else
-                        p = GridSnapUtil.SnapToBuildingGrid(p, origin, gridSize, bw, bh);
+                        p = GridSnapUtil.SnapToBuildingGrid(p, origin, cellSize, bw, bh);
                 }
             }
             // Altura: footprint completo (FootprintTerrainSampler + TerrainPlacementValidator); BuildingAnchorSolver = única fuente de Y para ghost y site
@@ -406,61 +393,100 @@ namespace Project.Gameplay.Buildings
         }
 
         bool TryPlaceBuildSite(Vector3 position, out BuildSite site)
-		{
-			site = null;
+        {
+            if (selectedBuilding == null || owner == null)
+            {
+                site = null;
+                return false;
+            }
+            Quaternion rot = Quaternion.Euler(0f, _currentYaw, 0f);
+            return TryPlaceBuildSiteForOwner(selectedBuilding, position, rot, owner, out site);
+        }
 
-			if (selectedBuilding == null || owner == null) return false;
+        /// <summary>Coloca un solar pagando con los recursos del jugador indicado (p. ej. IA). Reutiliza prefab y máscaras de este placer.</summary>
+        public bool TryPlaceBuildSiteForOwner(BuildingSO building, Vector3 position, Quaternion rotation, PlayerResources payFrom, out BuildSite site)
+        {
+            site = null;
+            if (building == null || payFrom == null) return false;
 
-			// Evitar colocar en origen por si algo pasó la validación de Update
-			if (position.sqrMagnitude < 9f)
-			{
-				Debug.LogWarning("BuildingPlacer: TryPlaceBuildSite rechazado (posición cerca de 0,0,0).");
-				return false;
-			}
+            if (position.sqrMagnitude < 9f)
+            {
+                Debug.LogWarning("BuildingPlacer: TryPlaceBuildSiteForOwner rechazado (posición cerca de 0,0,0).");
+                return false;
+            }
 
-			if (buildSitePrefab == null)
-			{
-				Debug.LogError("BuildingPlacer: buildSitePrefab no está asignado.");
-				return false;
-			}
+            if (buildSitePrefab == null)
+            {
+                Debug.LogError("BuildingPlacer: buildSitePrefab no está asignado.");
+                return false;
+            }
 
-			if (!CanAfford(selectedBuilding))
-				return false;
+            if (!CanAffordFor(building, payFrom))
+                return false;
 
-			Quaternion rot = Quaternion.Euler(0f, _currentYaw, 0f);
-			GameObject go = Instantiate(buildSitePrefab, position, rot);
+            GameObject go = Instantiate(buildSitePrefab, position, rotation);
             AlignBuildSiteToTerrain(go, position.y);
-			go.name = $"[SITE] {selectedBuilding.id}";
+            go.name = $"[SITE] {building.id}";
 
-			site = go.GetComponent<BuildSite>();
-			if (site == null)
-			{
-				Debug.LogError("BuildingPlacer: buildSitePrefab NO tiene componente BuildSite.");
-				Destroy(go);
-				return false;
-			}
+            site = go.GetComponent<BuildSite>();
+            if (site == null)
+            {
+                Debug.LogError("BuildingPlacer: buildSitePrefab NO tiene componente BuildSite.");
+                Destroy(go);
+                return false;
+            }
 
-			// ✅ SOLO AHORA descuento (cuando ya sé que el site existe)
-			foreach (var cost in selectedBuilding.costs)
-				owner.Subtract(cost.kind, cost.amount);
+            foreach (var cost in building.costs)
+                payFrom.Subtract(cost.kind, cost.amount);
 
-			// Configurar site (targetBaseY = altura de la base del footprint para que el edificio completado no quede volando)
-			site.buildingSO = selectedBuilding;
-			site.finalPrefab = selectedBuilding.prefab;
-			site.buildTime = GetBuildTime(selectedBuilding);
-			site.owner = owner;
-			site.targetBaseY = position.y;
+            site.buildingSO = building;
+            site.finalPrefab = building.prefab;
+            site.buildTime = GetBuildTime(building);
+            site.owner = payFrom;
+            site.targetBaseY = position.y;
 
-			if (debugLogs) Debug.Log($"SITE CONFIG -> name={go.name} id={go.GetInstanceID()} so={(site.buildingSO ? site.buildingSO.id : "null")} final={(site.finalPrefab != null)} buildTime={site.buildTime}");
+            if (debugLogs) Debug.Log($"SITE CONFIG -> name={go.name} id={go.GetInstanceID()} so={(site.buildingSO ? site.buildingSO.id : "null")} final={(site.finalPrefab != null)} buildTime={site.buildTime}");
 
-			// 🟢 OCUPAR CELDAS EN EL GRID (crítico para RTS)
-			OccupyCells(position, selectedBuilding.size, true);
+            OccupyCells(position, building.size, true);
+            DisplaceUnitsInFootprint(position, building.size);
 
-			// Desplazar unidades que queden dentro del footprint (igual para todas las edificaciones)
-			DisplaceUnitsInFootprint(position, selectedBuilding.size);
+            return true;
+        }
 
-			return true;
-		}
+        public bool CanAffordFor(BuildingSO building, PlayerResources payFrom)
+        {
+            if (building == null || payFrom == null) return false;
+            if (building.costs == null || building.costs.Length == 0) return true;
+            foreach (var cost in building.costs)
+            {
+                if (!payFrom.Has(cost.kind, cost.amount))
+                    return false;
+            }
+            return true;
+        }
+
+        /// <summary>Asigna aldeanos del bando que usan <paramref name="payFrom"/> como dueño de recursos.</summary>
+        public void AssignBuildersToSiteForOwner(BuildSite site, PlayerResources payFrom, FactionId faction, int maxBuilders)
+        {
+            if (site == null || payFrom == null || maxBuilders <= 0) return;
+            var all = Object.FindObjectsByType<Builder>(FindObjectsSortMode.None);
+            var scored = new List<(Builder b, float d)>(all.Length);
+            for (int i = 0; i < all.Length; i++)
+            {
+                var b = all[i];
+                if (b == null) continue;
+                var g = b.GetComponent<VillagerGatherer>();
+                if (g == null || g.owner != payFrom) continue;
+                var fm = b.GetComponentInParent<FactionMember>();
+                if (fm == null || fm.faction != faction) continue;
+                float d = (b.transform.position - site.transform.position).sqrMagnitude;
+                scored.Add((b, d));
+            }
+            scored.Sort((a, c) => a.d.CompareTo(c.d));
+            int n = Mathf.Min(maxBuilders, scored.Count);
+            for (int i = 0; i < n; i++)
+                scored[i].b.SetBuildTarget(site);
+        }
 
         /// <param name="targetBaseY">Si tiene valor, la base visual del site se coloca en esta Y (footprint). Si no, se usa sample del terreno en el pivot.</param>
         void AlignBuildSiteToTerrain(GameObject siteGo, float? targetBaseY = null)
@@ -884,7 +910,8 @@ namespace Project.Gameplay.Buildings
             bool hitGround = Physics.Raycast(ray, out RaycastHit hit, 5000f, rayMask);
             Vector3 p = hitGround ? hit.point : ray.GetPoint(100f);
 
-            if (snapToGrid && gridSize > 0.001f)
+            float cellSize = GetCellSize();
+            if (snapToGrid && cellSize > 0.001f)
             {
                 bool canSnapCellCenter = MapGrid.Instance != null && MapGrid.Instance.IsReady;
                 bool isWallPath = _isPlacingPath && selectedBuilding != null && selectedBuilding.id == "Muro";
@@ -903,8 +930,8 @@ namespace Project.Gameplay.Buildings
                 else
                 {
                     Vector3 origin = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.origin : Vector3.zero;
-                    p.x = Mathf.Round((p.x - origin.x) / gridSize) * gridSize + origin.x;
-                    p.z = Mathf.Round((p.z - origin.z) / gridSize) * gridSize + origin.z;
+                    p.x = Mathf.Round((p.x - origin.x) / cellSize) * cellSize + origin.x;
+                    p.z = Mathf.Round((p.z - origin.z) / cellSize) * cellSize + origin.z;
                 }
             }
             if (terrain != null)
@@ -1038,7 +1065,9 @@ namespace Project.Gameplay.Buildings
 				var selected = selection.GetSelected();
 				for (int i = 0; i < selected.Count; i++)
 				{
-					var builder = selected[i].GetComponent<Project.Gameplay.Units.Builder>();
+					var sel = selected[i];
+					if (sel == null || !FactionMember.IsPlayerCommandable(sel.gameObject)) continue;
+					var builder = sel.GetComponent<Project.Gameplay.Units.Builder>();
 					if (builder != null)
 					{
 						builder.SetBuildTarget(site);
@@ -1055,11 +1084,13 @@ namespace Project.Gameplay.Buildings
 				float nearestDist = float.MaxValue;
 				for (int i = 0; i < allBuilders.Length; i++)
 				{
-					float d = (allBuilders[i].transform.position - sitePos).sqrMagnitude;
+					var b = allBuilders[i];
+					if (b == null || !FactionMember.IsPlayerCommandable(b.gameObject)) continue;
+					float d = (b.transform.position - sitePos).sqrMagnitude;
 					if (d < nearestDist)
 					{
 						nearestDist = d;
-						nearest = allBuilders[i];
+						nearest = b;
 					}
 				}
 				if (nearest != null)

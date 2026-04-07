@@ -36,10 +36,17 @@ namespace Project.Gameplay.Map.Generator
         [Range(0f, 1f)] public float clusterDensity;  // 0 = disperso, 1 = muy denso
         public int clusterMinSize;
         public int clusterMaxSize;
+        [Tooltip("-1 = colocador usa 0,75. Entre 0 y 1: fracción de árboles globales en clusters.")]
+        public float globalTreesClusterFraction = -1f;
+        [Tooltip("Si true, los árboles globales solo donde domina la capa hierba (índice 0) del alphamap.")]
+        public bool preferTreesOnGrassAlphamap;
         
         [Header("Terreno")]
         public float terrainFlatness;
         public float heightMultiplier;
+        [Tooltip("Si true, ajusta grass/dirt/rock del RTS (mantiene proporción dirt:rock del inspector).")]
+        public bool overrideTerrainGrassPercent;
+        [Range(10, 85)] public int terrainGrassPercent = 60;
         
         [Header("Recursos")]
         public float resourceMultiplier;  // 1.0 = normal, 1.5 = más recursos
@@ -109,17 +116,21 @@ namespace Project.Gameplay.Map.Generator
                     return new MapPreset
                     {
                         name = "Forest",
-                        description = "Bosque muy denso, difícil de navegar",
+                        description = "Bosque RTS: más árboles en manchas densas sobre hierba; terreno con más % hierba para alinear textura y bosques",
                         riverCount = 2,
                         lakeCount = 2,
                         maxLakeCells = 400,
-                        globalTrees = new Vector2Int(2200, 3200),
+                        globalTrees = new Vector2Int(920, 1180),
                         forestClustering = true,
-                        clusterDensity = 0.92f,
-                        clusterMinSize = 35,
-                        clusterMaxSize = 85,
-                        terrainFlatness = 0.45f,
-                        heightMultiplier = 12f,
+                        clusterDensity = 0.82f,
+                        clusterMinSize = 26,
+                        clusterMaxSize = 58,
+                        globalTreesClusterFraction = 0.88f,
+                        preferTreesOnGrassAlphamap = true,
+                        overrideTerrainGrassPercent = true,
+                        terrainGrassPercent = 62,
+                        terrainFlatness = 0.48f,
+                        heightMultiplier = 9f,
                         resourceMultiplier = 1.0f
                     };
 

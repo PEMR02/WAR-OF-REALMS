@@ -10,10 +10,11 @@ namespace Project.Gameplay.Units
     /// Estadísticas de unidad en partida: valores base (desde UnitSO) + modificadores (mejoras, debuffs, auras).
     /// Health, UnitMover y combate leen de aquí cuando existe; si no, usan valores del prefab/SO directo.
     /// </summary>
+    [DefaultExecutionOrder(-100)]
     public class UnitStatsRuntime : MonoBehaviour
     {
         [Header("Base (asignado al spawn desde UnitSO)")]
-        [Tooltip("Opcional en prefabs colocados en escena: asigna el SO para nombre en HUD si no pasó por InitFromUnitSO.")]
+        [Tooltip("Arrastra el UnitSO aquí: al entrar en Play se copian maxHP, ataque, velocidad, etc. (igual que al producir desde un edificio).")]
         [SerializeField] UnitSO definitionInEditor;
         UnitSO _definitionFromSpawn;
 
@@ -47,11 +48,23 @@ namespace Project.Gameplay.Units
         /// <summary>SO usado para stats y nombre en HUD (spawn o inspector).</summary>
         public UnitSO ResolvedUnitDefinition => _definitionFromSpawn != null ? _definitionFromSpawn : definitionInEditor;
 
+        void Awake()
+        {
+            // Sin esto, el prefab solo conservaba números viejos en _base* aunque el UnitSO estuviera asignado.
+            if (_definitionFromSpawn == null && definitionInEditor != null)
+                ApplyStatsFromUnitSO(definitionInEditor);
+        }
+
         /// <summary>Inicializa valores base desde el UnitSO (llamar al spawnear).</summary>
         public void InitFromUnitSO(UnitSO so)
         {
             if (so == null) return;
             _definitionFromSpawn = so;
+            ApplyStatsFromUnitSO(so);
+        }
+
+        void ApplyStatsFromUnitSO(UnitSO so)
+        {
             _baseMaxHP = so.maxHP;
             _baseAttack = so.attack;
             _baseAttackRange = so.attackRange;

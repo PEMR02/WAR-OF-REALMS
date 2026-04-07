@@ -1,5 +1,6 @@
 using UnityEngine;
 using System;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Players
 {
@@ -15,6 +16,8 @@ namespace Project.Gameplay.Players
         [SerializeField] private int _reservedPopulation = 0; // Reservada por colas de producción
         [Tooltip("Si true, al iniciar cuenta los aldeanos ya en escena (generados por mapa o colocados a mano) para que Pop coincida con Ociosos.")]
         [SerializeField] private bool registerExistingVillagersOnStart = true;
+        [Tooltip("Si true, no ejecuta RegisterExistingVillagers en Start (p. ej. PopulationManager en Town Center de la IA).")]
+        [SerializeField] public bool skipAutoRegisterPopulation;
 
         public int CurrentPopulation => _currentPopulation;
         public int MaxPopulation => Mathf.Min(_currentHousingCapacity, _maxPopulation);
@@ -30,10 +33,51 @@ namespace Project.Gameplay.Players
             _currentPopulation = 0;
         }
 
+        /// <summary>Población global del jugador humano (no el <see cref="PopulationManager"/> del TC de la IA).</summary>
+        public static PopulationManager FindPrimaryHumanSkirmish()
+        {
+            var all = FindObjectsByType<PopulationManager>(FindObjectsSortMode.None);
+            PopulationManager fallback = null;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var pm = all[i];
+                if (pm == null) continue;
+                if (pm.gameObject.name.StartsWith("TownCenter_Player", StringComparison.Ordinal))
+                    continue;
+                if (pm.gameObject.name == "GameManagers")
+                    return pm;
+                fallback ??= pm;
+            }
+            return fallback;
+        }
+
+        /// <summary>
+        /// Población asociada al mismo jugador que <paramref name="resources"/> (p. ej. en el Town Center de la IA);
+        /// si no hay componente local, cae al <see cref="PopulationManager"/> del jugador humano en escaramuza.
+        /// </summary>
+        public static PopulationManager ResolveForOwner(PlayerResources resources)
+        {
+            if (resources != null)
+            {
+                var local = resources.GetComponent<PopulationManager>();
+                if (local != null) return local;
+            }
+            return FindPrimaryHumanSkirmish();
+        }
+
         void Start()
         {
-            if (registerExistingVillagersOnStart)
+            if (!skipAutoRegisterPopulation && registerExistingVillagersOnStart)
                 RegisterExistingVillagers();
+        }
+
+        /// <summary>Skirmish IA: capacidad del TC + población ya generada (aldeanos iniciales).</summary>
+        public void SetInitialStateForAiTownCenter(int housingCapacity, int currentPopulationUnits)
+        {
+            _currentHousingCapacity = Mathf.Max(0, housingCapacity);
+            _currentPopulation = Mathf.Max(0, currentPopulationUnits);
+            _reservedPopulation = 0;
+            OnPopulationChanged?.Invoke(_currentPopulation, MaxPopulation);
         }
 
         /// <summary>Cuenta aldeanos ya presentes en la escena (map gen o colocados a mano) para que Pop coincida con Ociosos.</summary>
@@ -44,6 +88,9 @@ namespace Project.Gameplay.Players
             for (int i = 0; i < gatherers.Length; i++)
             {
                 if (gatherers[i] == null) continue;
+                var fm = gatherers[i].GetComponentInParent<FactionMember>();
+                if (fm != null && !fm.IsPlayer)
+                    continue;
                 if (TryAddPopulation(1)) added++;
             }
             if (added > 0)

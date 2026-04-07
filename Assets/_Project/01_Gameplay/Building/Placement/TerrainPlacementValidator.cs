@@ -25,9 +25,7 @@ namespace Project.Gameplay.Buildings
 
             if (maxSlopeDegrees > 0f && footprintSizeInCells.x >= 1f && footprintSizeInCells.y >= 1f)
             {
-                float cellSize = Project.Gameplay.Map.MapGrid.Instance != null && Project.Gameplay.Map.MapGrid.Instance.IsReady
-                    ? Project.Gameplay.Map.MapGrid.Instance.cellSize
-                    : 2.5f;
+                float cellSize = Project.Gameplay.Map.MapGrid.GetCellSizeOrDefault();
                 float diagonal = Mathf.Sqrt(footprintSizeInCells.x * footprintSizeInCells.x + footprintSizeInCells.y * footprintSizeInCells.y) * cellSize;
                 if (diagonal > 0.001f)
                 {

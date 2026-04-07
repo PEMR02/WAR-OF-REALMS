@@ -2,6 +2,7 @@ using UnityEngine;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Units;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay
 {
@@ -29,9 +30,32 @@ namespace Project.Gameplay
         private Material _outlineMaterial;
         private OutlineState _state;
         private bool _isUnit;
+        bool _hostileToPlayer;
 
         void Awake()
         {
+            _hostileToPlayer = GetComponent<UnitSelectable>() != null && FactionMember.IsHostileToPlayer(gameObject);
+            ApplyPaletteFromMode();
+            TryCreateOutlineRenderers();
+        }
+
+        void Start()
+        {
+            bool h = GetComponent<UnitSelectable>() != null && FactionMember.IsHostileToPlayer(gameObject);
+            if (h == _hostileToPlayer) return;
+            _hostileToPlayer = h;
+            ApplyPaletteFromMode();
+            if (_state != OutlineState.Off) SetState(_state);
+        }
+
+        void ApplyPaletteFromMode()
+        {
+            if (_hostileToPlayer)
+            {
+                selectionColor = new Color(0.62f, 0.14f, 0.12f, 0.98f);
+                hoverColor = new Color(1f, 0.52f, 0.48f, 0.85f);
+                return;
+            }
             if (SelectionOutlineConfig.Global != null)
             {
                 OutlineAppearance app = GetAppearanceFromConfig();
@@ -39,7 +63,6 @@ namespace Project.Gameplay
                 hoverColor = app.hoverColor;
                 outlineScale = app.outlineScale;
             }
-            TryCreateOutlineRenderers();
         }
 
         OutlineAppearance GetAppearanceFromConfig()
@@ -74,6 +97,8 @@ namespace Project.Gameplay
             if (shader == null) return;
 
             _isUnit = GetComponent<UnitSelectable>() != null;
+            _hostileToPlayer = _isUnit && FactionMember.IsHostileToPlayer(gameObject);
+            ApplyPaletteFromMode();
             bool centerByBounds = _isUnit;
 
             _outlineMaterial = new Material(shader);
@@ -188,18 +213,20 @@ namespace Project.Gameplay
             if (state != OutlineState.Off) TryCreateOutlineRenderers();
             if (_outlineObjects == null || _outlineObjects.Length == 0) return;
 
-            // Re-aplicar config al mostrar (para que Outline Scale del SelectionOutlineConfig sí cambie el grosor)
-            if (SelectionOutlineConfig.Global != null)
+            if (SelectionOutlineConfig.Global != null && !_hostileToPlayer)
             {
                 var app = GetAppearanceFromConfig();
                 outlineScale = app.outlineScale;
                 selectionColor = app.selectionColor;
                 hoverColor = app.hoverColor;
-                for (int i = 0; i < _outlineObjects.Length; i++)
-                {
-                    if (_outlineObjects[i] != null)
-                        _outlineObjects[i].transform.localScale = Vector3.one * outlineScale;
-                }
+            }
+            else if (!_hostileToPlayer)
+                ApplyPaletteFromMode();
+
+            for (int i = 0; i < _outlineObjects.Length; i++)
+            {
+                if (_outlineObjects[i] != null)
+                    _outlineObjects[i].transform.localScale = Vector3.one * outlineScale;
             }
 
             bool active = state != OutlineState.Off;

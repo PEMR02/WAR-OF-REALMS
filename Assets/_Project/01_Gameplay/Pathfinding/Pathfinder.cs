@@ -45,8 +45,8 @@ namespace Project.Gameplay.Pathfinding
             if (!MapGrid.Instance.IsInBounds(goal))
                 return PathResult.Failed("Goal fuera de bounds");
 
-            // Si el destino está en agua y NO puede nadar → ir a la orilla más cercana
-            if (!canSwim && MapGrid.Instance.IsWater(goal))
+            // Agua profunda infranqueable o agua sin nadar → acercar a orilla transitable
+            if (MapGrid.Instance.IsImpassableWater(goal) || (!canSwim && MapGrid.Instance.IsWater(goal)))
             {
                 Vector2Int shore = FindNearestLandCell(goal, 15);
                 if (shore == goal)
@@ -120,6 +120,7 @@ namespace Project.Gameplay.Pathfinding
                         var c = new Vector2Int(center.x + dx, center.y + dy);
                         if (!MapGrid.Instance.IsInBounds(c)) continue;
                         if (!MapGrid.Instance.IsCellFree(c)) continue;
+                        if (MapGrid.Instance.IsImpassableWater(c)) continue;
                         if (!canSwim && MapGrid.Instance.IsWater(c)) continue;
 
                         float score = r;
@@ -182,7 +183,9 @@ namespace Project.Gameplay.Pathfinding
                         continue;
                     if (!MapGrid.Instance.IsCellFree(neighbor))
                         continue;
-                    // Si no puede nadar, agua es intransitable
+                    if (MapGrid.Instance.IsImpassableWater(neighbor))
+                        continue;
+                    // Si no puede nadar, agua navegable es intransitable
                     if (!canSwim && MapGrid.Instance.IsWater(neighbor))
                         continue;
 

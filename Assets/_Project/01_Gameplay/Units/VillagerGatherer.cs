@@ -44,7 +44,7 @@ namespace Project.Gameplay.Units
 
         private State _state = State.Idle;
 
-        // RTS: ignorar Y en distancias de interacciùn (evita "se ve cerca pero nunca interactùa")
+        // RTS: ignorar Y en distancias de interacci¬ùn (evita "se ve cerca pero nunca interact¬ùa")
         static float FlatDistance(Vector3 a, Vector3 b)
         {
             a.y = 0f;
@@ -53,7 +53,7 @@ namespace Project.Gameplay.Units
         }
 
         /// <summary>
-        /// Desfase estable en XZ por instancia: evita que dos aldeanos pidan el mismo vùrtice del recurso / NavMesh y queden pegados por avoidance.
+        /// Desfase estable en XZ por instancia: evita que dos aldeanos pidan el mismo v¬ùrtice del recurso / NavMesh y queden pegados por avoidance.
         /// </summary>
         Vector3 StableApproachSpread(float radiusMeters)
         {
@@ -83,7 +83,7 @@ namespace Project.Gameplay.Units
 
             // Fail-safe: si se desconfigura el prefab, igual se amarra al PlayerResources en escena
             if (owner == null)
-                owner = FindFirstObjectByType<PlayerResources>();
+                owner = PlayerResources.FindPrimaryHumanSkirmish();
         }
 
         public void Gather(ResourceNode node)
@@ -102,7 +102,7 @@ namespace Project.Gameplay.Units
                 if (debugLogs)
                     Debug.Log($"[{gameObject.name}] Asignado a recolectar: {_carriedKind} (raw value: {(int)_carriedKind})");
 
-                // Dirigir al punto MùS cercano del collider a la pos actual (no al centro del bounds).
+                // Dirigir al punto M¬ùS cercano del collider a la pos actual (no al centro del bounds).
                 // Esto reduce casos donde el NavMesh se detiene en el borde y nunca entra al rango exacto.
                 SetDestinationSmart(GetDesiredNodeApproachWorld());
                 _state = State.GoingToNode;
@@ -117,7 +117,7 @@ namespace Project.Gameplay.Units
         {
             if (owner == null) return;
 
-            // Si el nodo desapareciùù pero llevo carga, deposito igual
+            // Si el nodo desapareci¬ù¬ù pero llevo carga, deposito igual
             if (_targetNode == null)
             {
                 if (_carried > 0)
@@ -128,7 +128,7 @@ namespace Project.Gameplay.Units
                 return;
             }
 
-            // Priorizar depùùsito si estoy lleno
+            // Priorizar dep¬ù¬ùsito si estoy lleno
             if (_carried >= carryCapacity)
             {
                 EnsureDepositMode();
@@ -136,7 +136,7 @@ namespace Project.Gameplay.Units
                 return;
             }
 
-            // Si el nodo se agotùù y llevo algo, deposito
+            // Si el nodo se agot¬ù¬ù y llevo algo, deposito
             if (_targetNode.IsDepleted && _carried > 0)
             {
                 EnsureDepositMode();
@@ -152,11 +152,11 @@ namespace Project.Gameplay.Units
             if (_state != State.GoingToDrop && _state != State.Depositing)
             {
                 if (debugLogs)
-                    Debug.Log($"[{gameObject.name}] Cambiando a modo depùùsito. Llevando: {_carried} {_carriedKind}");
+                    Debug.Log($"[{gameObject.name}] Cambiando a modo dep¬ù¬ùsito. Llevando: {_carried} {_carriedKind}");
 
                 _agent.ResetPath();
                 _state = State.GoingToDrop;
-                _deposit = null; // forzar bùùsqueda fresh
+                _deposit = null; // forzar b¬ù¬ùsqueda fresh
             }
         }
 
@@ -168,7 +168,7 @@ namespace Project.Gameplay.Units
                 : _targetNode.transform.position;
             float dist = FlatDistance(transform.position, nodePoint);
 
-            // Robustez: si el NavMesh ya lo dejù a distancia de parada, igual consideramos "en rango".
+            // Robustez: si el NavMesh ya lo dej¬ù a distancia de parada, igual consideramos "en rango".
             bool arrivedByNav = _agent != null
                                  && !_agent.pathPending
                                  && _agent.remainingDistance <= _agent.stoppingDistance + 0.4f;
@@ -208,7 +208,7 @@ namespace Project.Gameplay.Units
         {
             _retryTimer -= Time.deltaTime;
 
-            // Buscar/rebuscar depùùsito vùùlido cada cierto tiempo
+            // Buscar/rebuscar dep¬ù¬ùsito v¬ù¬ùlido cada cierto tiempo
             if (_deposit == null || !_deposit.Accepts(_carriedKind))
             {
                 if (_retryTimer <= 0f)
@@ -216,19 +216,19 @@ namespace Project.Gameplay.Units
                     _retryTimer = retryDepositEvery;
 
                     if (debugLogs)
-                        Debug.Log($"[{gameObject.name}] Buscando depùùsito para: {_carriedKind} (raw: {(int)_carriedKind})");
+                        Debug.Log($"[{gameObject.name}] Buscando dep¬ù¬ùsito para: {_carriedKind} (raw: {(int)_carriedKind})");
 
                     _deposit = DropOffFinder.FindNearest(transform.position, _carriedKind);
 
                     if (_deposit == null)
                     {
                         if (debugLogs)
-                            Debug.LogWarning($"[{gameObject.name}] ? NO se encontrùù depùùsito para {_carriedKind}. Quedando idle con recursos.");
+                            Debug.LogWarning($"[{gameObject.name}] ? NO se encontr¬ù¬ù dep¬ù¬ùsito para {_carriedKind}. Quedando idle con recursos.");
                     }
                     else
                     {
                         if (debugLogs)
-                            Debug.Log($"[{gameObject.name}] ? Depùùsito encontrado: {_deposit.gameObject.name}");
+                            Debug.Log($"[{gameObject.name}] ? Dep¬ù¬ùsito encontrado: {_deposit.gameObject.name}");
                     }
 
                     if (_deposit == null)
@@ -244,7 +244,7 @@ namespace Project.Gameplay.Units
                 return;
             }
 
-            // Ya hay depùùsito -> ir
+            // Ya hay dep¬ù¬ùsito -> ir
             Vector3 dropPos = _deposit.GetDropPositionFrom(transform.position, DropSpreadId);
 
             if (!_agent.pathPending && (!_agent.hasPath || _agent.remainingDistance <= _agent.stoppingDistance + 0.15f))
@@ -291,7 +291,7 @@ namespace Project.Gameplay.Units
             if (NavMesh.SamplePosition(desired, out NavMeshHit hit, navSampleRadius, NavMesh.AllAreas))
                 target = hit.position;
 
-            // Centralizar el movimiento en UnitMover para que recolecciùn/depùsito tambiùn respeten puertas.
+            // Centralizar el movimiento en UnitMover para que recolecci¬ùn/dep¬ùsito tambi¬ùn respeten puertas.
             if (_mover != null)
                 _mover.MoveTo(target);
             else
@@ -300,7 +300,7 @@ namespace Project.Gameplay.Units
 		
 		public void AbortGatherAndBankCarried()
 		{
-			// Deposita instantaneo lo que lleva para evitar perder recursos y evitar ùùping-pongùù
+			// Deposita instantaneo lo que lleva para evitar perder recursos y evitar ¬ù¬ùping-pong¬ù¬ù
 			if (owner != null && _carried > 0)
 				owner.Add(_carriedKind, _carried);
 
@@ -326,7 +326,7 @@ namespace Project.Gameplay.Units
 		_gatherTimer = 0f;
 		_retryTimer = 0f;
 
-		// Importante: detener UnitMover para cancelar rutas A* que podrùan seguir ejecutùndose
+		// Importante: detener UnitMover para cancelar rutas A* que podr¬ùan seguir ejecut¬ùndose
 		// aunque el gatherer pase a Idle. (De lo contrario el aldeano "va al recurso"
 		// pero nunca entra en estado Gathering.)
 		if (_mover != null)
@@ -338,8 +338,8 @@ namespace Project.Gameplay.Units
 
 	/// <summary>
 	/// Orden manual de depositar en un punto concreto (ej. click derecho sobre TownCenter).
-	/// Si llevo recursos, voy a depositar en ese punto especùqfico.
-	/// Si no llevo nada, me quedo idle (el llamador deberùqa moverme con UnitMover en ese caso).
+	/// Si llevo recursos, voy a depositar en ese punto espec¬ùqfico.
+	/// Si no llevo nada, me quedo idle (el llamador deber¬ùqa moverme con UnitMover en ese caso).
 	/// </summary>
 	public bool GoDepositAt(DropOffPoint point)
 	{
@@ -361,7 +361,7 @@ namespace Project.Gameplay.Units
 	/// <summary>True si el aldeano lleva recursos cargados.</summary>
 	public bool IsCarrying => _carried > 0;
 
-	/// <summary>True si no estù recolectando ni yendo a depùsito.</summary>
+	/// <summary>True si no est¬ù recolectando ni yendo a dep¬ùsito.</summary>
 	public bool IsIdle => _state == State.Idle;
 
 		

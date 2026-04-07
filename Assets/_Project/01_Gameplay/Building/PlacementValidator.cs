@@ -17,7 +17,7 @@ namespace Project.Gameplay.Buildings
             float yOffset = 0.5f,
             float overlapInset = 0.08f)
         {
-            float cellSize = (MapGrid.Instance != null && MapGrid.Instance.IsReady) ? MapGrid.Instance.cellSize : 1f;
+            float cellSize = MapGrid.GetCellSizeOrDefault();
             float wx = size.x * cellSize;
             float wz = size.y * cellSize;
             float hx = Mathf.Max(0.01f, wx * 0.5f - overlapInset);

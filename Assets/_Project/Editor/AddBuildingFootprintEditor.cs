@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEditor;
 using Project.Gameplay.Buildings;
+using Project.Gameplay.Map;
 
 namespace ProjectEditor.Buildings
 {
@@ -16,13 +17,13 @@ namespace ProjectEditor.Buildings
 
         static float GetEditorCellSize()
         {
-            var guids = AssetDatabase.FindAssets("t:GridConfig");
+            var guids = AssetDatabase.FindAssets("t:MatchConfig");
             if (guids.Length > 0)
             {
-                var config = AssetDatabase.LoadAssetAtPath<GridConfig>(AssetDatabase.GUIDToAssetPath(guids[0]));
-                if (config != null) return config.gridSize;
+                var config = AssetDatabase.LoadAssetAtPath<MatchConfig>(AssetDatabase.GUIDToAssetPath(guids[0]));
+                if (config != null) return Mathf.Max(0.01f, config.map.cellSize);
             }
-            return 2.5f;
+            return MatchRuntimeState.DefaultCellSize;
         }
 
         [MenuItem("Tools/Project/Añadir o actualizar Footprint (edificio seleccionado)")]

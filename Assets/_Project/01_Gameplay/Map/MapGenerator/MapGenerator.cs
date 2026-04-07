@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using Project.Gameplay.Map.Generation.Alpha;
 
 namespace Project.Gameplay.Map.Generator
 {
@@ -46,7 +47,9 @@ namespace Project.Gameplay.Map.Generator
         public List<Road> Roads => _roads;
 
         /// <summary>Ejecuta el pipeline completo. Retorna true si la validación pasó.</summary>
-        public bool Generate(MapGenConfig cfg = null, Terrain t = null)
+        /// <param name="skipSurfaceExport">Si true, no exporta terreno ni crea mallas de agua (vista previa / lobby).</param>
+        /// <param name="skipRoadConnectivityValidation">Si true, no exige que el MST de caminos una todas las ciudades (solo lobby / preview 2D).</param>
+        public bool Generate(MapGenConfig cfg = null, Terrain t = null, bool skipSurfaceExport = false, bool skipRoadConnectivityValidation = false)
         {
             MapGenConfig c = cfg != null ? cfg : config;
             Terrain tr = t != null ? t : terrain;
@@ -82,9 +85,18 @@ namespace Project.Gameplay.Map.Generator
                 WaterGenerator.GenerateWater(_grid, c, _rng);
                 LogPhaseEnd("Fase3 Agua");
 
+                LogPhaseStart("Fase3b WaterDistance");
+                WaterDistanceField.Build(_grid);
+                LogPhaseEnd("Fase3b WaterDistance");
+
                 LogPhaseStart("Fase4 Heights");
                 HeightGenerator.GenerateHeights(_grid, c, _rng);
                 LogPhaseEnd("Fase4 Heights");
+
+                LogPhaseStart("Fase4b MacroRelief (alpha)");
+                MacroTerrainSculptor.Apply(_grid, c, _rng, c.alphaTerrainFeatureRecord);
+                HeightGenerator.RecalculateLandSlopes(_grid, c);
+                LogPhaseEnd("Fase4b MacroRelief (alpha)");
 
                 LogPhaseStart("Fase5 Ciudades");
                 _cities = CityGenerator.GenerateCities(_grid, c, _rng);
@@ -99,36 +111,62 @@ namespace Project.Gameplay.Map.Generator
                 TerrainCarver.ApplyRoadFlatten(_grid, _roads, c);
                 LogPhaseEnd("Fase7 Carve");
 
+                LogPhaseStart("Fase7c RegionClassification");
+                if (c.alphaRegionRules != null)
+                {
+                    _grid.SemanticRegions = RegionClassifier.Classify(_grid, c.alphaRegionRules);
+                    if (_dbg && _grid.SemanticRegions != null)
+                    {
+                        var m = _grid.SemanticRegions;
+                        Debug.Log(
+                            $"[MapGen] Regiones: Plain={m.CountType(TerrainRegionType.Plain)} Hill={m.CountType(TerrainRegionType.Hill)} " +
+                            $"Mtn={m.CountType(TerrainRegionType.Mountain)} RiverBank={m.CountType(TerrainRegionType.RiverBank)} " +
+                            $"SpawnFriendly={m.CountType(TerrainRegionType.SpawnFriendly)} ForestCand={m.CountType(TerrainRegionType.ForestCandidate)}");
+                    }
+                }
+                else
+                    _grid.SemanticRegions = null;
+                LogPhaseEnd("Fase7c RegionClassification");
+
                 LogPhaseStart("Fase8 Recursos");
                 ResourceGenerator.PlaceResources(_grid, _cities, c, _rng);
                 LogPhaseEnd("Fase8 Recursos");
 
-                if (tr != null)
+                if (!skipSurfaceExport)
                 {
-                    LogPhaseStart("Fase9 TerrainExport");
-                    TerrainExporter.ApplyToTerrain(tr, _grid, c,
-                        terrainGrassLayerOverride, terrainDirtLayerOverride, terrainRockLayerOverride,
-                        terrainGrassTileSize, terrainDirtTileSize, terrainRockTileSize,
-                        terrainSandLayerOverride, terrainSandTileSize, terrainSandShoreCells);
-                    LogPhaseEnd("Fase9 TerrainExport");
-                    StartCoroutine(RefreshTerrainNextFrame(tr));
-                }
+                    if (tr != null)
+                    {
+                        LogPhaseStart("Fase9 TerrainExport");
+                        TerrainExporter.ApplyToTerrain(tr, _grid, c,
+                            terrainGrassLayerOverride, terrainDirtLayerOverride, terrainRockLayerOverride,
+                            terrainGrassTileSize, terrainDirtTileSize, terrainRockTileSize,
+                            terrainSandLayerOverride, terrainSandTileSize, terrainSandShoreCells);
+                        TerrainSplatDebugDisplay.Refresh(tr, c);
+                        LogPhaseEnd("Fase9 TerrainExport");
+                        StartCoroutine(RefreshTerrainNextFrame(tr));
+                    }
 
-                LogPhaseStart("Fase9 WaterMesh");
-                WaterMeshBuilder.BuildWaterMeshes(_grid, c, c.waterMaterial);
-                LogPhaseEnd("Fase9 WaterMesh");
+                    LogPhaseStart("Fase9 WaterMesh");
+                    WaterMeshBuilder.BuildWaterMeshes(_grid, c, c.waterMaterial);
+                    LogPhaseEnd("Fase9 WaterMesh");
+                }
 
                 LogPhaseStart("Fase10 GameplayExport");
                 RunPhase10_GameplayExport(c);
                 LogPhaseEnd("Fase10 GameplayExport");
 
-                if (MapValidator.Validate(_grid, _cities, _roads, c, out string reason))
+                string valReason;
+                bool okValidation = skipRoadConnectivityValidation
+                    ? MapValidator.Validate(_grid, _cities, c, out valReason)
+                    : MapValidator.Validate(_grid, _cities, _roads, c, out valReason);
+                if (okValidation)
                 {
                     if (_dbg) Debug.Log($"MapGenerator: Validación OK (seed={seed}, retry={retry}).");
-                    OnGenerationComplete?.Invoke(_grid, _cities, _roads, c);
+                    if (!skipSurfaceExport)
+                        OnGenerationComplete?.Invoke(_grid, _cities, _roads, c);
                     return true;
                 }
-                Debug.LogWarning($"MapGenerator: Validación fallida (retry={retry}): {reason}");
+                Debug.LogWarning($"MapGenerator: Validación fallida (retry={retry}): {valReason}");
             }
 
             Debug.LogError("MapGenerator: Todas las reintentos fallaron.");
@@ -154,6 +192,8 @@ namespace Project.Gameplay.Map.Generator
 
         private void RunPhase1_GridBase(MapGenConfig c)
         {
+            _grid.DistanceToWaterCells = null;
+            _grid.SemanticRegions = null;
             for (int x = 0; x < _grid.Width; x++)
                 for (int z = 0; z < _grid.Height; z++)
                 {
@@ -185,6 +225,41 @@ namespace Project.Gameplay.Map.Generator
         private void DebugGenerate()
         {
             Generate(config, terrain);
+        }
+
+        void OnDrawGizmos()
+        {
+            MapGenConfig c = config;
+            if (c == null || !c.debugDrawRiverPathInScene || _grid == null)
+                return;
+            float cs = _grid.CellSizeWorld;
+            Vector3 o = _grid.Origin;
+            float y = o.y + 0.15f;
+
+            void DrawPolyCell(List<Vector2> poly, Color col)
+            {
+                if (poly == null || poly.Count < 2)
+                    return;
+                Gizmos.color = col;
+                for (int i = 0; i < poly.Count - 1; i++)
+                {
+                    Vector3 a = new Vector3(o.x + poly[i].x * cs, y, o.z + poly[i].y * cs);
+                    Vector3 b = new Vector3(o.x + poly[i + 1].x * cs, y, o.z + poly[i + 1].y * cs);
+                    Gizmos.DrawLine(a, b);
+                }
+            }
+
+            if (c.debugRiverDrawMacro && _grid.RiverPathDebugMacro != null)
+            {
+                foreach (var poly in _grid.RiverPathDebugMacro)
+                    DrawPolyCell(poly, new Color(1f, 0.4f, 0.9f, 0.9f));
+            }
+
+            if (c.debugRiverDrawSmoothedCenterline && _grid.RiverPathDebugSmoothed != null)
+            {
+                foreach (var poly in _grid.RiverPathDebugSmoothed)
+                    DrawPolyCell(poly, new Color(0.2f, 0.95f, 0.35f, 0.9f));
+            }
         }
     }
 }

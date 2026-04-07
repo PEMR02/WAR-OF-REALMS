@@ -91,6 +91,15 @@ namespace Project.Gameplay
         [Tooltip("Nombres de objeto del TC para priorizar jugador 1 (ej. TownCenter_Player1).")]
         public string player1TownCenterName = "TownCenter_Player1";
 
+        [Header("Encuadre inicial — zoom al empezar")]
+        [Tooltip("Si true: distancia inicial = startZoomDistance (clamp min/max). Salta el auto-fit.")]
+        public bool useStartZoomOverride = true;
+        [Tooltip("Distancia rig–cámara al iniciar cuando useStartZoomOverride.")]
+        public float startZoomDistance = 45f;
+        [Tooltip("Solo si useStartZoomOverride es false: ajusta zoom al tamaño del mapa (factor interno 0.18).")]
+        public bool autoFitToMapOnStart = false;
+        public float fitPaddingMultiplier = 1.15f;
+
         private Vector2 _lastMousePos;
         private float _yaw;
         private bool _dragging;
@@ -160,8 +169,68 @@ namespace Project.Gameplay
             ApplyFixedPitch();
             ApplyFixedFov();
             ClampDistance();
+            if (useStartZoomOverride)
+            {
+                float startD = Mathf.Clamp(startZoomDistance, minDistance, maxDistance);
+                _targetDistance = startD;
+                CurrentDistance = startD;
+            }
+            else if (autoFitToMapOnStart)
+                StartCoroutine(FitInitialDistanceWhenReady());
             if (focusOnTownCenterAtStart)
                 StartCoroutine(FocusOnPlayer1TownCenterDelayed());
+        }
+
+        void FitInitialDistanceToMap()
+        {
+            float worldWidth = 0f;
+            float worldHeight = 0f;
+
+            MapGrid grid = FindFirstObjectByType<MapGrid>();
+            if (grid != null && grid.IsReady)
+            {
+                worldWidth = grid.width * grid.cellSize;
+                worldHeight = grid.height * grid.cellSize;
+            }
+            else if (Terrain.activeTerrain != null && Terrain.activeTerrain.terrainData != null)
+            {
+                Vector3 size = Terrain.activeTerrain.terrainData.size;
+                worldWidth = size.x;
+                worldHeight = size.z;
+            }
+            else
+            {
+                return;
+            }
+
+            float mapSize = Mathf.Max(worldWidth, worldHeight);
+            float targetDistance = Mathf.Clamp(mapSize * 0.18f * fitPaddingMultiplier, minDistance, maxDistance);
+
+            _targetDistance = targetDistance;
+            CurrentDistance = targetDistance;
+        }
+
+        IEnumerator FitInitialDistanceWhenReady()
+        {
+            const float timeout = 4f;
+            float t = 0f;
+            while (t < timeout)
+            {
+                MapGrid g = FindFirstObjectByType<MapGrid>();
+                if (g != null && g.IsReady)
+                {
+                    FitInitialDistanceToMap();
+                    yield break;
+                }
+                if (Terrain.activeTerrain != null && Terrain.activeTerrain.terrainData != null)
+                {
+                    FitInitialDistanceToMap();
+                    yield break;
+                }
+                t += Time.unscaledDeltaTime;
+                yield return null;
+            }
+            FitInitialDistanceToMap();
         }
 
         IEnumerator RefreshBoundsUntilReady()

@@ -12,6 +12,32 @@ namespace Project.Gameplay.Map.Generator
         public float CellSizeWorld { get; private set; }
         public Vector3 Origin { get; private set; }
 
+        /// <summary>
+        /// Eje del río en espacio celda continuo (x=columna, y=fila): centerline suavizada y remuestreada,
+        /// alineada con el raster de <see cref="CellType.River"/> (Fase3).
+        /// </summary>
+        public List<List<Vector2>> RiverCenterlinesCellSpace { get; set; }
+
+        /// <summary>Ejes en mundo al momento de Fase3 (opcional). La malla ribbon deriva de <see cref="RiverCenterlinesCellSpace"/> al construir agua.</summary>
+        public List<List<Vector3>> RiverCenterlinesWorld { get; set; }
+
+        /// <summary>Debug: polilínea macro por río (espacio celda). Solo si MapGenConfig.debugDrawRiverPathInScene.</summary>
+        public List<List<Vector2>> RiverPathDebugMacro { get; set; }
+        /// <summary>Debug: centerline suavizada antes del raster (espacio celda).</summary>
+        public List<List<Vector2>> RiverPathDebugSmoothed { get; set; }
+
+        /// <summary>
+        /// Celdas del cuerpo de cada lago tras el flood fill (antes de absorber bocas de río).
+        /// Sirve para BFS orgánico río→lago sin propagar por todo el cauce.
+        /// </summary>
+        public HashSet<long> LakeBodyCellsPacked { get; set; }
+
+        /// <summary>Distancia Chebyshev a la celda de agua/río más cercana (alpha / recursos). Null hasta que WaterDistanceField la rellene.</summary>
+        public int[,] DistanceToWaterCells { get; set; }
+
+        /// <summary>Clasificación semántica alpha (post-carve, pre-recursos).</summary>
+        public Project.Gameplay.Map.Generation.Alpha.SemanticRegionMap SemanticRegions { get; set; }
+
         private CellData[,] _cells;
 
         public GridSystem(int width, int height, float cellSizeWorld, Vector3 origin = default)

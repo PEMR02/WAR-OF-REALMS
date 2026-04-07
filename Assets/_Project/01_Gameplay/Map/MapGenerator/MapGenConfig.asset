@@ -19,12 +19,89 @@ MonoBehaviour:
   seed: 12345
   maxRetries: 5
   debugLogs: 1
+  debugTerrainMoisture: 0
+  debugTerrainMacro: 0
+  debugTerrainGrassDry: 0
   regionCount: 8
   regionNoiseScale: 0.02
-  waterHeight01: 0.25
-  riverCount: 5
-  lakeCount: 5
+  waterHeight01: 0.2
+  riverCount: 1
+  lakeCount: 9
   maxLakeCells: 300
+  riverTowardExitStepChance: 0.72
+  riverMeanderLengthMultiplier: 2.05
+  riverBezierLateral01: 0.1
+  riverCurveSamplesPerCellDist: 2.85
+  riverMsCellSoftStart01: 0.44
+  riverMsMinAboveIsoAfterBlur: 0.11
+  riverBedDepthBelowWater01: 0.022
+  riverWidthRadiusCells: 2
+  riverWidthNoiseAmplitudeCells: 1
+  lakeRiverMouthBlendCells: 3
+  riverExpandEuclidean: 1
+  lakeOrganicIrregularity: 0.72
+  lakeExtraSeedSpreadCells: 4
+  lakeShoreMsNoiseAmplitude: 0.09
+  lakeShoreMsNoiseScale: 0.105
+  mergeRiverCellsTouchingLake: 1
+  lakeDeepImpassableMinDistanceFromShore: 0
+  riverVisualUseContinuousField: 1
+  riverVisualHalfWidthCells: 0.55
+  riverVisualSoftnessCells: 0.42
+  riverVisualFieldStrength: 1
+  riverVisualSampleSpacingCells: 0.17
+  riverVisualUseContinuousMesh: 1
+  riverVisualMeshHalfWidth: 2.15
+  riverVisualSampleSpacing: 0.4
+  riverVisualBankInset: 0
+  riverRibbonVerticalLiftWorld: 0.34
+  debugRiverRibbonGeometry: 1
+  debugRiverVisualStats: 0
+  riverTerrainCarveDepthWorld: 1
+  riverTerrainCarveFalloffCells: 8
+  riverTerrainCarveCenterCurve: 1.35
+  riverTerrainCarveFordMul: 0.32
+  riverRibbonLateralJitterWorld: 0.38
+  riverRibbonJitterNoiseScale: 0.62
+  riverRibbonPerlinWidthBlend: 1
+  riverRibbonPerlinWidthFreq: 0.09
+  sandShoreFalloffPower: 2.15
+  sandShoreExtraDistanceNoise: 0.6
+  sandSoilContrastNearShore: 1.38
+  sandShoreAlphamapSmoothCap: 1
+  riverMacroNodeCount: 8
+  riverMacroBendStrength: 0.32
+  riverMacroBendFrequency: 0.78
+  riverMacroSlowBendFrequency: 0.42
+  riverMacroSlowBendWeight: 0.58
+  riverCurvatureSectionFrequency: 0.92
+  riverCurvatureSectionContrast: 0.52
+  riverLateralNoiseScale: 1.35
+  riverLateralNoiseStrength: 0.1
+  riverSmoothingPasses: 5
+  riverSmoothingStrength: 0.36
+  riverCenterlineSampleSpacingCells: 0.2
+  riverMaxTurnAngleDegrees: 152
+  riverMinCurveRadiusCells: 2.4
+  riverStraightnessPenalty: 0.09
+  riverFordEveryCells: 26
+  riverFordCorridorRadiusCells: 1
+  riverFordDepthBelowWater01: 0.014
+  riverFordBedLayer: {fileID: 0}
+  riverAvoidCrossingOtherRivers: 1
+  riverPlacementMaxAttemptsPerRiver: 40
+  riverCorridorRejectEarlyAbort: 12
+  riverLogPlacementFailureSummary: 1
+  riverLogSuccessfulPlacementMetrics: 0
+  riverRibbonHalfWidthMinMul: 0.66
+  riverRibbonHalfWidthMaxMul: 1.42
+  riverRibbonWidthVariation: 0.32
+  riverRibbonWidthNoiseFreq: 0.075
+  riverRibbonCellSpaceLaplacianPasses: 2
+  riverRibbonCellSpaceLaplacianAlpha: 0.22
+  debugDrawRiverPathInScene: 0
+  debugRiverDrawMacro: 1
+  debugRiverDrawSmoothedCenterline: 1
   cityCount: 4
   minCityDistanceCells: 40
   cityRadiusCells: 8
@@ -42,18 +119,51 @@ MonoBehaviour:
   maxResourceRetries: 5
   terrainHeightWorld: 50
   heightmapResolution: 513
+  terrainNormalSmoothingPasses: 1
+  terrainNormalSmoothingStrength: 0.32
+  terrainAlphamapSmoothPasses: 1
+  terrainBaseColor: {r: 1, g: 1, b: 1, a: 1}
+  terrainHeightTintStrength: 0.12
+  terrainSlopeTintStrength: 0.22
+  terrainNoiseScale: 0.35
+  terrainNoiseStrength: 0.06
+  terrainMaterialTemplateOverride: {fileID: 0}
   paintTerrainByHeight: 1
   grassLayer: {fileID: 8574412962073106934, guid: 7fcfde19b99458c49955249ce1f9571d, type: 2}
   dirtLayer: {fileID: 8574412962073106934, guid: af19458d8f1cb71418a617fe396e7b19, type: 2}
   rockLayer: {fileID: 8574412962073106934, guid: 0210cca0eddd56d4596ca8d5b970f534, type: 2}
+  grassPercent01: 0.6
+  dirtPercent01: 0.2
+  rockPercent01: 0.2
   grassMaxHeight01: 0.4
   dirtMaxHeight01: 0.65
   textureBlendWidth: 0.05
+  terrainBlendSharpness: 0.2
+  terrainMacroNoiseScale: 0.012
+  terrainMacroNoiseStrength: 0.08
+  grassDryLayer: {fileID: 0}
+  grassDryBlendStrength: 0.55
+  grassDryNoiseScale: 0.009
+  wetDirtLayer: {fileID: 0}
+  terrainMoistureRadius: 10
+  terrainMoistureStrength: 0.65
+  terrainMoistureNoiseScale: 0.14
+  terrainMoistureNoiseStrength: 0.35
+  sandLayer: {fileID: 0}
+  sandShoreCells: 3
+  sandEdgeNoiseScale: 0.22
+  sandEdgeNoiseStrength: 0.85
   shoreSmoothRadiusCells: 4
   shoreSmoothStrength: 1
   waterChunkSize: 32
   waterSurfaceOffset: 0.05
   waterMaterial: {fileID: 2100000, guid: ab163d8c7cdea6c488fcc76d9dec579c, type: 2}
+  riverWaterShallowColor: {r: 0.32, g: 0.64, b: 0.82, a: 1}
+  riverWaterDeepColor: {r: 0.08, g: 0.22, b: 0.42, a: 1}
+  riverUVFlowSpeed: {x: 0.06, y: 0.02}
+  riverBankBlendStrength: 0.22
+  riverMaxSegmentLengthWorld: 0
+  waterAlpha: 0.88
   waterLayer: -1
   waterRoundedEdges: 1
   waterEdgeSubdiv: 4

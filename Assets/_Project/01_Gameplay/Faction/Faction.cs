@@ -35,5 +35,23 @@ namespace Project.Gameplay.Faction
         public bool IsPlayer => faction == FactionId.Player;
         public bool IsEnemy => faction == FactionId.Enemy;
         public bool IsNeutral => faction == FactionId.Neutral;
+
+        /// <summary>Unidades/edificios que el jugador humano puede seleccionar y dar órdenes (no enemigos).</summary>
+        public static bool IsPlayerCommandable(GameObject go)
+        {
+            if (go == null) return false;
+            var fm = go.GetComponentInParent<FactionMember>();
+            if (fm == null) return true;
+            return fm.faction == FactionId.Player;
+        }
+
+        /// <summary>True si la entidad es hostil al jugador (enemigo u otro bando no neutral).</summary>
+        public static bool IsHostileToPlayer(GameObject go)
+        {
+            if (go == null) return false;
+            var fm = go.GetComponentInParent<FactionMember>();
+            if (fm == null) return false;
+            return IsHostile(FactionId.Player, fm.faction);
+        }
     }
 }

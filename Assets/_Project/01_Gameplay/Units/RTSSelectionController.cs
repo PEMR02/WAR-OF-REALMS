@@ -6,6 +6,7 @@ using Project.Gameplay.Resources;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Map;
 using Project.UI;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Units
 {
@@ -46,7 +47,6 @@ namespace Project.Gameplay.Units
         private bool _isDragging;
 
         private readonly List<UnitSelectable> _selected = new();
-        private int _selectedVillagerCount;
 
         // Para detectar doble clic
         private float _lastClickTime;
@@ -71,6 +71,10 @@ namespace Project.Gameplay.Units
             if (buildingPlacer == null)
                 buildingPlacer = FindFirstObjectByType<Project.Gameplay.Buildings.BuildingPlacer>();
             EnsureResourceLayerMaskFromMap();
+            if (unitLayerMask.value != 0)
+                unitLayerMask |= 1 << 0;
+            if (resourceLayerMask.value != 0)
+                resourceLayerMask |= 1 << 0;
         }
 
         void Start()
@@ -205,12 +209,20 @@ namespace Project.Gameplay.Units
         {
             Ray ray = cam.ScreenPointToRay(screenPos);
 
-            // 1) Prioridad: Units
-            if (Physics.Raycast(ray, out RaycastHit hitU, 5000f, unitLayerMask))
+            // 1) Prioridad: Units (todos los hits: un solo Raycast con el primero sin UnitSelectable bloqueaba árboles/recursos detrás)
+            if (unitLayerMask.value != 0)
             {
-                var u = hitU.collider.GetComponentInParent<UnitSelectable>();
-                if (u != null) AddSelection(u);
-                return;
+                var uhits = Physics.RaycastAll(ray, 5000f, unitLayerMask, QueryTriggerInteraction.Collide);
+                System.Array.Sort(uhits, (a, b) => a.distance.CompareTo(b.distance));
+                for (int ui = 0; ui < uhits.Length; ui++)
+                {
+                    var u = uhits[ui].collider.GetComponentInParent<UnitSelectable>();
+                    if (u != null)
+                    {
+                        AddSelection(u);
+                        return;
+                    }
+                }
             }
 
             // Con Ctrl/Shift (additive) no reemplazar selección por edificio ni recurso
@@ -232,17 +244,21 @@ namespace Project.Gameplay.Units
                 }
             }
 
-            // 3) Recursos (árboles, piedra, oro, etc.)
-            if (resourceLayerMask != 0 && Physics.Raycast(ray, out RaycastHit hitR, 5000f, resourceLayerMask))
+            // 3) Recursos (RaycastAll: mismo criterio que hover; un solo Raycast fallaba con colliders finos/solapados)
+            if (resourceLayerMask != 0)
             {
-                var res = hitR.collider.GetComponentInParent<ResourceSelectable>();
-                if (res != null && res.GetResourceNode() != null)
+                var hits = Physics.RaycastAll(ray, 5000f, resourceLayerMask, QueryTriggerInteraction.Collide);
+                System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+                for (int hi = 0; hi < hits.Length; hi++)
                 {
+                    var res = hits[hi].collider.GetComponentInParent<ResourceSelectable>();
+                    if (res == null || res.GetResourceNode() == null) continue;
                     ClearSelection();
                     res.SetSelected(true);
                     _selectedResource = res;
                     SetHealthBarVisibleForEntity(res.gameObject, true);
                     OnSelectionChanged?.Invoke();
+                    break;
                 }
             }
         }
@@ -251,11 +267,17 @@ namespace Project.Gameplay.Units
         {
             Ray ray = cam.ScreenPointToRay(screenPos);
 
-            // Verificar qué unidad clickeaste
-            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, unitLayerMask))
-                return;
-
-            var clickedUnit = hit.collider.GetComponentInParent<UnitSelectable>();
+            UnitSelectable clickedUnit = null;
+            if (unitLayerMask.value != 0)
+            {
+                var uhits = Physics.RaycastAll(ray, 5000f, unitLayerMask, QueryTriggerInteraction.Collide);
+                System.Array.Sort(uhits, (a, b) => a.distance.CompareTo(b.distance));
+                for (int ui = 0; ui < uhits.Length; ui++)
+                {
+                    clickedUnit = uhits[ui].collider.GetComponentInParent<UnitSelectable>();
+                    if (clickedUnit != null) break;
+                }
+            }
             if (clickedUnit == null) return;
 
             // Obtener el nombre base del prefab (sin el número de clon)
@@ -332,8 +354,6 @@ namespace Project.Gameplay.Units
             u.SetSelected(true);
             SetHealthBarVisibleForEntity(u.gameObject, true);
 
-            if (u.IsVillager) _selectedVillagerCount++;
-
             OnSelectionChanged?.Invoke();
         }
 
@@ -372,7 +392,6 @@ namespace Project.Gameplay.Units
                 }
             }
             _selected.Clear();
-            _selectedVillagerCount = 0;
             if (hadSelection) OnSelectionChanged?.Invoke();
         }
 
@@ -392,7 +411,6 @@ namespace Project.Gameplay.Units
                     _selected[i].SetSelected(false);
             }
             _selected.Clear();
-            _selectedVillagerCount = 0;
             if (hadSelection) OnSelectionChanged?.Invoke();
         }
 
@@ -429,8 +447,21 @@ namespace Project.Gameplay.Units
 		
 		public bool HasSelectedVillagers()
 		{
-			return _selectedVillagerCount > 0;
+			return CountSelectedPlayerVillagers() > 0;
 		}
+
+        /// <summary>Aldeanos del jugador seleccionados (excluye enemigos; sirve para construcción y órdenes).</summary>
+        public int CountSelectedPlayerVillagers()
+        {
+            int c = 0;
+            for (int i = 0; i < _selected.Count; i++)
+            {
+                var u = _selected[i];
+                if (u == null || !u.IsVillager) continue;
+                if (FactionMember.IsPlayerCommandable(u.gameObject)) c++;
+            }
+            return c;
+        }
 		
 		public void SelectOnly(UnitSelectable u)
 		{
@@ -577,12 +608,14 @@ namespace Project.Gameplay.Units
 
             var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             Ray ray = cam.ScreenPointToRay(mousePos);
-            if (!Physics.Raycast(ray, out RaycastHit hit, 5000f, unitLayerMask))
+            var uhits = Physics.RaycastAll(ray, 5000f, unitLayerMask, QueryTriggerInteraction.Collide);
+            System.Array.Sort(uhits, (a, b) => a.distance.CompareTo(b.distance));
+            UnitSelectable unit = null;
+            for (int ui = 0; ui < uhits.Length; ui++)
             {
-                ClearUnitHover();
-                return;
+                unit = uhits[ui].collider.GetComponentInParent<UnitSelectable>();
+                if (unit != null) break;
             }
-            var unit = hit.collider.GetComponentInParent<UnitSelectable>();
             if (unit == null)
             {
                 ClearUnitHover();

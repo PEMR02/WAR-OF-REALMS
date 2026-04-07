@@ -4,6 +4,7 @@ using UnityEngine.InputSystem;
 using Project.Core.Commands;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Combat;
+using Project.Gameplay.Faction;
 using Project.Gameplay.Resources;
 using Project.UI;
 
@@ -33,6 +34,8 @@ namespace Project.Gameplay.Units
         public LayerMask resourceMask;
         public LayerMask buildingMask;
         public LayerMask groundMask;
+        [Tooltip("Unidades enemigas: clic derecho para atacar. 0 = mismo que RTSSelectionController.unitLayerMask.")]
+        public LayerMask unitAttackMask;
 
         [Header("Formation (movimiento en grupo)")]
         [Tooltip("Separación entre unidades en el destino. Valores mayores reducen amontonamiento.")]
@@ -54,7 +57,25 @@ namespace Project.Gameplay.Units
         {
             if (cam == null) cam = Camera.main;
             if (selection == null) selection = FindFirstObjectByType<RTSSelectionController>();
+            RefreshAttackRayMaskFromSelection();
             _bus = new CommandBus();
+        }
+
+        void Start()
+        {
+            // Por si RTSSelectionController asigna resourceLayerMask u otros en Start después de nuestro Awake.
+            RefreshAttackRayMaskFromSelection();
+        }
+
+        void RefreshAttackRayMaskFromSelection()
+        {
+            if (selection == null) return;
+            if (unitAttackMask.value == 0)
+                unitAttackMask = selection.unitLayerMask;
+            unitAttackMask |= selection.unitLayerMask;
+            buildingMask |= selection.buildingLayerMask;
+            // Capa Default (0): unitarios que aún no se movieron de capa siguen siendo clickeables/ataqueables.
+            unitAttackMask |= 1 << 0;
         }
 
         void Update()
@@ -83,8 +104,14 @@ namespace Project.Gameplay.Units
                 return;
             }
 
+            CacheSelectedUnitsForPlayerOrders(selectedUnits);
+            if (_cachedUnits.Count == 0)
+                return;
+
+            if (TryDispatchAttackOrder(ray))
+                return;
+
             var result = RTSOrderTargetResolver.Resolve(ray, buildSiteMask, resourceMask, buildingMask, groundMask);
-            CacheSelectedUnits(selectedUnits);
 
             switch (result.type)
             {
@@ -103,13 +130,13 @@ namespace Project.Gameplay.Units
             }
         }
 
-        void CacheSelectedUnits(IReadOnlyList<UnitSelectable> selectedUnits)
+        void CacheSelectedUnitsForPlayerOrders(IReadOnlyList<UnitSelectable> selectedUnits)
         {
             _cachedUnits.Clear();
             for (int i = 0; i < selectedUnits.Count; i++)
             {
                 var u = selectedUnits[i];
-                if (u == null) continue;
+                if (u == null || !FactionMember.IsPlayerCommandable(u.gameObject)) continue;
                 _cachedUnits.Add(new CachedUnitComponents
                 {
                     selectable = u,
@@ -122,9 +149,90 @@ namespace Project.Gameplay.Units
             }
         }
 
+        bool TryDispatchAttackOrder(Ray ray)
+        {
+            RefreshAttackRayMaskFromSelection();
+            LayerMask mask = unitAttackMask | buildingMask;
+            if (mask.value == 0) return false;
+
+            // Collide: unidades/decorados con Collider en trigger siguen siendo objetivos válidos (alineado con selección de recursos).
+            RaycastHit[] hits = Physics.RaycastAll(ray, 5000f, mask, QueryTriggerInteraction.Collide);
+            if (hits == null || hits.Length == 0) return false;
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+            for (int h = 0; h < hits.Length; h++)
+            {
+                if (hits[h].collider == null) continue;
+
+                var victimSel = hits[h].collider.GetComponentInParent<UnitSelectable>();
+                var victimHealth = hits[h].collider.GetComponentInParent<IHealth>();
+
+                if (victimSel != null)
+                {
+                    if (!FactionMember.IsHostileToPlayer(victimSel.gameObject))
+                        continue;
+                    if (victimHealth == null || !victimHealth.IsAlive)
+                        continue;
+                    if (TryAssignAttackers(victimSel.transform, hits[h].point))
+                        return true;
+                    continue;
+                }
+
+                // Edificio u objetivo estático con vida (sin UnitSelectable)
+                if (victimHealth == null || !victimHealth.IsAlive)
+                    continue;
+                if (hits[h].collider.GetComponentInParent<UnitMover>() != null)
+                    continue;
+                var hpGo = (victimHealth as MonoBehaviour)?.gameObject;
+                if (hpGo == null || !FactionMember.IsHostileToPlayer(hpGo))
+                    continue;
+
+                var targetTf = (victimHealth as MonoBehaviour)?.transform;
+                if (targetTf == null) continue;
+                if (TryAssignAttackers(targetTf, hits[h].point))
+                    return true;
+            }
+
+            return false;
+        }
+
+        bool TryAssignAttackers(Transform attackTarget, Vector3 feedbackPoint)
+        {
+            bool any = false;
+            for (int i = 0; i < _cachedUnits.Count; i++)
+            {
+                var atk = FindUnitAttackerForOrders(_cachedUnits[i].selectable);
+                if (atk == null) continue;
+                atk.SetTarget(attackTarget);
+                any = true;
+            }
+            if (any) OrderFeedback.Spawn(feedbackPoint);
+            return any;
+        }
+
+        static UnitAttacker FindUnitAttackerForOrders(UnitSelectable selectable)
+        {
+            if (selectable == null) return null;
+            var atk = selectable.GetComponent<UnitAttacker>();
+            if (atk == null) atk = selectable.GetComponentInChildren<UnitAttacker>(true);
+            if (atk == null) atk = selectable.GetComponentInParent<UnitAttacker>();
+            return atk;
+        }
+
+        static void ClearAttackTargets(List<CachedUnitComponents> cached)
+        {
+            for (int i = 0; i < cached.Count; i++)
+            {
+                if (cached[i].selectable == null) continue;
+                var atk = FindUnitAttackerForOrders(cached[i].selectable);
+                if (atk != null) atk.ClearTarget();
+            }
+        }
+
         void DispatchBuildSite(BuildSite site, List<CachedUnitComponents> cached)
         {
             if (site == null) return;
+            ClearAttackTargets(cached);
             if (debugLogs) Debug.Log("Orden: construir en " + site.name);
             for (int i = 0; i < cached.Count; i++)
             {
@@ -137,6 +245,7 @@ namespace Project.Gameplay.Units
         void DispatchGather(ResourceNode node, List<CachedUnitComponents> cached)
         {
             if (node == null) return;
+            ClearAttackTargets(cached);
             for (int i = 0; i < cached.Count; i++)
             {
                 var c = cached[i];
@@ -147,6 +256,22 @@ namespace Project.Gameplay.Units
 
         void DispatchBuilding(RTSOrderTargetResolver.ResolveResult result, List<CachedUnitComponents> cached)
         {
+            bool hostileBuilding = result.buildingHealth != null && result.buildingHealth.IsAlive
+                && FactionMember.IsHostileToPlayer(result.buildingHealth.gameObject);
+
+            if (hostileBuilding && TryAssignAttackers(result.buildingHealth.transform, result.hit.point))
+            {
+                for (int i = 0; i < cached.Count; i++)
+                {
+                    var c = cached[i];
+                    if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
+                    if (c.builder != null) c.builder.SetBuildTarget(null);
+                    if (c.repairer != null) c.repairer.SetRepairTarget(null);
+                }
+                return;
+            }
+
+            ClearAttackTargets(cached);
             bool anyHandled = false;
             for (int i = 0; i < cached.Count; i++)
             {
@@ -159,7 +284,8 @@ namespace Project.Gameplay.Units
                     continue;
                 }
 
-                if (result.buildingHealth != null && result.buildingHealth.IsAlive && result.buildingHealth.CurrentHP < result.buildingHealth.MaxHP)
+                if (!hostileBuilding
+                    && result.buildingHealth != null && result.buildingHealth.IsAlive && result.buildingHealth.CurrentHP < result.buildingHealth.MaxHP)
                 {
                     if (c.repairer != null)
                     {
@@ -185,6 +311,7 @@ namespace Project.Gameplay.Units
 
         void DispatchMove(Vector3 target, List<CachedUnitComponents> cached)
         {
+            ClearAttackTargets(cached);
             OrderFeedback.Spawn(target);
 
             for (int i = 0; i < cached.Count; i++)

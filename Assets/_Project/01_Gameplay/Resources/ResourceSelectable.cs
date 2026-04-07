@@ -106,6 +106,6 @@ namespace Project.Gameplay.Resources
         }
 
         /// <summary>Obtiene el nodo de recurso en este objeto (cantidad, tipo, etc.).</summary>
-        public ResourceNode GetResourceNode() => GetComponent<ResourceNode>();
+        public ResourceNode GetResourceNode() => GetComponentInParent<ResourceNode>();
     }
 }

@@ -10,6 +10,10 @@ namespace Project.Gameplay.Map
     /// Genera la malla visual del agua a partir del MapGrid (celdas marcadas como agua).
     /// Extraído de RTSMapGenerator para reducir tamaño y responsabilidades.
     /// </summary>
+    /// <remarks>
+    /// El generador definitivo usa Project.Gameplay.Map.Generator.WaterMeshBuilder con GridSystem;
+    /// esta clase queda para modos chunk / plano del RTS cuando no entra ese pipeline.
+    /// </remarks>
     public static class MapWaterMeshGenerator
     {
         public struct WaterMeshConfig

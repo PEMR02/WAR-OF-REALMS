@@ -21,7 +21,7 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: MAT_Tree_PM
-  m_Shader: {fileID: 4800000, guid: 933532a4fcc9baf4fa0491de14d08ed7, type: 3}
+  m_Shader: {fileID: 4800000, guid: b8d4e2a1f9c84765a0b1c2d3e4f5a6b7, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -99,6 +99,7 @@ Material:
     - _AddPrecomputedVelocity: 0
     - _AlphaClip: 0
     - _AlphaToMask: 0
+    - _AmbientScale: 1.22
     - _Blend: 0
     - _BlendModePreserveSpecular: 1
     - _BumpScale: 1
@@ -111,16 +112,26 @@ Material:
     - _DstBlend: 0
     - _DstBlendAlpha: 0
     - _EnvironmentReflections: 1
+    - _FakeLightStrength: 0.22
     - _GlossMapScale: 1
     - _Glossiness: 0.5
     - _GlossyReflections: 1
+    - _GradientHeight: 8
+    - _GradientMid: 0.654
+    - _GradientStrength: 0.74
+    - _LightWrap: 0.42
     - _Metallic: 0
+    - _MinAlbedo: 0.065
+    - _MinimumLight: 0.3
     - _Mode: 0
+    - _NoiseScale: 0.22
+    - _NoiseStrength: 0.065
     - _OcclusionStrength: 1
     - _Parallax: 0.02
     - _QueueOffset: 0
     - _ReceiveShadows: 1
-    - _Smoothness: 0.5
+    - _ShadowFloor: 0.22
+    - _Smoothness: 0
     - _SmoothnessTextureChannel: 0
     - _SpecularHighlights: 1
     - _SrcBlend: 1
@@ -132,8 +143,14 @@ Material:
     - _ZWrite: 1
     m_Colors:
     - _BaseColor: {r: 0.9063317, g: 0.9063317, b: 0.9063317, a: 1}
+    - _BottomColor: {r: 0.5450981, g: 0.2705882, b: 0.07450981, a: 1}
     - _Color: {r: 0.9063317, g: 0.9063317, b: 0.9063317, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 0}
+    - _FakeLightDirection: {r: 0.62, g: 0.28, b: 0.73, a: 0}
+    - _FakeLightTint: {r: 0.96, g: 0.94, b: 0.86, a: 1}
+    - _MidColor: {r: 0.34, g: 0.43, b: 0.29, a: 1}
+    - _MinimumNeutral: {r: 0.34, g: 0.41, b: 0.28, a: 1}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
+    - _TopColor: {r: 0.1960784, g: 0.8039216, b: 0.1960784, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

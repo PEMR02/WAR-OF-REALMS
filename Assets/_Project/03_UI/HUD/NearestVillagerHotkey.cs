@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.EventSystems;
+using Project.Gameplay.Faction;
 using Project.Gameplay.Units;
 using Project.UI;
 
@@ -82,6 +83,8 @@ public class NearestVillagerHotkey : MonoBehaviour
 
             // "aldeano" = tiene Gatherer o Builder en el mismo GO
             if (u.GetComponent<VillagerGatherer>() == null && u.GetComponent<Builder>() == null)
+                continue;
+            if (!FactionMember.IsPlayerCommandable(u.gameObject))
                 continue;
 
             float sqr = (u.transform.position - refPoint).sqrMagnitude;
