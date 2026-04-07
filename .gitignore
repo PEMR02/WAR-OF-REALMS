@@ -20,6 +20,9 @@ Thumbs.db
 # Crash reports
 sysinfo.txt
 
+# External assets (not to be versioned)
+Assets/Externo/
+
 # Unity meta files
 !Assets/**/*.meta
 !Packages/**/*.meta
