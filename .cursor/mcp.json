@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "blender": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "uvx",
+        "blender-mcp"
+      ]
+    },
+    "ai-game-developer": {
+      "type": "http",
+      "url": "http://localhost:57577"
+    }
+  }
+}

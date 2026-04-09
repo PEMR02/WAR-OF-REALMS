@@ -1,0 +1,64 @@
+---
+description: 
+alwaysApply: true
+---
+
+---
+description: Modo de estabilización del proyecto RTS en Unity
+alwaysApply: true
+---
+
+# Modo de trabajo: ESTABILIZACIÓN DE PROYECTO
+
+## Reglas obligatorias
+1. No renombrar clases, métodos, campos públicos, archivos ni namespaces existentes.
+2. No mover archivos de carpeta.
+3. No refactorizar arquitectura general ni reorganizar código sin instrucción explícita.
+4. No modificar escenas, prefabs ni ScriptableObjects salvo que sea estrictamente necesario y previamente justificado.
+5. No reemplazar sistemas funcionales por “mejores prácticas”.
+6. No introducir frameworks, patrones nuevos ni abstracciones adicionales.
+7. No optimizar ni limpiar código fuera del problema específico solicitado.
+
+## Reglas de intervención
+8. Antes de editar código:
+   - identificar causa raíz
+   - resumir flujo actual del sistema afectado
+   - enumerar exactamente los archivos a modificar
+9. Si el cambio requiere más de 3 archivos:
+   - detenerse
+   - proponer plan antes de editar
+10. Aplicar siempre el fix mínimo necesario.
+11. Mantener diffs pequeños, locales y reversibles.
+
+## Reglas de seguridad
+12. Preservar todo comportamiento actual que funcione.
+13. No romper sistemas existentes aunque estén incompletos.
+14. No cambiar lógica de sistemas no relacionados con el bug.
+
+## Reglas de salida
+15. Después de cada cambio, entregar:
+   - qué se modificó
+   - por qué
+   - qué podría romper
+   - checklist de no-regresión
+   - pasos concretos para validar en Unity
+
+## Contexto del proyecto
+- Juego RTS en Unity con generación procedural de mapas.
+- Sistema central: RTSMapGenerator.
+- Lobby pre-partida funcional: MapLobbyController.
+- NavMesh operativo para unidades.
+- Generación de ríos, lagos, terreno y recursos ya implementada.
+- Placement de recursos y edificios parcialmente estable.
+- Sistema de selección, hover y healthbars ya existe.
+
+## Prioridad actual
+Sprint 1:
+1. edificios enterrados
+2. árboles mal emplazados y hover/outline defectuoso
+3. ríos ocupando demasiado NavMesh
+4. aldeanos no llegan correctamente a construir
+
+## Importante
+El objetivo no es mejorar el sistema.
+El objetivo es estabilizarlo sin romper lo existente.

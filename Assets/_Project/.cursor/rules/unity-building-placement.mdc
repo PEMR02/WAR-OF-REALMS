@@ -1,0 +1,31 @@
+---
+description: 
+alwaysApply: true
+---
+
+---
+description: Reglas para placement, BuildSite, footprint y altura de edificios
+globs:
+  - "Assets/_Project/**/Building/**/*.cs"
+  - "Assets/_Project/**/Buildings/**/*.cs"
+  - "Assets/_Project/**/Construction/**/*.cs"
+---
+
+# Unity Building Placement
+
+## Invariantes
+- TownCenter de inicio generado por mapa se considera referencia estable.
+- Los edificios no deben quedar bajo el terreno.
+- El ghost, el BuildSite y el edificio final deben usar una referencia de altura coherente.
+- El footprint no debe romper validación de terreno ni NavMesh.
+- No tocar TownCenter salvo instrucción explícita o causa raíz confirmada.
+
+## Antes de editar
+- Trazar flujo: ghost -> BuildSite -> Complete() -> edificio final.
+- Verificar Y final, pivot, bounds, colliders, targetBaseY, footprint y flattening.
+- Si el problema afecta solo algunos prefabs, preferir fix localizado de prefab o exclusión, no fix global.
+
+## No hacer
+- No unificar todos los prefabs.
+- No rehacer el sistema de construcción.
+- No refactorizar placement general.
