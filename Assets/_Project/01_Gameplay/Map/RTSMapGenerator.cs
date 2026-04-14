@@ -606,29 +606,19 @@ namespace Project.Gameplay.Map
             SyncLobbyPlayerSlotsIntoMatch(m);
         }
 
-        void ApplyLobbyMacroReliefTo(MapGenConfig config)
+        MapGenerationRuntimeContext BuildRuntimeGenerationContext()
         {
-            if (config == null) return;
-            int m = Mathf.Clamp(lobbyMacroMountainMasses, 0, 12);
-            // Solo sobrescribir si el lobby pide montañas > 0. Si el contador del lobby es 0,
-            // respetar macroTerrainEnabled / macroMountainMassCount del Match compilado (alpha / perfil).
-            if (m > 0)
+            return new MapGenerationRuntimeContext
             {
-                config.macroTerrainEnabled = true;
-                config.macroMountainMassCount = m;
-                config.macroMountainHeight01Min = Mathf.Max(config.macroMountainHeight01Min, 0.12f);
-                config.macroMountainHeight01Max = Mathf.Max(config.macroMountainHeight01Max, Mathf.Max(config.macroMountainHeight01Min + 0.04f, 0.28f));
-            }
-        }
-
-        /// <summary>Ríos ~1,5× más anchos (gameplay + ribbon visual) respecto a la plantilla compilada.</summary>
-        static void ApplyRiverWidthScale(MapGenConfig config)
-        {
-            if (config == null) return;
-            const float k = 1.5f;
-            config.riverVisualMeshHalfWidth = Mathf.Clamp(config.riverVisualMeshHalfWidth * k, 0.12f, 16f);
-            config.riverVisualHalfWidthCells = Mathf.Clamp(config.riverVisualHalfWidthCells * k, 0.12f, 2f);
-            config.riverWidthRadiusCells = Mathf.Clamp(Mathf.RoundToInt(config.riverWidthRadiusCells * k), 0, 6);
+                applySceneHydrologyOverrides = matchConfig != null && preferSceneHydrologyOverrides,
+                sceneRiverCount = riverCount,
+                sceneLakeCount = lakeCount,
+                sceneMaxLakeCells = maxLakeCells,
+                applyLobbyMacroRelief = true,
+                lobbyMacroMountainMassCount = lobbyMacroMountainMasses,
+                applyLegacyRiverWidthScale = true,
+                legacyRiverWidthScale = 1.5f
+            };
         }
 
         void ApplyMatchConfigToLegacyFields(MatchConfig cfg)
@@ -888,7 +878,11 @@ namespace Project.Gameplay.Map
             }
             PushSceneToMatchForGeneration(activeMatch);
 
-            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(activeMatch, definitiveMapGenConfig, this, logSummary: false);
+            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(
+                activeMatch,
+                definitiveMapGenConfig,
+                BuildRuntimeGenerationContext(),
+                logSummary: false);
             MapGenConfig config = runtime.CompiledMapGen;
             if (config == null)
             {
@@ -897,8 +891,6 @@ namespace Project.Gameplay.Map
                 return false;
             }
             _lastCompiledSettings = runtime;
-            ApplyLobbyMacroReliefTo(config);
-            ApplyRiverWidthScale(config);
             if (MatchConfigCompiler.ApplyLegacyResourceFallbackFromScene(runtime.Resources, this))
                 runtime.MarkLegacyResourceFallbackFromScene();
 
@@ -1009,7 +1001,11 @@ namespace Project.Gameplay.Map
         {
             MatchConfig activeMatch = ResolveMatchConfig();
             _matchUsedForLastGenerate = activeMatch;
-            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(activeMatch, definitiveMapGenConfig, this, logSummary: true);
+            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(
+                activeMatch,
+                definitiveMapGenConfig,
+                BuildRuntimeGenerationContext(),
+                logSummary: true);
             MapGenConfig config = runtime.CompiledMapGen;
             if (config == null)
             {
@@ -1025,8 +1021,6 @@ namespace Project.Gameplay.Map
 
             MatchConfigCompiler.LogResourcePlacementSummary(runtime);
 
-            ApplyLobbyMacroReliefTo(config);
-            ApplyRiverWidthScale(config);
             ApplyAuthoritativeGridLayout(this, config);
 
             var generator = GetComponent<MapGenerator>();
@@ -1804,12 +1798,7 @@ namespace Project.Gameplay.Map
             for (int i = 0; i < renderers.Length; i++)
             {
                 Renderer r = renderers[i];
-                if (r == null) continue;
-                string n = r.gameObject.name;
-                if (n.Equals("DropAnchor", StringComparison.OrdinalIgnoreCase) ||
-                    n.Equals("SpawnPoint", StringComparison.OrdinalIgnoreCase) ||
-                    r.gameObject.GetComponent<Canvas>() != null)
-                    continue;
+                if (r == null || BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(r)) continue;
                 bottomY = Mathf.Min(bottomY, r.bounds.min.y);
                 foundBounds = true;
             }
@@ -1821,7 +1810,7 @@ namespace Project.Gameplay.Map
                 for (int i = 0; i < colliders.Length; i++)
                 {
                     Collider c = colliders[i];
-                    if (c == null) continue;
+                    if (c == null || BuildingTerrainAlignment.ShouldExcludeColliderForBaseAlignment(c)) continue;
                     bottomY = Mathf.Min(bottomY, c.bounds.min.y);
                     foundBounds = true;
                 }

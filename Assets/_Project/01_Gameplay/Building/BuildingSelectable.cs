@@ -16,7 +16,7 @@ namespace Project.Gameplay.Buildings
         void Awake()
         {
             if (renderers == null || renderers.Length == 0)
-                renderers = GetComponentsInChildren<Renderer>();
+                renderers = BuildingTerrainAlignment.CollectRenderersForSelectionHighlight(transform);
 
             _base = new Color[renderers.Length];
             for (int i = 0; i < renderers.Length; i++)

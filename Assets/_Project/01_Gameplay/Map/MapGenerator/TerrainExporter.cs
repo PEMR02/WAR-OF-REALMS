@@ -227,18 +227,37 @@ namespace Project.Gameplay.Map.Generator
         {
             int w = grid.Width;
             int h = grid.Height;
-            var outH = new float[w, h];
+            var outH = BuildLogicalCellHeightSnapshot(grid);
             float waterH = config.waterHeight01;
-
-            // Copia base.
-            for (int x = 0; x < w; x++)
-                for (int z = 0; z < h; z++)
-                    outH[x, z] = grid.GetCell(x, z).height01;
 
             int radius = Mathf.Max(0, config.shoreSmoothRadiusCells);
             float strength = Mathf.Clamp01(config.shoreSmoothStrength);
             if (radius <= 0 || strength <= 0.0001f) return outH;
 
+            ApplyVisualShorelineSmoothing(outH, grid, waterH, radius, strength);
+            ApplyRiverTerrainChannelCarve(outH, grid, config);
+            return outH;
+        }
+
+        static float[,] BuildLogicalCellHeightSnapshot(GridSystem grid)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
+            var snapshot = new float[w, h];
+            for (int x = 0; x < w; x++)
+                for (int z = 0; z < h; z++)
+                    snapshot[x, z] = grid.GetCell(x, z).height01;
+            return snapshot;
+        }
+
+        /// <summary>
+        /// Deformación puramente visual sobre el snapshot lógico antes de muestrear el Terrain.
+        /// No altera el grid ni la jugabilidad; solo suaviza el encuentro tierra/agua.
+        /// </summary>
+        static void ApplyVisualShorelineSmoothing(float[,] outH, GridSystem grid, float waterH, int radius, float strength)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
             // Multi-source BFS para distancia (en celdas) al agua más cercana.
             var dist = new int[w, h];
             for (int x = 0; x < w; x++)
@@ -303,9 +322,6 @@ namespace Project.Gameplay.Map.Generator
                     outH[x, z] = Mathf.Max(waterH, Mathf.Lerp(outH[x, z], waterH, k));
                 }
             }
-
-            ApplyRiverTerrainChannelCarve(outH, grid, config);
-            return outH;
         }
 
         /// <summary>Tallada visual del cauce: más hondo hacia el centro del río, falloff desde el borde con tierra.</summary>

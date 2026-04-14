@@ -30,9 +30,12 @@ namespace Project.Gameplay.Units
         [Header("Double Click")]
         public float doubleClickTime = 0.3f;
 
-        [Header("Hover sobre recursos (con aldeano seleccionado)")]
+        [Header("Hover sobre recursos")]
+        [Tooltip("Si está activo, solo se muestra hover al pasar el mouse si tienes al menos un aldeano tuyo seleccionado.")]
+        public bool resourceHoverRequiresSelectedVillager = false;
         [Tooltip("Segundos sobre el recurso antes de mostrar hover (0 = inmediato).")]
         public float resourceHoverDelay = 0f;
+        public bool debugResourcePicking = false;
 
         public LayerMask buildingLayerMask;
         [Tooltip("Capa de recursos (árboles, piedra, oro). Si está en Nothing, se rellena desde RTSMapGenerator.resourceLayerName al iniciar.")]
@@ -56,6 +59,8 @@ namespace Project.Gameplay.Units
         private ResourceSelectable _hoveredResource;
         private float _hoveredResourceTime;
         private int _resourceHoverFrameSkip;
+        private int _buildingHoverFrameSkip;
+        private int _unitHoverFrameSkip;
         // Hover sobre edificios
         private BuildingSelectable _hoveredBuilding;
         // Hover sobre unidades
@@ -71,15 +76,19 @@ namespace Project.Gameplay.Units
             if (buildingPlacer == null)
                 buildingPlacer = FindFirstObjectByType<Project.Gameplay.Buildings.BuildingPlacer>();
             EnsureResourceLayerMaskFromMap();
+            EnsureBuildingLayerMaskFromMap();
             if (unitLayerMask.value != 0)
                 unitLayerMask |= 1 << 0;
             if (resourceLayerMask.value != 0)
                 resourceLayerMask |= 1 << 0;
+            if (buildingLayerMask.value != 0)
+                buildingLayerMask |= 1 << 0;
         }
 
         void Start()
         {
             EnsureResourceLayerMaskFromMap();
+            EnsureBuildingLayerMaskFromMap();
         }
 
         void EnsureResourceLayerMaskFromMap()
@@ -92,6 +101,15 @@ namespace Project.Gameplay.Units
             int layer = LayerMask.NameToLayer(layerName);
             if (layer < 0) layer = 11;
             resourceLayerMask = 1 << layer;
+        }
+
+        /// <summary>Si el mask quedó en Nothing en el prefab, usar capa Building para raycasts de hover/clic.</summary>
+        void EnsureBuildingLayerMaskFromMap()
+        {
+            if (buildingLayerMask != 0) return;
+            int layer = LayerMask.NameToLayer("Building");
+            if (layer < 0) layer = 0;
+            buildingLayerMask = 1 << layer;
         }
 
         void Update()
@@ -245,22 +263,28 @@ namespace Project.Gameplay.Units
             }
 
             // 3) Recursos (RaycastAll: mismo criterio que hover; un solo Raycast fallaba con colliders finos/solapados)
-            if (resourceLayerMask != 0)
+            if (TryResolveTopmostResourceUnderCursor(ray, out ResourceSelectable resource, out ResourceNode _, out RaycastHit _))
             {
-                var hits = Physics.RaycastAll(ray, 5000f, resourceLayerMask, QueryTriggerInteraction.Collide);
-                System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-                for (int hi = 0; hi < hits.Length; hi++)
-                {
-                    var res = hits[hi].collider.GetComponentInParent<ResourceSelectable>();
-                    if (res == null || res.GetResourceNode() == null) continue;
-                    ClearSelection();
-                    res.SetSelected(true);
-                    _selectedResource = res;
-                    SetHealthBarVisibleForEntity(res.gameObject, true);
-                    OnSelectionChanged?.Invoke();
-                    break;
-                }
+                ClearSelection();
+                resource.SetSelected(true);
+                _selectedResource = resource;
+                SetHealthBarVisibleForEntity(resource.gameObject, true);
+                OnSelectionChanged?.Invoke();
             }
+        }
+
+        bool TryResolveTopmostResourceUnderCursor(Ray ray, out ResourceSelectable resource, out ResourceNode node, out RaycastHit hit)
+        {
+            if (resourceLayerMask == 0)
+                EnsureResourceLayerMaskFromMap();
+
+            return ResourcePickResolver.TryResolveTopmostResourceUnderCursor(
+                ray,
+                resourceLayerMask,
+                out resource,
+                out node,
+                out hit,
+                debugResourcePicking);
         }
 
         void DoubleClickSelect(Vector2 screenPos, bool additive = false)
@@ -486,6 +510,12 @@ namespace Project.Gameplay.Units
                 return;
             }
 
+            if (resourceHoverRequiresSelectedVillager && !HasSelectedVillagers())
+            {
+                ClearResourceHover();
+                return;
+            }
+
             if (UiInputRaycast.IsPointerOverGameObject())
             {
                 ClearResourceHover();
@@ -499,19 +529,9 @@ namespace Project.Gameplay.Units
 
             var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             Ray ray = cam.ScreenPointToRay(mousePos);
-            var hits = Physics.RaycastAll(ray, 5000f, resourceLayerMask, QueryTriggerInteraction.Collide);
-            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
             ResourceSelectable res = null;
-            for (int i = 0; i < hits.Length; i++)
-            {
-                var r = hits[i].collider.GetComponent<ResourceSelectable>();
-                if (r == null) r = hits[i].collider.GetComponentInParent<ResourceSelectable>();
-                if (r != null && r.GetResourceNode() != null)
-                {
-                    res = r;
-                    break;
-                }
-            }
+            if (TryResolveTopmostResourceUnderCursor(ray, out ResourceSelectable resolved, out ResourceNode _, out RaycastHit _))
+                res = resolved;
             if (res == null)
             {
                 ClearResourceHover();
@@ -556,8 +576,8 @@ namespace Project.Gameplay.Units
                 ClearBuildingHover();
                 return;
             }
-            _resourceHoverFrameSkip++;
-            if ((_resourceHoverFrameSkip & 1) != 0) return;
+            _buildingHoverFrameSkip++;
+            if ((_buildingHoverFrameSkip & 1) != 0) return;
 
             var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             Ray ray = cam.ScreenPointToRay(mousePos);
@@ -603,8 +623,8 @@ namespace Project.Gameplay.Units
                 ClearUnitHover();
                 return;
             }
-            _resourceHoverFrameSkip++;
-            if ((_resourceHoverFrameSkip & 1) != 0) return;
+            _unitHoverFrameSkip++;
+            if ((_unitHoverFrameSkip & 1) != 0) return;
 
             var mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             Ray ray = cam.ScreenPointToRay(mousePos);

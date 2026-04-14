@@ -6,6 +6,7 @@ using Project.Gameplay.Buildings;
 using Project.Gameplay.Combat;
 using Project.Gameplay.Faction;
 using Project.Gameplay.Resources;
+using Project.Gameplay.Units.Movement;
 using Project.UI;
 
 namespace Project.Gameplay.Units
@@ -47,11 +48,13 @@ namespace Project.Gameplay.Units
         public float formationRandomOffset = 0.15f;
 
         private CommandBus _bus;
+        private IMovementCoordinator _movementCoordinator;
         [Header("Debug")]
         public bool debugLogs = false;
 
         /// <summary>Lista reutilizable para cachear componentes de la selección (evita alloc por orden).</summary>
         private readonly List<CachedUnitComponents> _cachedUnits = new List<CachedUnitComponents>(64);
+        private readonly List<IUnitMovementComponent> _movementUnits = new List<IUnitMovementComponent>(64);
 
         void Awake()
         {
@@ -59,6 +62,7 @@ namespace Project.Gameplay.Units
             if (selection == null) selection = FindFirstObjectByType<RTSSelectionController>();
             RefreshAttackRayMaskFromSelection();
             _bus = new CommandBus();
+            _movementCoordinator = new MovementCoordinator(new DefaultFormationHandler());
         }
 
         void Start()
@@ -72,8 +76,11 @@ namespace Project.Gameplay.Units
             if (selection == null) return;
             if (unitAttackMask.value == 0)
                 unitAttackMask = selection.unitLayerMask;
+            if (resourceMask.value == 0)
+                resourceMask = selection.resourceLayerMask;
             unitAttackMask |= selection.unitLayerMask;
             buildingMask |= selection.buildingLayerMask;
+            resourceMask |= selection.resourceLayerMask;
             // Capa Default (0): unitarios que aún no se movieron de capa siguen siendo clickeables/ataqueables.
             unitAttackMask |= 1 << 0;
         }
@@ -238,7 +245,7 @@ namespace Project.Gameplay.Units
             {
                 var c = cached[i];
                 if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
-                if (c.builder != null) c.builder.SetBuildTarget(site);
+                if (c.builder != null) c.builder.SetBuildTarget(site, "RTSOrder DispatchBuildSite");
             }
         }
 
@@ -249,7 +256,7 @@ namespace Project.Gameplay.Units
             for (int i = 0; i < cached.Count; i++)
             {
                 var c = cached[i];
-                if (c.builder != null) c.builder.SetBuildTarget(null);
+                if (c.builder != null) c.builder.SetBuildTarget(null, "RTSOrder DispatchGather");
                 if (c.gatherer != null) c.gatherer.Gather(node);
             }
         }
@@ -265,7 +272,7 @@ namespace Project.Gameplay.Units
                 {
                     var c = cached[i];
                     if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
-                    if (c.builder != null) c.builder.SetBuildTarget(null);
+                    if (c.builder != null) c.builder.SetBuildTarget(null, "RTSOrder DispatchBuilding hostil");
                     if (c.repairer != null) c.repairer.SetRepairTarget(null);
                 }
                 return;
@@ -289,7 +296,7 @@ namespace Project.Gameplay.Units
                 {
                     if (c.repairer != null)
                     {
-                        if (c.builder != null) c.builder.SetBuildTarget(null);
+                        if (c.builder != null) c.builder.SetBuildTarget(null, "RTSOrder DispatchBuilding reparar");
                         if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
                         c.repairer.SetRepairTarget(result.buildingHealth);
                         anyHandled = true;
@@ -297,7 +304,7 @@ namespace Project.Gameplay.Units
                     }
                 }
 
-                if (c.builder != null) c.builder.SetBuildTarget(null);
+                if (c.builder != null) c.builder.SetBuildTarget(null, "RTSOrder DispatchBuilding mover a edificio");
                 if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
 
                 if (c.mover != null)
@@ -317,7 +324,7 @@ namespace Project.Gameplay.Units
             for (int i = 0; i < cached.Count; i++)
             {
                 var c = cached[i];
-                if (c.builder != null) c.builder.SetBuildTarget(null);
+                if (c.builder != null) c.builder.SetBuildTarget(null, "RTSOrder DispatchMove");
                 if (c.repairer != null) c.repairer.SetRepairTarget(null);
                 if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
             }
@@ -339,19 +346,20 @@ namespace Project.Gameplay.Units
             if (cached.Count >= 5 && effectiveStyle == FormationStyle.Grid)
                 effectiveStyle = FormationStyle.Circle;
 
-            List<Vector3> formationPositions = effectiveStyle == FormationStyle.Circle
-                ? FormationHelper.GenerateCircle(target, cached.Count, dynamicSpacing, forward)
-                : FormationHelper.GenerateGrid(target, cached.Count, dynamicSpacing, forward);
-
-            if (formationRandomOffset > 0f)
-                FormationHelper.ApplyRandomOffset(formationPositions, formationRandomOffset);
-
+            _movementUnits.Clear();
             for (int i = 0; i < cached.Count; i++)
             {
                 if (cached[i].mover != null)
-                    _bus.Enqueue(new MoveCommand(cached[i].mover, formationPositions[i]));
+                    _movementUnits.Add(cached[i].mover);
             }
-            _bus.Flush();
+
+            _movementCoordinator?.RequestGroupMove(
+                _movementUnits,
+                target,
+                forward,
+                dynamicSpacing,
+                effectiveStyle,
+                formationRandomOffset);
         }
     }
 }

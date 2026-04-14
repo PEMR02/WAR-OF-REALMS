@@ -6,7 +6,7 @@ namespace Project.Gameplay.Combat
     /// <summary>
     /// Singleton persistente: un solo Canvas en Screen Space, barras instanciadas dinámicamente
     /// y posicionadas con WorldToScreenPoint. Solo una instancia activa; duplicados en otras escenas se destruyen.
-    /// Ciclo de vida: Awake establece Instance y DontDestroyOnLoad; OnDestroy limpia Instance y el Canvas creado en runtime.
+    /// Ciclo de vida: Awake valida Canvas, establece Instance y DontDestroyOnLoad; OnDestroy limpia Instance y barras (no se crea Canvas en runtime).
     /// </summary>
     public class HealthBarManager : MonoBehaviour
     {
@@ -23,7 +23,6 @@ namespace Project.Gameplay.Combat
         private readonly Dictionary<GameObject, (Health health, HealthBarUI bar)> _barsByEntity = new();
         private readonly List<GameObject> _toRemove = new List<GameObject>(32);
         private bool _createdCanvasRuntime;
-        private static bool _warnedMissingCanvas;
         private static bool _warnedMissingPrefab;
         private static bool _warnedMissingCamera;
         private static bool _warnedNoInstanceWhenShowingBar;
@@ -39,6 +38,38 @@ namespace Project.Gameplay.Combat
                 return;
             }
 
+            if (canvas == null)
+            {
+                var canvases = FindObjectsByType<Canvas>(FindObjectsSortMode.None);
+                Canvas pick = null;
+                for (int i = 0; i < canvases.Length; i++)
+                {
+                    var c = canvases[i];
+                    if (c == null || c.renderMode == RenderMode.WorldSpace) continue;
+                    if (pick == null) pick = c;
+                    string n = c.gameObject.name;
+                    if (n.IndexOf("HUD", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        n.IndexOf("UI", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        pick = c;
+                        break;
+                    }
+                }
+                canvas = pick;
+                if (canvas != null)
+                    canvasRect = canvas.GetComponent<RectTransform>();
+            }
+
+            if (canvas == null)
+            {
+                Debug.LogError(
+                    "[HealthBarManager] Canvas no asignado y no hay Canvas Screen Space en escena. Asigna el Canvas del HUD en el Inspector; no se crea Canvas en runtime. Este componente se destruye.",
+                    this);
+                enabled = false;
+                Destroy(gameObject);
+                return;
+            }
+
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
@@ -50,27 +81,8 @@ namespace Project.Gameplay.Combat
                 Debug.LogWarning("[HealthBarManager] Cámara no asignada y Camera.main es null. Asigna World Camera en el Inspector o asegura una cámara con tag MainCamera.", this);
             }
 
-            if (canvas != null && canvasRect == null)
+            if (canvasRect == null)
                 canvasRect = canvas.GetComponent<RectTransform>();
-
-            if (canvas == null)
-            {
-                if (!_warnedMissingCanvas)
-                {
-                    _warnedMissingCanvas = true;
-                    Debug.LogWarning(
-                        "[HealthBarManager] Canvas no asignado. Creando Canvas en runtime como fallback solo para pruebas. Para producción asigna un Canvas en el Inspector.",
-                        this);
-                }
-                var canvasGo = new GameObject("HealthBarsCanvas", typeof(RectTransform));
-                canvas = canvasGo.AddComponent<Canvas>();
-                canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-                canvas.sortingOrder = 100;
-                canvasGo.AddComponent<UnityEngine.UI.CanvasScaler>();
-                canvasGo.AddComponent<UnityEngine.UI.GraphicRaycaster>();
-                canvasRect = canvasGo.GetComponent<RectTransform>();
-                _createdCanvasRuntime = true;
-            }
 
             if (healthBarPrefab == null && !_warnedMissingPrefab)
             {

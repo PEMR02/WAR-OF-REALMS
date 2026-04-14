@@ -24,6 +24,7 @@ namespace Project.Gameplay.Map.Generation
         public float ResolvedWaterHeight01 { get; internal set; }
 
         public ResourceRuntimeSettings Resources { get; internal set; } = new();
+        public MapGenerationRuntimeContext RuntimeContext { get; internal set; }
 
         /// <summary>Registro de relieve macro (alpha); null si no aplica.</summary>
         public TerrainFeatureRuntime TerrainFeatures { get; internal set; }

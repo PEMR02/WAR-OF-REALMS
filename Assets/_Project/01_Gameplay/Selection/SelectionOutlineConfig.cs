@@ -56,6 +56,20 @@ namespace Project.Gameplay
         [Tooltip("Anillo en el suelo (dona) y opcionalmente outline 3D. Por defecto el outline 3D está desactivado en unidades (skinned).")]
         public UnitSelectionAppearance units = new UnitSelectionAppearance();
 
+        [Header("Unidades enemigas (IA / COM)")]
+        [Tooltip("Mismo esquema que Unidades pero para facción hostil al jugador (hover/selección/outline y anillo si aplica).")]
+        public UnitSelectionAppearance enemyUnits = new UnitSelectionAppearance
+        {
+            ringColor = new Color(0.95f, 0.2f, 0.18f, 1f),
+            ringBrightness = 5f,
+            ringRadius = 0.6f,
+            ringInnerPercent = 0.65f,
+            ringHeightOffset = 0.08f,
+            selectionColor = new Color(0.62f, 0.14f, 0.12f, 0.98f),
+            hoverColor = new Color(1f, 0.52f, 0.48f, 0.85f),
+            outlineScale = 1.04f
+        };
+
         [Header("Edificios (outline 3D alrededor del mesh)")]
         public OutlineAppearance buildings = new OutlineAppearance();
 

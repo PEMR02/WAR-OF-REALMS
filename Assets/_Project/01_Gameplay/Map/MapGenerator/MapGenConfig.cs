@@ -181,8 +181,11 @@ namespace Project.Gameplay.Map.Generator
         [Tooltip("Capa de terreno bajo el agua en celdas de vado (guijarros/tierra). Si es null, se usa arena como el resto del agua.")]
         public TerrainLayer riverFordBedLayer;
 
+        [Header("Río — cruces entre ríos (Inspector)")]
         [Tooltip("Si true, no coloca un río nuevo si su corredor (eje + ancho) solapa celdas ya usadas por otro río.")]
         public bool riverAvoidCrossingOtherRivers = true;
+        [Tooltip("Si true y riverAvoidCrossingOtherRivers, tras agotar el pase estricto se reintenta permitiendo cruces. Si false, no hay segundo pase.")]
+        public bool allowFallbackCrossing = true;
         [Tooltip("Reintentos por río (otro borde inicio/salida + variación RNG) antes de descartar ese río.")]
         [Range(4, 96)] public int riverPlacementMaxAttemptsPerRiver = 40;
         [Tooltip("Tras tantos rechazos seguidos por cruce de corredor (evitar cruces), deja de intentar ese río (evita 40× trabajo inútil).")]

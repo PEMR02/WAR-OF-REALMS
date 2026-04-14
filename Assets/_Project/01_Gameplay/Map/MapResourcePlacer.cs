@@ -13,6 +13,10 @@ namespace Project.Gameplay.Map
     /// </summary>
     public static class MapResourcePlacer
     {
+        const string ResourcePickRootName = "__ResourcePickRoot";
+        /// <summary>Margen interior respecto al borde del grid lógico (evita árboles en la faldilla del terreno / fuera del área jugable).</summary>
+        const int DefinitiveResourceEdgeInsetCells = 1;
+
         /// <summary>Coloca prefabs de recursos según CellData.resourceType del Generador Definitivo. Usar cuando useDefinitiveGenerator = true.</summary>
         /// <param name="townCenterWorldPositionsExclude">Opcional: no colocar recursos en XZ dentro de <paramref name="minDistanceFromTownCenters"/> de estos puntos (evita árboles dentro del centro urbano).</param>
         public static void PlaceFromDefinitiveGrid(GridSystem definitiveGrid, RTSMapGenerator gen, ResourceRuntimeSettings resources, IList<Vector3> townCenterWorldPositionsExclude = null, float minDistanceFromTownCenters = 0f)
@@ -25,18 +29,29 @@ namespace Project.Gameplay.Map
             if (mapGrid == null || !mapGrid.IsReady) return;
 
             int wood = 0, stone = 0, gold = 0, food = 0;
+            int inset = Mathf.Clamp(DefinitiveResourceEdgeInsetCells, 0, Mathf.Max(0, Mathf.Min(definitiveGrid.Width, definitiveGrid.Height) / 2 - 1));
+            int[,] distWater = definitiveGrid.DistanceToWaterCells;
+
             for (int x = 0; x < definitiveGrid.Width; x++)
             {
                 for (int z = 0; z < definitiveGrid.Height; z++)
                 {
                     ref var cell = ref definitiveGrid.GetCell(x, z);
                     if (cell.resourceType == ResourceType.None) continue;
-                    if (cell.resourceType == ResourceType.Wood &&
-                        (cell.type == CellType.Water || cell.type == CellType.River))
+                    if (cell.type == CellType.Water || cell.type == CellType.River) continue;
+                    if (inset > 0 && (x < inset || z < inset || x >= definitiveGrid.Width - inset || z >= definitiveGrid.Height - inset))
                         continue;
+
                     var placeCell = new Vector2Int(x, z);
-                    if (!mapGrid.IsCellFree(placeCell)) continue;
-                    if (cell.resourceType == ResourceType.Wood && mapGrid.IsWater(placeCell)) continue;
+                    if (!mapGrid.IsInBounds(placeCell) || !mapGrid.IsCellFree(placeCell)) continue;
+                    if (mapGrid.IsWater(placeCell)) continue;
+
+                    if (distWater != null && x >= 0 && z >= 0 && x < distWater.GetLength(0) && z < distWater.GetLength(1))
+                    {
+                        int dw = distWater[x, z];
+                        if (dw >= 0 && dw < 1)
+                            continue;
+                    }
 
                     Vector3 world = definitiveGrid.CellToWorldCenter(x, z);
                     world.y = gen.terrain != null ? gen.SampleHeight(world) : world.y;
@@ -51,8 +66,17 @@ namespace Project.Gameplay.Map
                     GameObject go = UnityEngine.Object.Instantiate(prefab, world, rot);
                     NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
                     if (!go.activeSelf) go.SetActive(true);
+                    DisableResourceNavMeshSnapForProceduralPlacement(go);
                     SnapResourceBottomToTerrain(go, gen);
                     EnsureResourceCollectable(go, kind, gen, res);
+
+                    Vector2Int wc = mapGrid.WorldToCell(go.transform.position);
+                    if (!mapGrid.IsInBounds(wc) || mapGrid.IsWater(wc))
+                    {
+                        UnityEngine.Object.Destroy(go);
+                        continue;
+                    }
+
                     go.name = $"{cell.resourceType}_{x}_{z}";
                     mapGrid.SetOccupied(placeCell, true);
                     switch (cell.resourceType) { case ResourceType.Wood: wood++; break; case ResourceType.Stone: stone++; break; case ResourceType.Gold: gold++; break; case ResourceType.Food: food++; break; }
@@ -281,6 +305,7 @@ namespace Project.Gameplay.Map
                     Vector2Int cell = new Vector2Int(centerCell.x + dx, centerCell.y + dz);
                     if (cell.x < 0 || cell.x >= grid.width || cell.y < 0 || cell.y >= grid.height) continue;
                     if (!grid.IsCellFree(cell)) continue;
+                    if (grid.IsWater(cell)) continue;
                     Vector3 w = grid.CellToWorld(cell);
                     if (IsWithinExcludeRadius(w, spawns, s.globalExcludeRadius)) continue;
 
@@ -541,7 +566,7 @@ namespace Project.Gameplay.Map
             Vector3 snapped = generator.SnapToGrid(world);
             Vector2Int cell = grid.WorldToCell(snapped);
             if (!grid.IsCellFree(cell)) return false;
-            if (kind == ResourceKind.Wood && grid.IsWater(cell)) return false;
+            if (grid.IsWater(cell)) return false;
             Vector3 w = grid.CellToWorld(cell);
             ApplyRandomOffsetInCell(ref w, generator, res);
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
@@ -550,6 +575,7 @@ namespace Project.Gameplay.Map
             GameObject go = UnityEngine.Object.Instantiate(prefab, w, rot);
             NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
+            DisableResourceNavMeshSnapForProceduralPlacement(go);
             SnapResourceBottomToTerrain(go, generator);
             EnsureResourceCollectable(go, kind, generator, res);
             go.name = $"{kind}_{spawned.Count}";
@@ -564,7 +590,7 @@ namespace Project.Gameplay.Map
         {
             var grid = generator.GetGrid();
             if (!grid.IsCellFree(cell)) return false;
-            if (kind == ResourceKind.Wood && grid.IsWater(cell)) return false;
+            if (grid.IsWater(cell)) return false;
             Vector3 w = grid.CellToWorld(cell);
             ApplyRandomOffsetInCell(ref w, generator, res);
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
@@ -573,6 +599,7 @@ namespace Project.Gameplay.Map
             GameObject go = UnityEngine.Object.Instantiate(prefab, w, rot);
             NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
+            DisableResourceNavMeshSnapForProceduralPlacement(go);
             SnapResourceBottomToTerrain(go, generator);
             EnsureResourceCollectable(go, kind, generator, res);
             go.name = $"Global_{kind}_{cell.x}_{cell.y}";
@@ -657,6 +684,21 @@ namespace Project.Gameplay.Map
             return false;
         }
 
+        /// <summary>
+        /// El snap NavMesh en <see cref="ResourceNode"/> era útil para props en escena, pero tras generar mapa el NavMesh
+        /// aún no está rebakeado: SamplePosition empuja instancias al grafo viejo (o a coordenadas absurdas) y separa mesh/collider.
+        /// </summary>
+        static void DisableResourceNavMeshSnapForProceduralPlacement(GameObject go)
+        {
+            if (go == null) return;
+            var nodes = go.GetComponentsInChildren<ResourceNode>(true);
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                if (nodes[i] != null)
+                    nodes[i].snapToNavMeshOnAwake = false;
+            }
+        }
+
         /// <summary>Evita rocas/piedras flotantes: coloca la base del mesh sobre el terreno (estilo Anno).</summary>
         static void SnapResourceBottomToTerrain(GameObject go, RTSMapGenerator generator)
         {
@@ -685,23 +727,18 @@ namespace Project.Gameplay.Map
                 node = go.AddComponent<ResourceNode>();
                 node.kind = kind;
                 node.amount = 300;
-                node.snapToNavMeshOnAwake = true;
+                node.snapToNavMeshOnAwake = false;
                 node.snapRadius = 3f;
             }
             else
             {
                 node.kind = kind;
                 if (node.amount <= 0) node.amount = 300;
+                node.snapToNavMeshOnAwake = false;
             }
-            if (go.GetComponentInChildren<Collider>(true) == null)
-            {
-                var cap = go.AddComponent<CapsuleCollider>();
-                cap.radius = 0.5f;
-                cap.height = 2f;
-                cap.center = Vector3.zero;
-            }
-            if (go.GetComponent<ResourceSelectable>() == null)
-                go.AddComponent<ResourceSelectable>();
+            ResourceSelectable selectable = go.GetComponent<ResourceSelectable>();
+            if (selectable == null)
+                selectable = go.AddComponent<ResourceSelectable>();
 
             if (generator != null && res.forceResourceShadowCasting)
                 EnsureResourceCastsShadows(go);
@@ -717,18 +754,36 @@ namespace Project.Gameplay.Map
             if (kind == ResourceKind.Wood && go.GetComponent<FadeableByCamera>() == null)
                 go.AddComponent<FadeableByCamera>();
 
-            EnsureRobustResourcePickCollider(go);
+            EnsureRobustResourcePickCollider(go, node, selectable, generator, resourceLayer);
+        }
+
+        /// <summary>Encapsula un <see cref="Bounds"/> en espacio mundo como AABB en el espacio local de <paramref name="root"/>.</summary>
+        static Bounds WorldBoundsToRootLocalAabb(Transform root, Bounds worldBounds)
+        {
+            Vector3 c = worldBounds.center;
+            Vector3 e = worldBounds.extents;
+            Bounds local = new Bounds(root.InverseTransformPoint(c), Vector3.zero);
+            for (int ix = -1; ix <= 1; ix += 2)
+            for (int iy = -1; iy <= 1; iy += 2)
+            for (int iz = -1; iz <= 1; iz += 2)
+                local.Encapsulate(root.InverseTransformPoint(c + new Vector3(e.x * ix, e.y * iy, e.z * iz)));
+            return local;
         }
 
         /// <summary>
-        /// Árboles con mesh en hijos y pivot en el suelo suelen dejar un Capsule en el raíz que no envuelve el follaje:
-        /// raycast/hover fallan. Ajusta o añade un <see cref="BoxCollider"/> en el raíz según bounds de renderers.
+        /// Crea/corrige un pick root estable. No depende de colliders accidentales del prefab
+        /// y prioriza el volumen utilizable del recurso para raycast isométrico.
         /// </summary>
-        static void EnsureRobustResourcePickCollider(GameObject go)
+        static void EnsureRobustResourcePickCollider(GameObject go, ResourceNode node, ResourceSelectable selectable, RTSMapGenerator generator, int resourceLayer)
         {
             if (go == null) return;
             var renderers = go.GetComponentsInChildren<Renderer>(true);
-            if (renderers == null || renderers.Length == 0) return;
+            if (renderers == null || renderers.Length == 0)
+            {
+                if (generator != null && generator.debugLogs && node != null)
+                    Debug.LogWarning($"[ResourcePick] '{go.name}' tiene ResourceNode pero no renderers útiles para calcular bounds.", go);
+                return;
+            }
 
             Bounds wb = default;
             bool have = false;
@@ -739,45 +794,89 @@ namespace Project.Gameplay.Map
                 if (!have) { wb = r.bounds; have = true; }
                 else wb.Encapsulate(r.bounds);
             }
-            if (!have) return;
-
-            float pickQuality = 0f;
-            float bestVolume = 0f;
-            var allCols = go.GetComponentsInChildren<Collider>(true);
-            if (allCols != null)
+            if (!have)
             {
+                if (generator != null && generator.debugLogs && node != null)
+                    Debug.LogWarning($"[ResourcePick] '{go.name}' no pudo calcular bounds visuales estables.", go);
+                return;
+            }
+
+            Transform pickRoot = go.transform.Find(ResourcePickRootName);
+            GameObject pickRootGo;
+            if (pickRoot == null)
+            {
+                pickRootGo = new GameObject(ResourcePickRootName);
+                pickRootGo.transform.SetParent(go.transform, false);
+                if (generator != null && generator.debugLogs)
+                    Debug.Log($"[ResourcePick] '{go.name}': creado pick root dedicado.", go);
+            }
+            else
+                pickRootGo = pickRoot.gameObject;
+
+            pickRootGo.layer = resourceLayer;
+
+            BoxCollider box = pickRootGo.GetComponent<BoxCollider>();
+            if (box == null)
+            {
+                box = pickRootGo.AddComponent<BoxCollider>();
+                if (generator != null && generator.debugLogs)
+                    Debug.Log($"[ResourcePick] '{go.name}': añadido BoxCollider de pick.", go);
+            }
+
+            ResourcePickProxy proxy = pickRootGo.GetComponent<ResourcePickProxy>();
+            if (proxy == null)
+            {
+                proxy = pickRootGo.AddComponent<ResourcePickProxy>();
+                if (generator != null && generator.debugLogs)
+                    Debug.Log($"[ResourcePick] '{go.name}': añadido ResourcePickProxy.", go);
+            }
+
+            Bounds localAabb = WorldBoundsToRootLocalAabb(go.transform, wb);
+            Vector3 localCenter = localAabb.center;
+            Vector3 localSize = localAabb.size;
+            localSize.x = Mathf.Max(0.55f, localSize.x);
+            localSize.y = Mathf.Max(0.85f, localSize.y);
+            localSize.z = Mathf.Max(0.55f, localSize.z);
+            localSize.x = Mathf.Min(localSize.x, 2.85f);
+            localSize.y = Mathf.Min(localSize.y, 8.5f);
+            localSize.z = Mathf.Min(localSize.z, 2.85f);
+
+            // Árboles isométricos: ligero ensanche horizontal respecto a la altura (sin inflar con AABB mundo de modelos rotados).
+            localCenter.y = Mathf.Max(localCenter.y, localSize.y * 0.28f);
+            float capXZ = Mathf.Max(localSize.x, localSize.z);
+            capXZ = Mathf.Max(capXZ, localSize.y * 0.36f);
+            capXZ = Mathf.Min(capXZ, 2.85f);
+            localSize.x = capXZ;
+            localSize.z = capXZ;
+
+            pickRootGo.transform.localPosition = Vector3.zero;
+            pickRootGo.transform.localRotation = Quaternion.identity;
+            pickRootGo.transform.localScale = Vector3.one;
+            box.isTrigger = false;
+            box.center = localCenter;
+            box.size = localSize;
+            proxy.Bind(selectable, node, box);
+
+            if (generator != null && generator.debugLogs)
+            {
+                var allCols = go.GetComponentsInChildren<Collider>(true);
+                bool hadNoUsefulCollider = true;
                 for (int i = 0; i < allCols.Length; i++)
                 {
-                    var c = allCols[i];
-                    if (c == null || !c.enabled || c.isTrigger) continue;
-                    var s = c.bounds.size;
-                    float md = Mathf.Max(s.x, s.y, s.z);
-                    pickQuality = Mathf.Max(pickQuality, md);
-                    bestVolume = Mathf.Max(bestVolume, s.x * s.y * s.z);
+                    Collider c = allCols[i];
+                    if (c == null || !c.enabled || c.isTrigger || c == box)
+                        continue;
+                    Bounds cb = c.bounds;
+                    if (cb.size.x * cb.size.y * cb.size.z > 0.06f)
+                    {
+                        hadNoUsefulCollider = false;
+                        break;
+                    }
                 }
-            }
-            // Umbral más bajo: colliders altos y delgados (follaje) tenían maxDim alto pero mal centrados para raycast desde arriba.
-            const float minGoodPick = 0.45f;
-            const float minVolume = 0.06f;
-            if (pickQuality >= minGoodPick && bestVolume >= minVolume) return;
 
-            var rootCols = go.GetComponents<Collider>();
-            for (int i = 0; i < rootCols.Length; i++)
-            {
-                if (rootCols[i] != null)
-                    UnityEngine.Object.Destroy(rootCols[i]);
+                if (hadNoUsefulCollider)
+                    Debug.Log($"[ResourcePick] '{go.name}': collider principal de pick regenerado desde bounds visuales.", go);
             }
-
-            var box = go.AddComponent<BoxCollider>();
-            Vector3 lossy = go.transform.lossyScale;
-            float sx = Mathf.Max(0.001f, Mathf.Abs(lossy.x));
-            float sy = Mathf.Max(0.001f, Mathf.Abs(lossy.y));
-            float sz = Mathf.Max(0.001f, Mathf.Abs(lossy.z));
-            box.center = go.transform.InverseTransformPoint(wb.center);
-            box.size = new Vector3(
-                Mathf.Max(0.55f, wb.size.x / sx),
-                Mathf.Max(0.85f, wb.size.y / sy),
-                Mathf.Max(0.55f, wb.size.z / sz));
         }
 
         /// <summary>Asegura que los recursos (árboles, animales, piedra, oro) proyecten sombras aunque el prefab tenga Off.</summary>

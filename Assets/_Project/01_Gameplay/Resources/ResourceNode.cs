@@ -18,7 +18,7 @@ namespace Project.Gameplay.Resources
         public int maxAmount = 0;
 
         [Header("Placement")]
-        [Tooltip("Auto-snap this node to the nearest NavMesh position on Awake (prevents Y-offset issues)")]
+        [Tooltip("Si true, en Start() proyecta el nodo al NavMesh más cercano. Desactivado para recursos colocados por el generador (NavMesh aún no rebakeado).")]
         public bool snapToNavMeshOnAwake = true;
         public float snapRadius = 3f;
 
@@ -30,7 +30,10 @@ namespace Project.Gameplay.Resources
                 _initialMax = amount;
             else
                 _initialMax = maxAmount;
+        }
 
+        void Start()
+        {
             if (!snapToNavMeshOnAwake) return;
 
             var tri = NavMesh.CalculateTriangulation();

@@ -36,8 +36,8 @@ namespace Project.Gameplay.Map
         public Terrain terrain;
 
         [Header("Visibilidad")]
-        [Tooltip("Mostrar grilla en vista Scene (Gizmos).")]
-        public bool showInScene = true;
+        [Tooltip("Mostrar grilla en vista Scene (Gizmos). Desactivado por defecto para no generar malla densa fuera de Play.")]
+        public bool showInScene = false;
         [Tooltip("Mostrar grilla en Game view.")]
         public bool showInGameView = true;
         [Tooltip("GLLines = dibujo con GL (aspecto bueno, rendimiento malo). Mesh = quads; activa 'Estilo GL en Mesh' para el mismo aspecto con buen rendimiento.")]

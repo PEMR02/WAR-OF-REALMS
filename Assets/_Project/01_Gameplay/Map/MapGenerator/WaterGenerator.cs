@@ -42,6 +42,10 @@ namespace Project.Gameplay.Map.Generator
             int earlyAbortBase = Mathf.Clamp(config.riverCorridorRejectEarlyAbort, 6, 40);
             int earlyAbortThreshold = Mathf.Clamp(earlyAbortBase + Mathf.Max(0, riverCount - 3) * 4, 6, 40);
 
+            int hydrologyPlacedStrict = 0;
+            int hydrologyPlacedFallback = 0;
+            int hydrologyRiversStartedFallbackPass = 0;
+
             for (int i = 0; i < riverCount; i++)
             {
                 bool placed = false;
@@ -53,9 +57,12 @@ namespace Project.Gameplay.Map.Generator
                 // Pase 1: respetar riverAvoidCrossingOtherRivers. Pase 2 (solo si aplica): permitir cruces para cumplir riverCount del lobby.
                 for (int pass = 0; pass < 2 && !placed; pass++)
                 {
-                    bool avoidCross = pass == 0 ? config.riverAvoidCrossingOtherRivers : false;
-                    if (pass == 1 && !config.riverAvoidCrossingOtherRivers)
+                    if (pass == 1 && (!config.riverAvoidCrossingOtherRivers || !config.allowFallbackCrossing))
                         break;
+                    if (pass == 1)
+                        hydrologyRiversStartedFallbackPass++;
+
+                    bool avoidCross = pass == 0 ? config.riverAvoidCrossingOtherRivers : false;
 
                     int consecutiveCorridorReject = 0;
                     int attemptsThisPass = 0;
@@ -77,6 +84,15 @@ namespace Project.Gameplay.Map.Generator
                         {
                             buildFail++;
                             consecutiveCorridorReject = 0;
+                            continue;
+                        }
+
+                        if (!HydrologyValidation.ValidateRiverGeometry(centerline, path, config, w, h, out string validationReason))
+                        {
+                            buildFail++;
+                            consecutiveCorridorReject = 0;
+                            if (config.debugLogs)
+                                UnityEngine.Debug.Log($"Fase3 Agua: río {i + 1}/{riverCount} descartado por validación geométrica: {validationReason}");
                             continue;
                         }
 
@@ -154,6 +170,9 @@ namespace Project.Gameplay.Map.Generator
 
                 if (placed)
                 {
+                    if (usedRelaxedCrossing) hydrologyPlacedFallback++;
+                    else hydrologyPlacedStrict++;
+
                     if (config.debugLogs && usedRelaxedCrossing)
                         UnityEngine.Debug.Log($"Fase3 Agua: río {i + 1}/{riverCount} colocado permitiendo cruce con ríos ya existentes (fallback lobby).");
                     if (config.debugLogs && config.riverLogSuccessfulPlacementMetrics)
@@ -172,6 +191,14 @@ namespace Project.Gameplay.Map.Generator
                     double msPerAttempt = attemptsUsed > 0 ? (buildTicks + corridorTicks + applyTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency / attemptsUsed : 0.0;
                     UnityEngine.Debug.LogWarning($"Fase3 Agua: río {i + 1}/{riverCount} no colocado | intentos={attemptsUsed} (hasta {maxAttemptsPerPass} por pase) buildFail={buildFail} corridorReject={corridorReject} evitarCrucesCfg={config.riverAvoidCrossingOtherRivers} | ms tot≈{msBuild + msCor + msApply:F0} (build≈{msBuild:F0} corredor≈{msCor:F0} aplicar≈{msApply:F0}) | ms/intento≈{msPerAttempt:F2}");
                 }
+            }
+
+            int hydrologyNotPlaced = riverCount - hydrologyPlacedStrict - hydrologyPlacedFallback;
+            if (config.debugLogs || config.riverLogPlacementFailureSummary)
+            {
+                UnityEngine.Debug.Log(
+                    $"[Hydrology] Ríos: colocados pase estricto={hydrologyPlacedStrict}, entraron pase cruce={hydrologyRiversStartedFallbackPass}, " +
+                    $"colocados tras pase cruce={hydrologyPlacedFallback}, no colocados={hydrologyNotPlaced}, allowFallbackCrossing={config.allowFallbackCrossing}");
             }
 
             // Lagos: flood fill (BFS) desde semilla en Land, hasta maxLakeCells por lago
@@ -487,17 +514,24 @@ namespace Project.Gameplay.Map.Generator
 
             int seedMix = config.seed ^ (riverIndex * 739391);
             int added = 0;
+            int previousRadius = baseR;
             for (int pi = 0; pi < path.Count; pi++)
             {
                 Vector2Int c = path[pi];
                 int delta = 0;
                 if (amp > 0)
                 {
-                    uint h = (uint)((pi * 374761393) ^ (riverIndex * 668265263) ^ (seedMix * 1442695041));
-                    int span = amp * 2 + 1;
-                    delta = (int)(h % (uint)span) - amp;
+                    float t = path.Count <= 1 ? 0f : pi / (float)(path.Count - 1);
+                    float lowFreq = Mathf.PerlinNoise(seedMix * 0.0137f + t * 1.15f, riverIndex * 0.193f + 0.31f);
+                    float midFreq = Mathf.PerlinNoise(seedMix * 0.0271f + t * 2.4f, riverIndex * 0.317f + 7.13f);
+                    float smooth = Mathf.Lerp(lowFreq, midFreq, 0.35f);
+                    delta = Mathf.RoundToInt((smooth - 0.5f) * 2f * amp);
                 }
-                int r = Mathf.Clamp(baseR + delta, 0, 6);
+                int targetRadius = Mathf.Clamp(baseR + delta, 0, 6);
+                int r = pi == 0
+                    ? targetRadius
+                    : Mathf.Clamp(targetRadius, previousRadius - 1, previousRadius + 1);
+                previousRadius = r;
                 if (r <= 0) continue;
 
                 int rSq = r * r;
@@ -593,6 +627,60 @@ namespace Project.Gameplay.Map.Generator
             return added;
         }
 
+        struct LakeShapeControl
+        {
+            public float radiusX;
+            public float radiusZ;
+            public float cos;
+            public float sin;
+            public float envelopeNoise;
+            public float edgeFade;
+        }
+
+        static LakeShapeControl BuildLakeShapeControl(Vector2Int seed, int maxCells, MapGenConfig config)
+        {
+            float irregularity = config != null ? Mathf.Clamp01(config.lakeOrganicIrregularity) : 0f;
+            int salt = config != null ? config.seed : 0;
+            float baseRadius = Mathf.Sqrt(Mathf.Max(12f, maxCells) / Mathf.PI);
+            float anisotropyA = Mathf.Lerp(0.9f, 1.35f, LakeExpandHash01(seed.x, seed.y, salt + 1703));
+            float anisotropyB = Mathf.Lerp(0.85f, 1.25f, LakeExpandHash01(seed.x, seed.y, salt + 2903));
+            float angle = LakeExpandHash01(seed.x, seed.y, salt + 4703) * Mathf.PI * 2f;
+
+            return new LakeShapeControl
+            {
+                radiusX = Mathf.Max(2.5f, baseRadius * anisotropyA),
+                radiusZ = Mathf.Max(2.5f, baseRadius * anisotropyB),
+                cos = Mathf.Cos(angle),
+                sin = Mathf.Sin(angle),
+                envelopeNoise = Mathf.Lerp(0.08f, 0.34f, irregularity),
+                edgeFade = Mathf.Lerp(0.18f, 0.42f, irregularity)
+            };
+        }
+
+        static bool IsInsideLakeEnvelope(Vector2Int seed, Vector2Int point, LakeShapeControl shape, int salt, float irregularity)
+        {
+            float dx = point.x - seed.x;
+            float dz = point.y - seed.y;
+            float lx = dx * shape.cos - dz * shape.sin;
+            float lz = dx * shape.sin + dz * shape.cos;
+            float nx = lx / Mathf.Max(1f, shape.radiusX);
+            float nz = lz / Mathf.Max(1f, shape.radiusZ);
+            float dist01 = Mathf.Sqrt(nx * nx + nz * nz);
+            float warp = (LakeExpandHash01(point.x, point.y, salt + 6113) - 0.5f) * 2f * shape.envelopeNoise;
+            float envelope = 1f + warp;
+            if (dist01 <= Mathf.Max(0.18f, envelope - shape.edgeFade))
+                return true;
+
+            if (dist01 > envelope)
+                return false;
+
+            float rim = Mathf.InverseLerp(envelope, Mathf.Max(0.19f, envelope - shape.edgeFade), dist01);
+            float roll = LakeExpandHash01(point.x, point.y, salt + 7121);
+            float threshold = Mathf.Lerp(0.12f, 0.7f, rim);
+            threshold = Mathf.Lerp(threshold, 0.92f, irregularity * 0.28f);
+            return roll <= threshold;
+        }
+
         /// <summary>Hash determinista [0,1) para expansiones de lago (reproducible con seed del mapa).</summary>
         private static float LakeExpandHash01(int x, int z, int salt)
         {
@@ -614,6 +702,7 @@ namespace Project.Gameplay.Map.Generator
             float ir = config != null ? Mathf.Clamp01(config.lakeOrganicIrregularity) : 0f;
             int spread = config != null ? Mathf.Clamp(config.lakeExtraSeedSpreadCells, 0, 10) : 0;
             int salt = config != null ? config.seed : 0;
+            LakeShapeControl shape = BuildLakeShapeControl(seed, maxCells, config);
 
             var queue = new Queue<Vector2Int>();
             var visited = new HashSet<Vector2Int>();
@@ -638,6 +727,7 @@ namespace Project.Gameplay.Map.Generator
                         var p = new Vector2Int(seed.x + dx, seed.y + dz);
                         if (!grid.InBoundsCell(p.x, p.y)) continue;
                         if (grid.GetCell(p.x, p.y).type != CellType.Land) continue;
+                        if (!IsInsideLakeEnvelope(seed, p, shape, salt + 9029, ir)) continue;
                         float h = LakeExpandHash01(p.x, p.y, salt + 9029);
                         float thresh = Mathf.Lerp(0.9f, 0.26f, ir);
                         if (h < thresh) continue;
@@ -677,6 +767,7 @@ namespace Project.Gameplay.Map.Generator
                     if (!grid.InBoundsCell(n.x, n.y) || visited.Contains(n)) continue;
                     ref var ncell = ref grid.GetCell(n);
                     if (ncell.type != CellType.Land) continue;
+                    if (!IsInsideLakeEnvelope(seed, n, shape, salt + 4049, ir)) continue;
 
                     bool isDiagonal = Mathf.Abs(dir.x) == 1 && Mathf.Abs(dir.y) == 1;
                     float hN = LakeExpandHash01(n.x, n.y, salt + 4049);

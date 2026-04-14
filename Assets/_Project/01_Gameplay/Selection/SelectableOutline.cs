@@ -31,6 +31,8 @@ namespace Project.Gameplay
         private OutlineState _state;
         private bool _isUnit;
         bool _hostileToPlayer;
+        /// <summary>Evita reintentar CreateOutline cada frame si no hay mallas válidas o falló el shader.</summary>
+        bool _outlineCreationAttempted;
 
         void Awake()
         {
@@ -50,12 +52,23 @@ namespace Project.Gameplay
 
         void ApplyPaletteFromMode()
         {
-            if (_hostileToPlayer)
+            if (GetComponent<UnitSelectable>() != null)
             {
-                selectionColor = new Color(0.62f, 0.14f, 0.12f, 0.98f);
-                hoverColor = new Color(1f, 0.52f, 0.48f, 0.85f);
+                if (SelectionOutlineConfig.Global != null)
+                {
+                    var u = _hostileToPlayer ? SelectionOutlineConfig.Global.enemyUnits : SelectionOutlineConfig.Global.units;
+                    selectionColor = u.selectionColor;
+                    hoverColor = u.hoverColor;
+                    outlineScale = u.outlineScale;
+                }
+                else if (_hostileToPlayer)
+                {
+                    selectionColor = new Color(0.62f, 0.14f, 0.12f, 0.98f);
+                    hoverColor = new Color(1f, 0.52f, 0.48f, 0.85f);
+                }
                 return;
             }
+
             if (SelectionOutlineConfig.Global != null)
             {
                 OutlineAppearance app = GetAppearanceFromConfig();
@@ -81,20 +94,37 @@ namespace Project.Gameplay
 
         void TryCreateOutlineRenderers()
         {
-            if (_outlineObjects != null && _outlineObjects.Length > 0) return;
+            if (_outlineObjects != null) return;
             CreateOutlineRenderers();
         }
 
         void CreateOutlineRenderers()
         {
+            if (_outlineCreationAttempted) return;
+            _outlineCreationAttempted = true;
+
             var meshFilters = GetComponentsInChildren<MeshFilter>(true);
             var skinned = GetComponentsInChildren<SkinnedMeshRenderer>(true);
             int nMesh = meshFilters != null ? meshFilters.Length : 0;
             int nSkinned = skinned != null ? skinned.Length : 0;
-            if (nMesh + nSkinned == 0) return;
+            if (nMesh + nSkinned == 0)
+            {
+                _outlineObjects = System.Array.Empty<GameObject>();
+                _outlineMeshFilters = System.Array.Empty<MeshFilter>();
+                _outlineSkinnedSources = System.Array.Empty<SkinnedMeshRenderer>();
+                _outlineBakedMeshes = System.Array.Empty<Mesh>();
+                return;
+            }
 
             var shader = Shader.Find("Unlit/OutlineCullFront");
-            if (shader == null) return;
+            if (shader == null)
+            {
+                _outlineObjects = System.Array.Empty<GameObject>();
+                _outlineMeshFilters = System.Array.Empty<MeshFilter>();
+                _outlineSkinnedSources = System.Array.Empty<SkinnedMeshRenderer>();
+                _outlineBakedMeshes = System.Array.Empty<Mesh>();
+                return;
+            }
 
             _isUnit = GetComponent<UnitSelectable>() != null;
             _hostileToPlayer = _isUnit && FactionMember.IsHostileToPlayer(gameObject);
@@ -112,8 +142,10 @@ namespace Project.Gameplay
                 for (int i = 0; i < meshFilters.Length; i++)
                 {
                     var mf = meshFilters[i];
-                    if (mf == null || mf.sharedMesh == null) continue;
-                    _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, centerByBounds, null);
+                    if (mf == null || BuildingTerrainAlignment.ShouldExcludeMeshFilterForOutline(mf)) continue;
+                    // Recursos/edificios: el mesh suele tener pivot lejos del centro; compensar como en unidades
+                    // para que el outline coincida con el volumen visible (evita silueta corrida al suelo).
+                    _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, true, null);
                     _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
                     _outlineSkinnedSources[idx] = null;
                     _outlineBakedMeshes[idx] = null;
@@ -126,6 +158,7 @@ namespace Project.Gameplay
                 {
                     var smr = skinned[i];
                     if (smr == null || smr.sharedMesh == null) continue;
+                    if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(smr)) continue;
                     var bakedMesh = new Mesh();
                     bakedMesh.name = "OutlineBaked";
                     _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerByBounds, smr);
@@ -146,6 +179,19 @@ namespace Project.Gameplay
                 _outlineMeshFilters = trimmedFilters;
                 _outlineSkinnedSources = trimmedSrc;
                 _outlineBakedMeshes = trimmedMesh;
+            }
+
+            if (idx == 0)
+            {
+                if (_outlineMaterial != null)
+                {
+                    Destroy(_outlineMaterial);
+                    _outlineMaterial = null;
+                }
+                _outlineObjects = System.Array.Empty<GameObject>();
+                _outlineMeshFilters = System.Array.Empty<MeshFilter>();
+                _outlineSkinnedSources = System.Array.Empty<SkinnedMeshRenderer>();
+                _outlineBakedMeshes = System.Array.Empty<Mesh>();
             }
         }
 
@@ -213,15 +259,7 @@ namespace Project.Gameplay
             if (state != OutlineState.Off) TryCreateOutlineRenderers();
             if (_outlineObjects == null || _outlineObjects.Length == 0) return;
 
-            if (SelectionOutlineConfig.Global != null && !_hostileToPlayer)
-            {
-                var app = GetAppearanceFromConfig();
-                outlineScale = app.outlineScale;
-                selectionColor = app.selectionColor;
-                hoverColor = app.hoverColor;
-            }
-            else if (!_hostileToPlayer)
-                ApplyPaletteFromMode();
+            ApplyPaletteFromMode();
 
             for (int i = 0; i < _outlineObjects.Length; i++)
             {

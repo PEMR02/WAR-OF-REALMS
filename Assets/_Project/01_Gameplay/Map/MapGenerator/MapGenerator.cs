@@ -95,6 +95,7 @@ namespace Project.Gameplay.Map.Generator
 
                 LogPhaseStart("Fase4b MacroRelief (alpha)");
                 MacroTerrainSculptor.Apply(_grid, c, _rng, c.alphaTerrainFeatureRecord);
+                HeightGenerator.ApplySpawnFriendlyPeakSuppression(_grid, c);
                 HeightGenerator.RecalculateLandSlopes(_grid, c);
                 LogPhaseEnd("Fase4b MacroRelief (alpha)");
 

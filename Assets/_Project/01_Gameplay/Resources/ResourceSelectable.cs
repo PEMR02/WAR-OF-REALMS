@@ -1,5 +1,6 @@
 using UnityEngine;
 using Project.Gameplay;
+using Project.Gameplay.Buildings;
 
 namespace Project.Gameplay.Resources
 {
@@ -27,14 +28,7 @@ namespace Project.Gameplay.Resources
         void Awake()
         {
             if (renderers == null || renderers.Length == 0)
-                renderers = GetComponentsInChildren<Renderer>(true);
-
-            if (renderers == null || renderers.Length == 0)
-            {
-                var skinned = GetComponentsInChildren<SkinnedMeshRenderer>(true);
-                if (skinned != null && skinned.Length > 0)
-                    renderers = skinned;
-            }
+                renderers = BuildingTerrainAlignment.CollectRenderersForSelectionHighlight(transform);
 
             if (renderers == null) renderers = new Renderer[0];
             _baseColors = new Color[renderers.Length];

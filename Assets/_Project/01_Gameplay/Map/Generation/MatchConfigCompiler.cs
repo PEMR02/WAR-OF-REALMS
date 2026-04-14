@@ -18,7 +18,7 @@ namespace Project.Gameplay.Map.Generation
         public static RuntimeMapGenerationSettings Build(
             MatchConfig match,
             MapGenConfig sceneLegacyDefinitiveTemplate,
-            Project.Gameplay.Map.RTSMapGenerator sceneOrNull = null,
+            MapGenerationRuntimeContext runtimeContext = null,
             bool logSummary = true)
         {
             var result = new RuntimeMapGenerationSettings();
@@ -33,6 +33,7 @@ namespace Project.Gameplay.Map.Generation
             result.TechnicalProfile = match.mapGenerationProfile;
             result.TechnicalProfileName = match.mapGenerationProfile != null ? match.mapGenerationProfile.name : "None";
             result.UsedHighLevelAlphaConfig = match.useHighLevelAlphaConfig;
+            result.RuntimeContext = runtimeContext ?? MapGenerationRuntimeContext.CreateDefault();
 
             if (match.useHighLevelAlphaConfig)
             {
@@ -42,11 +43,10 @@ namespace Project.Gameplay.Map.Generation
                     "No edites esos campos en el asset mientras alpha esté activo.");
             }
 
-            sceneOrNull?.ApplySceneHydrologyToMatch(match);
-            sceneOrNull?.ApplySceneLobbyMacroToMatch(match);
-            if (sceneOrNull != null && sceneOrNull.matchConfig != null && sceneOrNull.preferSceneHydrologyOverrides && logSummary)
+            result.RuntimeContext.ApplyToMatch(match);
+            if (result.RuntimeContext.sceneHydrologyWasAppliedToMatch && logSummary)
                 Debug.Log(
-                    $"[MapGen] Hidrología aplicada desde RTSMapGenerator (iteración escena): ríos={match.water.riverCount}, lagos={match.water.lakeCount}, maxLakeCells={match.water.maxLakeCells}. " +
+                    $"[MapGen] Hidrología runtime aplicada desde contexto de escena: ríos={match.water.riverCount}, lagos={match.water.lakeCount}, maxLakeCells={match.water.maxLakeCells}. " +
                     "Desactiva preferSceneHydrologyOverrides si el asset MatchConfig debe mandar siempre.");
 
             MapGenConfig cfg;
@@ -96,6 +96,10 @@ namespace Project.Gameplay.Map.Generation
                 result.TerrainFeatures = null;
             }
 
+            result.RuntimeContext.ApplyToCompiledMapGen(cfg);
+
+            ApplyDefaultMacroReliefIfMissing(match, cfg);
+
             CopyDebugFlagsFromTemplate(cfg, debugSource);
 
             result.CompiledMapGen = cfg;
@@ -136,6 +140,29 @@ namespace Project.Gameplay.Map.Generation
                     "[MapGen] Recursos: faltaban prefabs en MatchConfig.resources.visuals; se aplicó fallback desde RTSMapGenerator (escena). " +
                     "Migra los prefabs al MatchConfig para eliminar esta fuente duplicada.");
             return any;
+        }
+
+        /// <summary>
+        /// Sin modo Alpha ni montañas ya definidas en la plantilla técnica: derivar relieve macro desde
+        /// <see cref="MatchConfig.GeographySettings.terrainFlatness"/> para que partidas legacy no queden planas.
+        /// </summary>
+        static void ApplyDefaultMacroReliefIfMissing(MatchConfig match, MapGenConfig cfg)
+        {
+            if (match == null || cfg == null || match.useHighLevelAlphaConfig) return;
+            if (cfg.macroMountainMassCount > 0) return;
+
+            float flat = Mathf.Clamp01(match.geography.terrainFlatness);
+            float rough = 1f - flat;
+            if (rough < 0.06f) return;
+
+            cfg.macroTerrainEnabled = true;
+            cfg.macroMountainMassCount = Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(2f, 8f, rough)), 2, 8);
+            cfg.macroMountainHeight01Min = Mathf.Max(cfg.macroMountainHeight01Min, 0.1f);
+            cfg.macroMountainHeight01Max = Mathf.Max(
+                cfg.macroMountainHeight01Max,
+                Mathf.Max(cfg.macroMountainHeight01Min + 0.05f, Mathf.Lerp(0.22f, 0.4f, rough)));
+            cfg.macroMountainRadiusCellsMin = Mathf.Max(6, cfg.macroMountainRadiusCellsMin);
+            cfg.macroMountainRadiusCellsMax = Mathf.Max(cfg.macroMountainRadiusCellsMin + 2, cfg.macroMountainRadiusCellsMax);
         }
 
         static void CopyDebugFlagsFromTemplate(MapGenConfig target, MapGenConfig template)
@@ -308,6 +335,9 @@ namespace Project.Gameplay.Map.Generation
                 $"  MatchConfig: {rt.SourceMatchName}\n" +
                 $"  Perfil técnico: {rt.TechnicalProfileName}\n" +
                 $"  Plantilla escena legacy: {(rt.UsedSceneLegacyDefinitiveTemplate ? "Sí (deprecated)" : "No")}\n" +
+                $"  Overrides runtime: hidrología={(rt.RuntimeContext != null && rt.RuntimeContext.sceneHydrologyWasAppliedToMatch ? "Sí" : "No")}, " +
+                $"macroLobby={(rt.RuntimeContext != null && rt.RuntimeContext.lobbyMacroWasAppliedToMatch ? "Sí" : "No")}, " +
+                $"riverWidthScale={(rt.RuntimeContext != null && rt.RuntimeContext.legacyRiverWidthScaleAppliedToCompiledConfig ? "Sí" : "No")}\n" +
                 $"  Seed final: {rt.ResolvedSeed}\n" +
                 $"  waterHeight01 final: {rt.ResolvedWaterHeight01:F4}\n" +
                 $"  Ríos/lagos (MapGen): {rt.CompiledMapGen?.riverCount}/{rt.CompiledMapGen?.lakeCount}\n" +

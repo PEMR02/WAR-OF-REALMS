@@ -49,10 +49,18 @@ namespace Project.Gameplay.Units
             bool hasBuildSite = false;
             RaycastHit bestResource = default;
             bool hasResource = false;
+            ResourceNode resolvedResourceNode = null;
             RaycastHit bestBuilding = default;
             bool hasBuilding = false;
             RaycastHit bestGround = default;
             bool hasGround = false;
+
+            if (ResourcePickResolver.TryResolveTopmostResourceUnderCursor(ray, resourceMask, out ResourceSelectable _, out ResourceNode resourceNode, out RaycastHit resourceHit))
+            {
+                bestResource = resourceHit;
+                hasResource = true;
+                resolvedResourceNode = resourceNode;
+            }
 
             for (int i = 0; i < hits.Length; i++)
             {
@@ -67,16 +75,6 @@ namespace Project.Gameplay.Units
                     {
                         bestBuildSite = hit;
                         hasBuildSite = true;
-                    }
-                }
-
-                if (!hasResource && (resourceMask.value & hitBit) != 0)
-                {
-                    var node = hit.collider.GetComponentInParent<ResourceNode>();
-                    if (node != null)
-                    {
-                        bestResource = hit;
-                        hasResource = true;
                     }
                 }
 
@@ -114,12 +112,23 @@ namespace Project.Gameplay.Units
             {
                 result.type = TargetType.Resource;
                 result.hit = bestResource;
-                result.resourceNode = bestResource.collider.GetComponentInParent<ResourceNode>();
+                result.resourceNode = resolvedResourceNode;
                 return result;
             }
 
             if (hasBuilding)
             {
+                // Colliders de obra (p. ej. muro compuesto) a veces solo están en buildingMask: sin esto el dispatch
+                // trata el clic como "edificio" y limpia SetBuildTarget + solo MoveCommand → HasBuildTarget false.
+                BuildSite siteUnderConstruction = bestBuilding.collider.GetComponentInParent<BuildSite>();
+                if (siteUnderConstruction != null && !siteUnderConstruction.IsCompleted)
+                {
+                    result.type = TargetType.BuildSite;
+                    result.hit = bestBuilding;
+                    result.buildSite = siteUnderConstruction;
+                    return result;
+                }
+
                 result.dropOffPoint = bestBuilding.collider.GetComponentInParent<DropOffPoint>();
                 result.buildingHealth = bestBuilding.collider.GetComponentInParent<Health>();
                 var buildingRoot = bestBuilding.collider.transform.root;

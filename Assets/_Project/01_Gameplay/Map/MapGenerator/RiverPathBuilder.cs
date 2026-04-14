@@ -9,6 +9,11 @@ namespace Project.Gameplay.Map.Generator
     /// </summary>
     public static class RiverPathBuilder
     {
+        /// <summary>Literal único para comprobar en consola que este ensamblado es el que ejecuta el trazado (junto con debugLogs en el MapGenConfig activo).</summary>
+        public const string RevisionMarkerLog = "[RiverPathBuilder] >>> NUEVO RASTER ACTIVO <<< (continuidad Chebyshev + reparación). Si no ves esto con debugLogs=ON, no es esta build o no es el MapGenConfig compilado.";
+
+        static bool s_LoggedRevisionMarkerOnce;
+
         private static long PackCell(Vector2Int c) => ((long)c.x << 32) | (uint)c.y;
 
         public static bool TryBuildSmoothCenterlineAndRaster(
@@ -29,6 +34,16 @@ namespace Project.Gameplay.Map.Generator
             fordCells = null;
             debugMacro = null;
             debugAfterSmooth = null;
+
+            if (config == null || rng == null)
+                return false;
+
+            // Verificación (1× por dominio): activa debugLogs en el MapGenConfig compilado (MatchConfig.mapGenerationProfile.technicalTemplate o definitiveMapGenConfig en RTSMapGenerator).
+            if (config.debugLogs && !s_LoggedRevisionMarkerOnce)
+            {
+                s_LoggedRevisionMarkerOnce = true;
+                Debug.Log(RevisionMarkerLog);
+            }
 
             Vector2 s = new Vector2(start.x + 0.5f, start.y + 0.5f);
             Vector2 e = new Vector2(end.x + 0.5f, end.y + 0.5f);
@@ -54,6 +69,8 @@ namespace Project.Gameplay.Map.Generator
                 ApplyStraightnessPenalty(dense, w, h, config.riverStraightnessPenalty, Mathf.Min(w, h));
 
             RelaxSharpTurns(dense, w, h, config.riverMaxTurnAngleDegrees, config.riverMinCurveRadiusCells);
+            EnforceCenterlineMaxTurnDegrees(dense, w, h, config.riverMaxTurnAngleDegrees + 10f);
+            DedupeCenterlineVeryClose(dense, 0.018f);
 
             float spacingFinal = Mathf.Clamp(config.riverCenterlineSampleSpacingCells, 0.08f, 0.55f);
             centerlineCellSpace = ResamplePolylineUniform2D(dense, spacingFinal);
@@ -222,6 +239,57 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
+        /// <summary>Garantiza ángulo entre segmentos consecutivos ≤ maxTurnDeg insertando puntos intermedios (sin relajar HydrologyValidation).</summary>
+        static void EnforceCenterlineMaxTurnDegrees(List<Vector2> poly, int w, int h, float maxTurnDeg)
+        {
+            if (poly == null || poly.Count < 3) return;
+            maxTurnDeg = Mathf.Clamp(maxTurnDeg, 20f, 179f);
+            float minDot = Mathf.Cos(maxTurnDeg * Mathf.Deg2Rad);
+            float minX = 0.5f;
+            float maxX = Mathf.Max(minX, w - 0.5f);
+            float minY = 0.5f;
+            float maxY = Mathf.Max(minY, h - 0.5f);
+            int maxOps = Mathf.Max(64, poly.Count * 6);
+            for (int op = 0; op < maxOps; op++)
+            {
+                bool any = false;
+                for (int i = 1; i < poly.Count - 1; i++)
+                {
+                    Vector2 v1 = poly[i] - poly[i - 1];
+                    Vector2 v2 = poly[i + 1] - poly[i];
+                    if (v1.sqrMagnitude < 1e-10f || v2.sqrMagnitude < 1e-10f)
+                        continue;
+                    v1.Normalize();
+                    v2.Normalize();
+                    if (Vector2.Dot(v1, v2) >= minDot - 1e-5f)
+                        continue;
+                    Vector2 mid = (poly[i - 1] + poly[i + 1]) * 0.5f;
+                    Vector2 ins = Vector2.Lerp(poly[i], mid, 0.55f);
+                    ins.x = Mathf.Clamp(ins.x, minX, maxX);
+                    ins.y = Mathf.Clamp(ins.y, minY, maxY);
+                    poly.Insert(i + 1, ins);
+                    any = true;
+                    break;
+                }
+                if (!any) break;
+            }
+        }
+
+        /// <summary>Elimina puntos consecutivos casi coincidentes tras inserciones angulares.</summary>
+        static void DedupeCenterlineVeryClose(List<Vector2> poly, float epsCells)
+        {
+            if (poly == null || poly.Count < 2) return;
+            epsCells = Mathf.Max(1e-4f, epsCells);
+            var o = new List<Vector2>(poly.Count) { poly[0] };
+            for (int i = 1; i < poly.Count; i++)
+            {
+                if (Vector2.Distance(o[o.Count - 1], poly[i]) >= epsCells)
+                    o.Add(poly[i]);
+            }
+            poly.Clear();
+            poly.AddRange(o);
+        }
+
         private static void RelaxSharpTurns(List<Vector2> poly, int w, int h, float maxTurnDeg, float minRadiusCells)
         {
             if (poly == null || poly.Count < 3)
@@ -350,9 +418,6 @@ namespace Project.Gameplay.Map.Generator
         {
             static bool IsInside(int gw, int gh, int x, int y) => x >= 0 && x < gw && y >= 0 && y < gh;
 
-            var fordList = new List<Vector2Int>();
-            var fordPacked = new HashSet<long>();
-
             float len = 0f;
             for (int i = 1; i < center.Count; i++)
                 len += Vector2.Distance(center[i - 1], center[i]);
@@ -360,28 +425,25 @@ namespace Project.Gameplay.Map.Generator
             int n = Mathf.Max(16, Mathf.CeilToInt(len * spc));
 
             var path = new List<Vector2Int>();
-            var seen = new HashSet<long>();
             int fordEvery = Mathf.Max(0, config.riverFordEveryCells);
             if (fordEvery == 1)
                 fordEvery = 0;
             int fordPhase = fordEvery > 0 ? rng.NextInt(0, fordEvery) : 0;
-            int stepAlongRiver = 0;
 
-            void ConsiderCell(Vector2Int c)
+            void AppendBresenhamNoSkip(Vector2Int from, Vector2Int to)
             {
-                if (!IsInside(w, h, c.x, c.y))
-                    return;
-                stepAlongRiver++;
-                bool isFord = fordEvery > 0 && stepAlongRiver > 1 && (stepAlongRiver + fordPhase) % fordEvery == 0;
-                long k = PackCell(c);
-                if (!seen.Add(k))
-                    return;
-                path.Add(c);
-                if (isFord && fordPacked.Add(k))
-                    fordList.Add(c);
+                foreach (var c in BresenhamLine(from, to))
+                {
+                    if (!IsInside(w, h, c.x, c.y))
+                        continue;
+                    if (path.Count > 0 && path[path.Count - 1].x == c.x && path[path.Count - 1].y == c.y)
+                        continue;
+                    path.Add(c);
+                }
             }
 
-            ConsiderCell(start);
+            if (IsInside(w, h, start.x, start.y))
+                path.Add(start);
             Vector2Int prev = start;
             for (int i = 1; i <= n; i++)
             {
@@ -390,14 +452,150 @@ namespace Project.Gameplay.Map.Generator
                 int qx = Mathf.Clamp(Mathf.FloorToInt(p.x), 0, w - 1);
                 int qy = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, h - 1);
                 var q = new Vector2Int(qx, qy);
-                foreach (var stepCell in BresenhamLine(prev, q))
-                    ConsiderCell(stepCell);
+                AppendBresenhamNoSkip(prev, q);
                 prev = q;
+            }
+
+            CollapseConsecutiveDuplicateCells(path);
+            EnsureRasterContiguousChebyshev1(path, w, h);
+            CollapseConsecutiveDuplicateCells(path);
+            ValidateRasterContiguousOrRepair(path, w, h, config);
+
+            var fordList = new List<Vector2Int>();
+            var fordPacked = new HashSet<long>();
+            for (int idx = 0; idx < path.Count; idx++)
+            {
+                var c = path[idx];
+                if (!IsInside(w, h, c.x, c.y)) continue;
+                int step = idx + 1;
+                bool isFord = fordEvery > 0 && step > 1 && (step + fordPhase) % fordEvery == 0;
+                if (!isFord) continue;
+                long k = PackCell(c);
+                if (fordPacked.Add(k))
+                    fordList.Add(c);
             }
 
             fordCells = fordList;
             return path;
         }
+
+        static void CollapseConsecutiveDuplicateCells(List<Vector2Int> path)
+        {
+            if (path == null || path.Count < 2) return;
+            for (int i = path.Count - 1; i >= 1; i--)
+            {
+                if (path[i].x == path[i - 1].x && path[i].y == path[i - 1].y)
+                    path.RemoveAt(i);
+            }
+        }
+
+        /// <summary>Inserta celdas intermedias hasta que todo par consecutivo tenga distancia Chebyshev ≤ 1 (8-vecinos).</summary>
+        static void EnsureRasterContiguousChebyshev1(List<Vector2Int> path, int w, int h)
+        {
+            if (path == null || path.Count < 2) return;
+            int maxIter = Mathf.Min(8192, path.Count * 16 + 128);
+            for (int iter = 0; iter < maxIter; iter++)
+            {
+                bool fixedGap = false;
+                for (int i = 1; i < path.Count; i++)
+                {
+                    var a = path[i - 1];
+                    var b = path[i];
+                    int dx = Mathf.Abs(b.x - a.x);
+                    int dy = Mathf.Abs(b.y - a.y);
+                    if (Mathf.Max(dx, dy) <= 1) continue;
+
+                    var bridge = new List<Vector2Int>();
+                    bool skipFirst = true;
+                    foreach (var c in BresenhamLine(a, b))
+                    {
+                        if (skipFirst)
+                        {
+                            skipFirst = false;
+                            continue;
+                        }
+                        if (c.x == b.x && c.y == b.y) break;
+                        if (c.x >= 0 && c.x < w && c.y >= 0 && c.y < h)
+                            bridge.Add(c);
+                    }
+                    if (bridge.Count > 0)
+                    {
+                        path.InsertRange(i, bridge);
+                        fixedGap = true;
+                        break;
+                    }
+
+                    if (TryInsertGreedyChebyshevBridge(path, i, a, b, w, h))
+                    {
+                        fixedGap = true;
+                        break;
+                    }
+                }
+                if (!fixedGap) break;
+            }
+        }
+
+        /// <summary>Puente 8-vecinos paso a paso cuando Bresenham interior queda vacío (p. ej. filtrado por bordes).</summary>
+        static bool TryInsertGreedyChebyshevBridge(List<Vector2Int> path, int indexB, Vector2Int a, Vector2Int b, int w, int h)
+        {
+            var ins = new List<Vector2Int>();
+            var cur = a;
+            int guard = 0;
+            int guardMax = Mathf.Max(64, (Mathf.Abs(b.x - a.x) + Mathf.Abs(b.y - a.y)) * 2 + 8);
+            while ((cur.x != b.x || cur.y != b.y) && guard++ < guardMax)
+            {
+                int sx = b.x == cur.x ? 0 : (b.x > cur.x ? 1 : -1);
+                int sy = b.y == cur.y ? 0 : (b.y > cur.y ? 1 : -1);
+                cur = new Vector2Int(cur.x + sx, cur.y + sy);
+                if (cur.x < 0 || cur.x >= w || cur.y < 0 || cur.y >= h)
+                    return false;
+                if (cur.x == b.x && cur.y == b.y)
+                    break;
+                ins.Add(cur);
+            }
+
+            if (cur.x != b.x || cur.y != b.y)
+                return false;
+
+            if (ins.Count > 0)
+                path.InsertRange(indexB, ins);
+            return true;
+        }
+
+        static void ValidateRasterContiguousOrRepair(List<Vector2Int> path, int w, int h, MapGenConfig config)
+        {
+            if (path == null || path.Count < 2) return;
+            for (int sweep = 0; sweep < path.Count * 2; sweep++)
+            {
+                bool repaired = false;
+                for (int i = 1; i < path.Count; i++)
+                {
+                    int ch = Chebyshev(path[i - 1], path[i]);
+                    if (ch <= 1) continue;
+                    if (!TryInsertGreedyChebyshevBridge(path, i, path[i - 1], path[i], w, h))
+                        break;
+                    repaired = true;
+                    break;
+                }
+                if (!repaired) break;
+            }
+
+            for (int i = 1; i < path.Count; i++)
+            {
+                int ch = Chebyshev(path[i - 1], path[i]);
+                if (ch <= 1) continue;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Debug.LogError(
+                    $"[RiverPathBuilder] Raster discontinuo tras reparación en {i - 1}->{i}: a={path[i - 1]} b={path[i]} Chebyshev={ch} " +
+                    $"(debugLogs={config != null && config.debugLogs})",
+                    null);
+#endif
+                break;
+            }
+        }
+
+        static int Chebyshev(Vector2Int a, Vector2Int b) =>
+            Mathf.Max(Mathf.Abs(b.x - a.x), Mathf.Abs(b.y - a.y));
 
         private static Vector2 PointAtNormalizedArcLength(List<Vector2> poly, float u)
         {

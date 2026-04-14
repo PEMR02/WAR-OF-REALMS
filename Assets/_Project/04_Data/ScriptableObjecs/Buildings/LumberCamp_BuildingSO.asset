@@ -13,8 +13,9 @@ MonoBehaviour:
   m_Name: LumberCamp_BuildingSO
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Buildings.BuildingSO
   id: Lumber_Camp
+  displayName: 
   prefab: {fileID: 713925870453148625, guid: 69fd0f79074820c48b80a703def1a2cd, type: 3}
-  size: {x: 2, y: 2}
+  size: {x: 3, y: 3}
   requiresFlatGround: 0
   costs:
   - kind: 0
@@ -23,3 +24,20 @@ MonoBehaviour:
   maxHP: 300
   populationProvided: 0
   unitSpawnForwardSign: -1
+  isCompound: 0
+  compoundSegmentPrefab: {fileID: 0}
+  compoundSegmentCount: 1
+  compoundSpacing: 2
+  compoundPathMode: 0
+  compoundSegmentLength: 2
+  compoundPathRaycastTerrain: 1
+  compoundPathGroundMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  compoundSegmentRotationOffset: {x: -90, y: 0, z: 0}
+  compoundCornerPrefab: {fileID: 0}
+  compoundCornerMinAngleDeg: 15
+  compoundPlaceCornerAtEndpoints: 0
+  compoundGatePrefab: {fileID: 0}
+  compoundGateRotationOffset: {x: 0, y: 0, z: 0}
+  gateReplacementRotationOffset: {x: 0, y: 0, z: 0}

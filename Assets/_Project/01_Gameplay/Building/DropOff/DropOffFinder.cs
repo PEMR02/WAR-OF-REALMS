@@ -1,16 +1,20 @@
 using UnityEngine;
 using Project.Gameplay.Resources;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Buildings
 {
     public static class DropOffFinder
     {
-        public static DropOffPoint FindNearest(Vector3 from, ResourceKind kind)
+        /// <param name="factionHint">Si se indica, se prefiere un depósito del mismo bando (IA no camina al TC enemigo).</param>
+        public static DropOffPoint FindNearest(Vector3 from, ResourceKind kind, FactionMember factionHint = null)
         {
             var all = Object.FindObjectsByType<DropOffPoint>(FindObjectsSortMode.None);
 
-            DropOffPoint best = null;
-            float bestDist = float.MaxValue;
+            DropOffPoint bestFriendly = null;
+            float bestFriendlyDist = float.MaxValue;
+            DropOffPoint bestAny = null;
+            float bestAnyDist = float.MaxValue;
 
             int ghostLayer = LayerMask.NameToLayer("Ghost");
 
@@ -28,14 +32,22 @@ namespace Project.Gameplay.Buildings
                 Vector3 p = d.DropPosition;
                 float dist = (p - from).sqrMagnitude;
 
-                if (dist < bestDist)
+                if (dist < bestAnyDist)
                 {
-                    bestDist = dist;
-                    best = d;
+                    bestAnyDist = dist;
+                    bestAny = d;
+                }
+
+                if (factionHint == null) continue;
+                var ownerFm = d.GetComponentInParent<FactionMember>();
+                if (ownerFm != null && ownerFm.faction == factionHint.faction && dist < bestFriendlyDist)
+                {
+                    bestFriendlyDist = dist;
+                    bestFriendly = d;
                 }
             }
 
-            return best;
+            return bestFriendly != null ? bestFriendly : bestAny;
         }
     }
 }

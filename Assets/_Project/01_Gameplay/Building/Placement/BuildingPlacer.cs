@@ -485,7 +485,7 @@ namespace Project.Gameplay.Buildings
             scored.Sort((a, c) => a.d.CompareTo(c.d));
             int n = Mathf.Min(maxBuilders, scored.Count);
             for (int i = 0; i < n; i++)
-                scored[i].b.SetBuildTarget(site);
+                scored[i].b.SetBuildTarget(site, "BuildingPlacer.AssignBuildersToSiteForOwner");
         }
 
         /// <param name="targetBaseY">Si tiene valor, la base visual del site se coloca en esta Y (footprint). Si no, se usa sample del terreno en el pivot.</param>
@@ -502,7 +502,7 @@ namespace Project.Gameplay.Buildings
             {
                 var r = renderers[i];
                 if (r == null || !r.enabled) continue;
-                if (r.gameObject.GetComponent<Canvas>() != null) continue;
+                if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(r)) continue;
                 bottomY = Mathf.Min(bottomY, r.bounds.min.y);
                 foundBounds = true;
             }
@@ -514,6 +514,7 @@ namespace Project.Gameplay.Buildings
                 {
                     var c = colliders[i];
                     if (c == null || !c.enabled) continue;
+                    if (BuildingTerrainAlignment.ShouldExcludeColliderForBaseAlignment(c)) continue;
                     bottomY = Mathf.Min(bottomY, c.bounds.min.y);
                     foundBounds = true;
                 }
@@ -680,7 +681,7 @@ namespace Project.Gameplay.Buildings
             {
                 var r = renderers[i];
                 if (r == null || !r.enabled) continue;
-                if (r.gameObject.GetComponent<Canvas>() != null) continue;
+                if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(r)) continue;
                 bottomY = Mathf.Min(bottomY, r.bounds.min.y);
                 found = true;
             }
@@ -692,6 +693,7 @@ namespace Project.Gameplay.Buildings
                 {
                     var c = colliders[i];
                     if (c == null || !c.enabled) continue;
+                    if (BuildingTerrainAlignment.ShouldExcludeColliderForBaseAlignment(c)) continue;
                     bottomY = Mathf.Min(bottomY, c.bounds.min.y);
                     found = true;
                 }
@@ -767,7 +769,7 @@ namespace Project.Gameplay.Buildings
                 var gp = seg.GetComponent<GhostPreview>();
                 if (gp == null) gp = seg.AddComponent<GhostPreview>();
                 gp.Initialize();
-                gp.SetValid(true);
+                gp.SetValid(IsValidWallPreviewAt(pos, so));
                 _pathGhostSegments.Add(seg);
                 return;
             }
@@ -800,7 +802,7 @@ namespace Project.Gameplay.Buildings
                     var gpSeg = seg.GetComponent<GhostPreview>();
                     if (gpSeg == null) gpSeg = seg.AddComponent<GhostPreview>();
                     gpSeg.Initialize();
-                    gpSeg.SetValid(true);
+                    gpSeg.SetValid(IsValidWallPreviewAt(worldPos, so));
                     _pathGhostSegments.Add(seg);
                 }
             }
@@ -855,7 +857,7 @@ namespace Project.Gameplay.Buildings
                     var gpCorner = corner.GetComponent<GhostPreview>();
                     if (gpCorner == null) gpCorner = corner.AddComponent<GhostPreview>();
                     gpCorner.Initialize();
-                    gpCorner.SetValid(true);
+                    gpCorner.SetValid(IsValidWallPreviewAt(pos, so));
                     _pathGhostSegments.Add(corner);
                 }
             }
@@ -893,10 +895,26 @@ namespace Project.Gameplay.Buildings
                     var gpGate = gate.GetComponent<GhostPreview>();
                     if (gpGate == null) gpGate = gate.AddComponent<GhostPreview>();
                     gpGate.Initialize();
-                    gpGate.SetValid(true);
+                    gpGate.SetValid(IsValidWallPreviewAt(pos, so));
                     _pathGhostSegments.Add(gate);
                 }
             }
+        }
+
+        bool IsValidWallPreviewAt(Vector3 pos, BuildingSO so)
+        {
+            if (so == null) return false;
+
+            // 1) Validación de colisión/ocupación (misma que edificios, pero por "pieza" del path).
+            bool validPlace = PlacementValidator.IsValidPlacement(pos, so.size, blockingMask);
+            if (!validPlace) return false;
+
+            // 2) Validación de terreno por footprint (pendiente / delta de altura).
+            if (terrain == null) return true;
+            int bw = Mathf.Max(1, Mathf.RoundToInt(so.size.x));
+            int bh = Mathf.Max(1, Mathf.RoundToInt(so.size.y));
+            var sample = FootprintTerrainSampler.Sample(terrain, pos, new Vector2(bw, bh), _currentYaw);
+            return TerrainPlacementValidator.IsValid(sample, maxHeightDelta, maxSlopeDegrees, new Vector2(bw, bh));
         }
 
         void UpdatePathPlacement(Mouse mouse, Keyboard kb, Camera camera)
@@ -1070,7 +1088,7 @@ namespace Project.Gameplay.Buildings
 					var builder = sel.GetComponent<Project.Gameplay.Units.Builder>();
 					if (builder != null)
 					{
-						builder.SetBuildTarget(site);
+						builder.SetBuildTarget(site, "BuildingPlacer.AutoAssignBuilders selección");
 						assigned++;
 					}
 				}
@@ -1095,7 +1113,7 @@ namespace Project.Gameplay.Buildings
 				}
 				if (nearest != null)
 				{
-					nearest.SetBuildTarget(site);
+					nearest.SetBuildTarget(site, "BuildingPlacer.AutoAssignBuilders más cercano");
 					if (debugLogs) Debug.Log($"BuildingPlacer: sin aldeanos seleccionados, asignado el más cercano a {site.name}");
 				}
 			}

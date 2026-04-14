@@ -4,6 +4,7 @@ using UnityEngine.AI;
 using Project.Gameplay.Map;
 using Project.Gameplay.Pathfinding;
 using Project.Gameplay.Buildings;
+using Project.Gameplay.Units.Movement;
 
 namespace Project.Gameplay.Units
 {
@@ -13,10 +14,11 @@ namespace Project.Gameplay.Units
     /// A* decide POR DÓNDE ir (evita edificios/agua); NavMesh decide CÓMO moverse.
     /// </summary>
     [RequireComponent(typeof(NavMeshAgent))]
-    public class UnitMover : MonoBehaviour
+    public class UnitMover : MonoBehaviour, IUnitMovementComponent
     {
         private NavMeshAgent _agent;
-        private Pathfinder _pathfinder;
+        private IUnitMovementPlanner _planner;
+        private IUnitLocomotionController _locomotion;
 
         [Header("Pathfinding")]
         [Tooltip("Usar A* sobre el grid para planificar ruta. El NavMeshAgent sigue los waypoints.")]
@@ -41,6 +43,7 @@ namespace Project.Gameplay.Units
 
         [Header("Debug")]
         public bool debugLogs = false;
+        [SerializeField] bool drawMovementGizmos = true;
 
         // Ruta A*: lista de waypoints mundo que el agente sigue uno a uno
         private List<Vector3> _waypoints;
@@ -70,10 +73,24 @@ namespace Project.Gameplay.Units
         /// <summary>Reutilizado para comprobar si el path del NavMesh cruza agua lógica (el mesh suele existir bajo lagos).</summary>
         NavMeshPath _navWaterCheckPath;
 
+        public event System.Action<IUnitMovementComponent> MovementStarted;
+        public event System.Action<IUnitMovementComponent> MovementStopped;
+        public event System.Action<IUnitMovementComponent, Vector3> DestinationChanged;
+        public event System.Action<IUnitMovementComponent, string> PathFailed;
+
+        public Vector3 CurrentDestination { get; private set; }
+        public UnitMovementState MovementState { get; private set; } = UnitMovementState.Idle;
+        public string LastPathFailureReason { get; private set; }
+        public Transform Transform => transform;
+
+        Builder _cachedBuilder;
+
         void Awake()
         {
             _agent = GetComponent<NavMeshAgent>();
-            _pathfinder = new Pathfinder();
+            _cachedBuilder = GetComponent<Builder>();
+            _planner = new GridUnitMovementPlanner(useGridPathfinding, canSwim, pathSmoothEpsilon);
+            _locomotion = new NavMeshUnitLocomotionController(_agent, snapToNavMeshRadius);
             _navWaterCheckPath = new NavMeshPath();
             if (_agent != null)
             {
@@ -91,7 +108,11 @@ namespace Project.Gameplay.Units
 
         void ApplyMinStoppingDistance()
         {
-            if (_agent != null && _agent.stoppingDistance < minStoppingDistance)
+            if (_agent == null) return;
+            // Si un Builder tiene target activo, necesita stoppingDistance bajo (0.2) para acercarse al muro.
+            // No pisar ese valor con el mínimo genérico de movimiento.
+            if (_cachedBuilder != null && _cachedBuilder.HasBuildTarget) return;
+            if (_agent.stoppingDistance < minStoppingDistance)
                 _agent.stoppingDistance = minStoppingDistance;
         }
 
@@ -99,15 +120,19 @@ namespace Project.Gameplay.Units
         //  API PÚBLICA
         // ─────────────────────────────────────────────────────────────
 
-        /// <summary>Mueve la unidad al destino.</summary>
-        public void MoveTo(Vector3 worldPos)
+        /// <summary>Mantiene la API legacy; redirige a la nueva petición de movimiento.</summary>
+        public void MoveTo(Vector3 worldPos) => RequestMove(worldPos);
+
+        /// <summary>Entrada moderna del sistema: la capa de órdenes solicita movimiento, no toca el agente directamente.</summary>
+        public bool RequestMove(Vector3 worldPos)
         {
-            if (_agent == null || !_agent.enabled) return;
+            if (_agent == null || !_agent.enabled) return false;
 
             ApplyMinStoppingDistance();
-            if (!_agent.isOnNavMesh)
+            if (_locomotion == null || !_locomotion.TryEnsureOnNavMesh())
             {
-                if (!TrySnapToNavMesh()) return;
+                EmitPathFailed("No se pudo proyectar la unidad a NavMesh.");
+                return false;
             }
 
             // Mientras la unidad ya está comprometida con una puerta, no permitimos que nuevas órdenes
@@ -116,9 +141,16 @@ namespace Project.Gameplay.Units
             {
                 _postGateDestination = worldPos;
                 _hasPostGateDestination = true;
-                return;
+                CurrentDestination = worldPos;
+                DestinationChanged?.Invoke(this, worldPos);
+                return true;
             }
 
+            _planner = new GridUnitMovementPlanner(useGridPathfinding, canSwim, pathSmoothEpsilon);
+            SetMovementState(UnitMovementState.PendingPath);
+            CurrentDestination = worldPos;
+            DestinationChanged?.Invoke(this, worldPos);
+            LastPathFailureReason = null;
             _followingAStarPath = false;
             _waypoints = null;
             _waypointIndex = 0;
@@ -130,101 +162,65 @@ namespace Project.Gameplay.Units
             _hasPostGateDestination = false;
             _activeGate = null;
 
-            // CRÍTICO: Si la línea unidad → destino cruza una puerta Y unidad y destino están en LADOS OPUESTOS,
-            // forzar paso por la puerta. Si ya están en el mismo lado, no forzar (evita bucle).
-            var gateOnPath = GateController.FindGateOnSegment(transform.position, worldPos, 6f);
-            if (ShouldIgnoreGate(gateOnPath))
-                gateOnPath = null;
-            if (gateOnPath != null && gateOnPath.entryPoint != null && gateOnPath.exitPoint != null && gateOnPath.gateCenter != null)
+            GateController ignoredGate = ShouldIgnoreGate(_ignoreGateTemporarily) ? _ignoreGateTemporarily : null;
+            if (_planner != null && _planner.TryCreateGateTraversal(transform.position, worldPos, ignoredGate, out GateTraversalPlan gatePlan) && gatePlan.isValid)
             {
-                Vector3 center = gateOnPath.gateCenter.position;
-                Vector3 fwd = gateOnPath.gateCenter.forward;
-                fwd.y = 0f;
-                if (fwd.sqrMagnitude > 0.0001f)
-                {
-                    fwd.Normalize();
-                    Vector3 toUnit = transform.position - center;
-                    toUnit.y = 0f;
-                    Vector3 toDest = worldPos - center;
-                    toDest.y = 0f;
-                    float sideUnit = toUnit.sqrMagnitude > 0.0001f ? Vector3.Dot(toUnit.normalized, fwd) : 0f;
-                    float sideDest = toDest.sqrMagnitude > 0.0001f ? Vector3.Dot(toDest.normalized, fwd) : 0f;
-                    bool oppositeSides = (sideUnit > 0.1f && sideDest < -0.1f) || (sideUnit < -0.1f && sideDest > 0.1f);
-                    if (oppositeSides)
-                    {
-                        // Primero ir al punto del MISMO lado (approach), luego al otro lado; así el camino corto no rodea el muro.
-                        float entrySide = Vector3.Dot((gateOnPath.entryPoint.position - center), fwd);
-                        Transform sameSidePoint = (entrySide * sideUnit > 0f) ? gateOnPath.entryPoint : gateOnPath.exitPoint;
-                        Transform oppositeSidePoint = (entrySide * sideUnit > 0f) ? gateOnPath.exitPoint : gateOnPath.entryPoint;
-                        if ((sameSidePoint.position - transform.position).sqrMagnitude > 0.9f)
-                        {
-                            _postGateDestination = worldPos;
-                            _hasPostGateDestination = true;
-                            _gateIntermediateDestination = sameSidePoint.position;
-                            _gateOppositeSidePoint = oppositeSidePoint.position;
-                            _gateSecondLeg = false;
-                            _isHeadingToGateIntermediate = true;
-                            _activeGate = gateOnPath;
-                            gateOnPath.ForcePassThrough(_agent);
-                            _agent.isStopped = false;
-                            if (NavMesh.SamplePosition(sameSidePoint.position, out NavMeshHit approachHit, 4f, NavMesh.AllAreas))
-                                _agent.SetDestination(approachHit.position);
-                            else
-                                _agent.SetDestination(sameSidePoint.position);
-                            if (debugLogs)
-                                Debug.Log($"{name}: Destino al otro lado del muro → forzando paso por puerta '{gateOnPath.name}' (primero approach).", this);
-                            return;
-                        }
-                    }
-                }
+                _postGateDestination = gatePlan.finalDestination;
+                _hasPostGateDestination = true;
+                _gateIntermediateDestination = gatePlan.sameSidePoint;
+                _gateOppositeSidePoint = gatePlan.oppositeSidePoint;
+                _gateSecondLeg = false;
+                _isHeadingToGateIntermediate = true;
+                _activeGate = gatePlan.gate;
+                SetMovementState(UnitMovementState.Moving);
+                gatePlan.gate.ForcePassThrough(_agent);
+                if (_locomotion.TrySamplePosition(gatePlan.sameSidePoint, 4f, out Vector3 approach))
+                    _locomotion.SetDestination(approach);
+                else
+                    _locomotion.SetDestination(gatePlan.sameSidePoint);
+                if (debugLogs)
+                    Debug.Log($"{name}: Destino al otro lado del muro → forzando paso por puerta '{gatePlan.gate.name}' (primero approach).", this);
+                MovementStarted?.Invoke(this);
+                return true;
             }
 
-            // Intentar planificar con A*
-            if (useGridPathfinding && MapGrid.Instance != null && MapGrid.Instance.IsReady)
+            string failureReason = null;
+            if (_planner != null && _planner.TryPlanPath(transform.position, worldPos, out UnitMovementPlan plan, out failureReason))
             {
-                PathResult result = _pathfinder.FindPath(transform.position, worldPos, canSwim);
-                if (!result.success || result.cells == null)
+                if (!plan.isDirectFallback && plan.waypoints != null && plan.waypoints.Count > 0)
                 {
-                    if (debugLogs)
-                        Debug.Log($"{name}: A* sin ruta ({result.error}). Fallback NavMesh directo.", this);
-                    SendAgentTo(worldPos);
-                    return;
-                }
-
-                // Misma celda inicio/fin en grid: Pathfinder devuelve lista vacía. Antes no se movía → atasco "en la casilla".
-                if (result.cells.Count == 0)
-                {
-                    _followingAStarPath = false;
-                    _waypoints = null;
-                    _waypointIndex = 0;
-                    _hasAStarGoal = false;
-                    SendAgentTo(worldPos);
-                    if (debugLogs)
-                        Debug.Log($"{name}: A* misma celda → NavMesh directo al objetivo.");
-                    return;
-                }
-
-                _astarGoalWorld = worldPos;
-                _hasAStarGoal = true;
-                _waypoints = CellsToWorldPoints(result.cells);
-                if (_waypoints.Count > 0)
-                {
+                    _astarGoalWorld = worldPos;
+                    _hasAStarGoal = true;
+                    _waypoints = plan.waypoints;
                     _waypointIndex = 0;
                     _followingAStarPath = true;
                     ResetStuckTracking();
+                    SetMovementState(UnitMovementState.Moving);
                     SendAgentTo(_waypoints[0]);
                     if (debugLogs)
                         Debug.Log($"{name}: Ruta A* con {_waypoints.Count} waypoints.");
-                    return;
+                    MovementStarted?.Invoke(this);
+                    return true;
                 }
-                // Celdas > 0 pero waypoints vacíos (raro): fallback
+
                 _hasAStarGoal = false;
-                SendAgentTo(worldPos);
-                return;
+                SetMovementState(UnitMovementState.Moving);
+                SendAgentTo(plan.finalDestination);
+                MovementStarted?.Invoke(this);
+                return true;
             }
 
-            // Solo llega aquí si grid no está listo → fallback NavMesh directo
+            if (!string.IsNullOrEmpty(failureReason))
+            {
+                EmitPathFailed(failureReason);
+                if (debugLogs)
+                    Debug.Log($"{name}: A* sin ruta ({failureReason}). Fallback NavMesh directo.", this);
+            }
+
+            SetMovementState(UnitMovementState.Moving);
             SendAgentTo(worldPos);
+            MovementStarted?.Invoke(this);
+            return true;
         }
 
         public void Stop()
@@ -241,11 +237,10 @@ namespace Project.Gameplay.Units
             _ignoreGateTemporarily = null;
             _ignoreGateUntilTime = 0f;
             _gateSecondLeg = false;
-            if (_agent != null && _agent.isOnNavMesh)
-            {
-                _agent.ResetPath();
-                _agent.isStopped = true;
-            }
+            CurrentDestination = transform.position;
+            SetMovementState(UnitMovementState.Idle);
+            _locomotion?.Stop();
+            MovementStopped?.Invoke(this);
         }
 
         /// <summary>True si está siguiendo una ruta A*.</summary>
@@ -288,11 +283,10 @@ namespace Project.Gameplay.Units
                         // Llegamos al approach (mismo lado); ahora cruzar al otro lado.
                         _gateSecondLeg = true;
                         _gateIntermediateDestination = _gateOppositeSidePoint;
-                        _agent.isStopped = false;
                         if (NavMesh.SamplePosition(_gateOppositeSidePoint, out NavMeshHit hit, 4f, NavMesh.AllAreas))
-                            _agent.SetDestination(hit.position);
+                            _locomotion.SetDestination(hit.position);
                         else
-                            _agent.SetDestination(_gateOppositeSidePoint);
+                            _locomotion.SetDestination(_gateOppositeSidePoint);
                         return;
                     }
                     _isHeadingToGateIntermediate = false;
@@ -311,7 +305,18 @@ namespace Project.Gameplay.Units
             }
 
             if (!_followingAStarPath || _waypoints == null)
+            {
+                if (!_isHeadingToGateIntermediate
+                    && !_agent.pathPending
+                    && (_agent.remainingDistance <= _agent.stoppingDistance + 0.15f || !_agent.hasPath)
+                    && _agent.velocity.sqrMagnitude < 0.01f
+                    && MovementState != UnitMovementState.Idle)
+                {
+                    SetMovementState(UnitMovementState.Idle);
+                    MovementStopped?.Invoke(this);
+                }
                 return;
+            }
 
             _repathCooldownTimer -= Time.deltaTime;
 
@@ -373,6 +378,7 @@ namespace Project.Gameplay.Units
             bool stuck = _stuckTime >= stuckRepathSeconds && barelyMoving && !_agent.pathPending;
             if ((stuck || partial) && _repathCooldownTimer <= 0f)
             {
+                SetMovementState(stuck ? UnitMovementState.Stuck : UnitMovementState.Repathing);
                 _repathCooldownTimer = repathCooldownSeconds;
                 if (TryRepathToStoredGoal() && debugLogs)
                     Debug.Log($"{name}: Repath A* (atasco o path parcial).", this);
@@ -383,32 +389,37 @@ namespace Project.Gameplay.Units
         {
             if (!_hasAStarGoal || MapGrid.Instance == null || !MapGrid.Instance.IsReady)
                 return false;
-            PathResult result = _pathfinder.FindPath(transform.position, _astarGoalWorld, canSwim);
-            if (!result.success || result.cells == null || result.cells.Count == 0)
+            SetMovementState(UnitMovementState.Repathing);
+            string failureReason = null;
+            if (_planner == null || !_planner.TryPlanPath(transform.position, _astarGoalWorld, out UnitMovementPlan plan, out failureReason))
             {
                 if (debugLogs)
-                    Debug.Log($"{name}: Repath A* falló → NavMesh al objetivo guardado.", this);
+                    Debug.Log($"{name}: Repath A* falló ({failureReason}) → NavMesh al objetivo guardado.", this);
+                if (!string.IsNullOrEmpty(failureReason))
+                    EmitPathFailed(failureReason);
                 _followingAStarPath = false;
                 _waypoints = null;
                 _waypointIndex = 0;
                 _hasAStarGoal = false;
                 SendAgentTo(_astarGoalWorld);
+                SetMovementState(UnitMovementState.Moving);
                 return true;
             }
-            var newWaypoints = CellsToWorldPoints(result.cells);
-            if (newWaypoints.Count == 0)
+            if (plan.isDirectFallback || plan.waypoints == null || plan.waypoints.Count == 0)
             {
                 _followingAStarPath = false;
                 _waypoints = null;
                 _waypointIndex = 0;
                 _hasAStarGoal = false;
                 SendAgentTo(_astarGoalWorld);
+                SetMovementState(UnitMovementState.Moving);
                 return true;
             }
-            _waypoints = newWaypoints;
+            _waypoints = plan.waypoints;
             _waypointIndex = 0;
             ResetStuckTracking();
             SendAgentTo(_waypoints[0]);
+            SetMovementState(UnitMovementState.Moving);
             return true;
         }
 
@@ -430,7 +441,6 @@ namespace Project.Gameplay.Units
             // Integración puertas: solo forzar paso si unidad y destino están en LADOS OPUESTOS de la puerta (evita bucle al recalcular tras cruzar).
             if (_isHeadingToGateIntermediate && _hasPostGateDestination && (navDest - _gateIntermediateDestination).sqrMagnitude < 4f)
             {
-                _agent.isStopped = false;
                 return;
             }
             var gate = GateController.FindGateOnSegment(transform.position, navDest, 4.5f);
@@ -466,11 +476,10 @@ namespace Project.Gameplay.Units
                             _isHeadingToGateIntermediate = true;
                             _activeGate = gate;
                             gate.ForcePassThrough(_agent);
-                            _agent.isStopped = false;
                             if (NavMesh.SamplePosition(sameSidePoint.position, out NavMeshHit approachHit, 4f, NavMesh.AllAreas))
-                                _agent.SetDestination(approachHit.position);
+                                _locomotion.SetDestination(approachHit.position);
                             else
-                                _agent.SetDestination(sameSidePoint.position);
+                                _locomotion.SetDestination(sameSidePoint.position);
                             return;
                         }
                     }
@@ -480,8 +489,7 @@ namespace Project.Gameplay.Units
             Vector3 pathFrom = _agent.nextPosition;
             TryClampNavDestinationToAvoidGridWater(pathFrom, ref navDest);
 
-            _agent.isStopped = false;
-            _agent.SetDestination(navDest);
+            _locomotion.SetDestination(navDest);
         }
 
         void SetAgentDestinationDirect(Vector3 worldPos)
@@ -497,8 +505,7 @@ namespace Project.Gameplay.Units
             Vector3 pathFrom = _agent.nextPosition;
             TryClampNavDestinationToAvoidGridWater(pathFrom, ref navDest);
 
-            _agent.isStopped = false;
-            _agent.SetDestination(navDest);
+            _locomotion.SetDestination(navDest);
         }
 
         /// <summary>Con A* activo, limita el snap para no “saltar” a la otra orilla del lago en el NavMesh.</summary>
@@ -608,7 +615,7 @@ namespace Project.Gameplay.Units
                         Vector3 w = MapGrid.Instance.CellToWorld(nc);
                         if (NavMesh.SamplePosition(w, out NavMeshHit hit, Mathf.Max(0.5f, MapGrid.GetCellSizeOrDefault() * 0.75f), NavMesh.AllAreas))
                         {
-                            _agent.Warp(hit.position);
+                            _locomotion.Warp(hit.position);
                             _repathCooldownTimer = 0f;
                             ResetStuckTracking();
                             if (_followingAStarPath && _hasAStarGoal)
@@ -644,12 +651,48 @@ namespace Project.Gameplay.Units
             if (_agent == null || !_agent.enabled) return false;
             if (_agent.isOnNavMesh) return true;
 
-            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, snapToNavMeshRadius, NavMesh.AllAreas))
+            if (_locomotion.TrySamplePosition(transform.position, snapToNavMeshRadius, out Vector3 sampled))
             {
-                _agent.Warp(hit.position);
+                _locomotion.Warp(sampled);
                 return true;
             }
             return false;
+        }
+
+        void SetMovementState(UnitMovementState newState)
+        {
+            MovementState = newState;
+        }
+
+        void EmitPathFailed(string reason)
+        {
+            LastPathFailureReason = reason;
+            PathFailed?.Invoke(this, reason);
+        }
+
+        void OnDrawGizmosSelected()
+        {
+            if (!drawMovementGizmos)
+                return;
+
+            if (CurrentDestination != Vector3.zero)
+            {
+                Gizmos.color = Color.cyan;
+                Gizmos.DrawWireSphere(CurrentDestination + Vector3.up * 0.2f, 0.45f);
+            }
+
+            if (_waypoints != null && _waypoints.Count > 0)
+            {
+                Gizmos.color = Color.green;
+                Vector3 prev = transform.position + Vector3.up * 0.1f;
+                for (int i = _waypointIndex; i < _waypoints.Count; i++)
+                {
+                    Vector3 p = _waypoints[i] + Vector3.up * 0.1f;
+                    Gizmos.DrawLine(prev, p);
+                    Gizmos.DrawWireSphere(p, i == _waypointIndex ? 0.28f : 0.18f);
+                    prev = p;
+                }
+            }
         }
 
         List<Vector3> CellsToWorldPoints(List<Vector2Int> cells)

@@ -1,14 +1,15 @@
 using UnityEngine;
 using Project.Gameplay.Units;
+using Project.Gameplay.Units.Movement;
 
 namespace Project.Core.Commands
 {
     public class MoveCommand : ICommand
     {
-        private readonly UnitMover _mover;
+        private readonly IUnitMovementComponent _mover;
         private readonly Vector3 _target;
 
-        public MoveCommand(UnitMover mover, Vector3 target)
+        public MoveCommand(IUnitMovementComponent mover, Vector3 target)
         {
             _mover = mover;
             _target = target;
@@ -17,7 +18,7 @@ namespace Project.Core.Commands
         public void Execute()
         {
             if (_mover != null)
-                _mover.MoveTo(_target);
+                _mover.RequestMove(_target);
         }
     }
 }

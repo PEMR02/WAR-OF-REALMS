@@ -1,5 +1,6 @@
 using UnityEngine;
 using Project.Gameplay;
+using Project.Gameplay.Buildings;
 using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Units
@@ -50,7 +51,7 @@ namespace Project.Gameplay.Units
         void Awake()
         {
             if (renderers == null || renderers.Length == 0)
-                renderers = GetComponentsInChildren<Renderer>();
+                renderers = BuildingTerrainAlignment.CollectRenderersForSelectionHighlight(transform);
 
             _baseColors = new Color[renderers.Length];
             for (int i = 0; i < renderers.Length; i++)

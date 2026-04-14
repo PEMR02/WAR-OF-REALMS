@@ -3,6 +3,7 @@ using UnityEngine.AI;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Players;
 using Project.Gameplay.Buildings;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Units
 {
@@ -218,7 +219,7 @@ namespace Project.Gameplay.Units
                     if (debugLogs)
                         Debug.Log($"[{gameObject.name}] Buscando depsito para: {_carriedKind} (raw: {(int)_carriedKind})");
 
-                    _deposit = DropOffFinder.FindNearest(transform.position, _carriedKind);
+                    _deposit = DropOffFinder.FindNearest(transform.position, _carriedKind, GetComponent<FactionMember>());
 
                     if (_deposit == null)
                     {

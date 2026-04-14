@@ -1,6 +1,7 @@
 using UnityEngine;
 using Project.Gameplay;
 using Project.Gameplay.Map;
+using Project.Gameplay.Faction;
 
 namespace Project.Gameplay.Units
 {
@@ -38,7 +39,8 @@ namespace Project.Gameplay.Units
         {
             if (SelectionOutlineConfig.Global != null)
             {
-                var u = SelectionOutlineConfig.Global.units;
+                bool hostile = FactionMember.IsHostileToPlayer(gameObject);
+                var u = hostile ? SelectionOutlineConfig.Global.enemyUnits : SelectionOutlineConfig.Global.units;
                 radius = u.ringRadius;
                 innerRadiusPercent = u.ringInnerPercent;
                 heightOffset = u.ringHeightOffset;

@@ -27,7 +27,7 @@ namespace Project.Gameplay.Combat
         [Tooltip("Escala visual de la barra. Menor = más discreta.")]
         [Range(0.25f, 2f)] public float barScaleMultiplier = 0.5f;
         [Tooltip("Si true, compensa la escala del padre para mantener tamaño visual consistente (unidades vs edificios escalados).")]
-        public bool keepConstantWorldSize = false;
+        public bool keepConstantWorldSize = true;
         [Tooltip("Margen entre el marco negro y la barra (verde/rojo). A mayor valor, barra más pequeña dentro del marco.")]
         [Range(0f, 15f)] public float barPadding = 2f;
         [Tooltip("Grosor del marco negro si usas borderImage (unidades UI).")]
