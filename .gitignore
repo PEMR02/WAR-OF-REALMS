@@ -67,3 +67,7 @@ Assets/New Terrain*.asset.meta
 !Assets/**/*.meta
 !Packages/**/*.meta
 !ProjectSettings/**/*.meta
+
+# Unity Visual Scripting cache (must appear after !Assets/**/*.meta so folder .meta stays ignored)
+Assets/Unity.VisualScripting.Generated/
+Assets/Unity.VisualScripting.Generated.meta
