@@ -936,9 +936,9 @@ Camera:
   m_Depth: -100
   m_CullingMask:
     serializedVersion: 2
-    m_Bits: 4294963167
+    m_Bits: 4294963163
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 1130566401}
+  m_TargetTexture: {fileID: 1470463158}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 0
@@ -1139,7 +1139,7 @@ PrefabInstance:
     - target: {fileID: 5212750621760053404, guid: 5edc043de19f28c48b9f6c35e70be348, type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
-      objectReference: {fileID: 2100000, guid: f04aeb10fb469ce4fa90fc447b867ece, type: 2}
+      objectReference: {fileID: 2100000, guid: 6363f60797ab0fb49b1ff852b0978304, type: 2}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -1939,6 +1939,7 @@ MonoBehaviour:
   - {fileID: 163439474731319336, guid: 143cdf6278ebc1c4998f3dfae4e62712, type: 3}
   - {fileID: 4568731122899883605, guid: 3124c9b701b5b34438e34ee372c0f552, type: 3}
   - {fileID: 7699501243947649170, guid: 12499795cfbf18844ac21ea18339398c, type: 3}
+  - {fileID: 7064737089219117903, guid: f262b0d250cab0a44aec6a6d2c788e9a, type: 3}
   goldPrefabVariants: []
   stonePrefabVariants:
   - {fileID: 2031696237299484605, guid: 9d4f32c8221e0a14e9350abeb1ad4527, type: 3}
@@ -3841,7 +3842,7 @@ PrefabInstance:
     - target: {fileID: 5212750621760053404, guid: 5edc043de19f28c48b9f6c35e70be348, type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
-      objectReference: {fileID: 2100000, guid: f04aeb10fb469ce4fa90fc447b867ece, type: 2}
+      objectReference: {fileID: 2100000, guid: f59ea535bb715ca4da8afac832fd36eb, type: 2}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -9888,12 +9889,12 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 1130566401}
+  m_Texture: {fileID: 1470463158}
   m_UVRect:
     serializedVersion: 2
-    x: 0
+    x: 0.1
     y: 0
-    width: 1
+    width: 0.8
     height: 1
 --- !u!222 &997712582
 CanvasRenderer:
@@ -10235,43 +10236,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1124077159}
   m_CullTransparentMesh: 1
---- !u!84 &1130566401
-RenderTexture:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_Name: Minimap_RT
-  m_ImageContentsHash:
-    serializedVersion: 2
-    Hash: 00000000000000000000000000000000
-  m_IsAlphaChannelOptional: 0
-  serializedVersion: 6
-  m_Width: 256
-  m_Height: 256
-  m_AntiAliasing: 1
-  m_MipCount: -1
-  m_DepthStencilFormat: 90
-  m_ColorFormat: 4
-  m_MipMap: 0
-  m_GenerateMips: 0
-  m_SRGB: 1
-  m_UseDynamicScale: 0
-  m_UseDynamicScaleExplicit: 0
-  m_BindMS: 0
-  m_EnableCompatibleFormat: 1
-  m_EnableRandomWrite: 0
-  m_TextureSettings:
-    serializedVersion: 2
-    m_FilterMode: 1
-    m_Aniso: 0
-    m_MipBias: 0
-    m_WrapU: 1
-    m_WrapV: 1
-    m_WrapW: 1
-  m_Dimension: 2
-  m_VolumeDepth: 1
-  m_ShadowSamplingMode: 2
 --- !u!1 &1140868780
 GameObject:
   m_ObjectHideFlags: 0
@@ -12059,6 +12023,43 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1457218321}
   m_CullTransparentMesh: 1
+--- !u!84 &1470463158
+RenderTexture:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Minimap_RT
+  m_ImageContentsHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_IsAlphaChannelOptional: 0
+  serializedVersion: 6
+  m_Width: 256
+  m_Height: 256
+  m_AntiAliasing: 1
+  m_MipCount: -1
+  m_DepthStencilFormat: 90
+  m_ColorFormat: 4
+  m_MipMap: 0
+  m_GenerateMips: 0
+  m_SRGB: 1
+  m_UseDynamicScale: 0
+  m_UseDynamicScaleExplicit: 0
+  m_BindMS: 0
+  m_EnableCompatibleFormat: 1
+  m_EnableRandomWrite: 0
+  m_TextureSettings:
+    serializedVersion: 2
+    m_FilterMode: 1
+    m_Aniso: 1
+    m_MipBias: 0
+    m_WrapU: 1
+    m_WrapV: 1
+    m_WrapW: 1
+  m_Dimension: 2
+  m_VolumeDepth: 1
+  m_ShadowSamplingMode: 2
 --- !u!1 &1505489621
 GameObject:
   m_ObjectHideFlags: 0

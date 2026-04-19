@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Project.Gameplay.Resources;
+using Project.Gameplay.Buildings;
 using Project.Gameplay.Map.Generator;
 using Project.Gameplay.Map.Generation;
 
@@ -14,6 +15,27 @@ namespace Project.Gameplay.Map
     public static class MapResourcePlacer
     {
         const string ResourcePickRootName = "__ResourcePickRoot";
+
+        /// <summary>
+        /// Resuelve el índice de capa para recursos colocados en runtime.
+        /// Si el nombre configurado no existe, intenta "Resource", luego "Obstacle" / "EntitySelection".
+        /// Nunca usa BaseTerrain (11) como sustituto: en este proyecto coincidía con el fallback antiguo y horneaba NavMesh en copas.
+        /// </summary>
+        public static int ResolveResourceLayerIndex(string configuredLayerName)
+        {
+            if (!string.IsNullOrEmpty(configuredLayerName))
+            {
+                int id = LayerMask.NameToLayer(configuredLayerName);
+                if (id >= 0) return id;
+            }
+            int resource = LayerMask.NameToLayer("Resource");
+            if (resource >= 0) return resource;
+            int obstacle = LayerMask.NameToLayer("Obstacle");
+            if (obstacle >= 0) return obstacle;
+            int entity = LayerMask.NameToLayer("EntitySelection");
+            if (entity >= 0) return entity;
+            return -1;
+        }
         /// <summary>Margen interior respecto al borde del grid lógico (evita árboles en la faldilla del terreno / fuera del área jugable).</summary>
         const int DefinitiveResourceEdgeInsetCells = 1;
 
@@ -699,6 +721,17 @@ namespace Project.Gameplay.Map
             }
         }
 
+        static void EnsureWoodHierarchyNonStaticForNavMesh(GameObject go)
+        {
+            if (go == null) return;
+            var ts = go.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < ts.Length; i++)
+            {
+                if (ts[i] != null)
+                    ts[i].gameObject.isStatic = false;
+            }
+        }
+
         /// <summary>Evita rocas/piedras flotantes: coloca la base del mesh sobre el terreno (estilo Anno).</summary>
         static void SnapResourceBottomToTerrain(GameObject go, RTSMapGenerator generator)
         {
@@ -744,9 +777,16 @@ namespace Project.Gameplay.Map
                 EnsureResourceCastsShadows(go);
 
             string layerName = !string.IsNullOrEmpty(res.resourceLayerName) ? res.resourceLayerName : "Resource";
-            int resourceLayer = LayerMask.NameToLayer(layerName);
-            if (resourceLayer < 0) resourceLayer = 11;
+            int resourceLayer = ResolveResourceLayerIndex(layerName);
+            if (resourceLayer < 0)
+            {
+                Debug.LogWarning($"[MapResourcePlacer] No se pudo resolver capa de recurso (config='{layerName}'). Revisa TagManager (capa Resource).");
+                resourceLayer = 0;
+            }
             SetLayerRecursively(go, resourceLayer);
+            // Madera: evitar flags estáticos en hijos del FBX que puedan colarse al bake NavMesh (RenderMeshes + capas).
+            if (kind == ResourceKind.Wood)
+                EnsureWoodHierarchyNonStaticForNavMesh(go);
             if (kind == ResourceKind.Stone && res.stoneMaterialOverride != null)
                 ApplyMaterialToRenderers(go, res.stoneMaterialOverride);
             if (kind == ResourceKind.Wood && res.treeMaterialOverrides != null && res.treeMaterialOverrides.Length > 0)
@@ -791,6 +831,7 @@ namespace Project.Gameplay.Map
             {
                 var r = renderers[i];
                 if (r == null || !r.enabled) continue;
+                if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(r)) continue;
                 if (!have) { wb = r.bounds; have = true; }
                 else wb.Encapsulate(r.bounds);
             }

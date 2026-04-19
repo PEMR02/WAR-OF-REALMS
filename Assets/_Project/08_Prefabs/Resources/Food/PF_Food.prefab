@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 3696739516877908120}
   - component: {fileID: 2057214172183056775}
   - component: {fileID: 1108821196703286940}
-  m_Layer: 11
+  m_Layer: 14
   m_Name: PF_Food
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -136,6 +136,14 @@ PrefabInstance:
       propertyPath: m_Name
       value: Arbusto_01
       objectReference: {fileID: 0}
+    - target: {fileID: -9080912661818772480, guid: 65ec1c07463956d418e4fefbf7e4ccf0, type: 3}
+      propertyPath: m_Layer
+      value: 14
+      objectReference: {fileID: 0}
+    - target: {fileID: -8254933250616001369, guid: 65ec1c07463956d418e4fefbf7e4ccf0, type: 3}
+      propertyPath: m_Layer
+      value: 14
+      objectReference: {fileID: 0}
     - target: {fileID: -8254933250616001369, guid: 65ec1c07463956d418e4fefbf7e4ccf0, type: 3}
       propertyPath: m_IsActive
       value: 1
@@ -191,6 +199,10 @@ PrefabInstance:
     - target: {fileID: -789305788150799178, guid: 65ec1c07463956d418e4fefbf7e4ccf0, type: 3}
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 868257063045014374, guid: 65ec1c07463956d418e4fefbf7e4ccf0, type: 3}
+      propertyPath: m_Layer
+      value: 14
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

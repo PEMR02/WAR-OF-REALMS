@@ -38,7 +38,8 @@ namespace Project.Gameplay.Buildings
                 n.IndexOf("Selection", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
                 n.IndexOf("Ring", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
                 n.IndexOf("ResourcePick", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                n.IndexOf("Shadow", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                n.IndexOf("Shadow", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n.IndexOf("FadeOutline_", System.StringComparison.OrdinalIgnoreCase) >= 0)
                 return true;
             if (go.GetComponent<Canvas>() != null) return true;
             // Solo el GO que lleva BuildingGroundDecal (suele ser root con malla placeholder). No usar GetComponentInParent: excluiría todo el edificio.
@@ -58,10 +59,13 @@ namespace Project.Gameplay.Buildings
         public static bool ShouldExcludeMeshFilterForOutline(MeshFilter mf)
         {
             if (mf == null || mf.sharedMesh == null) return true;
-            if (mf.gameObject.name.Equals("Outline", System.StringComparison.OrdinalIgnoreCase)) return true;
+            string goName = mf.gameObject.name;
+            if (goName.Equals("Outline", System.StringComparison.OrdinalIgnoreCase)) return true;
+            if (goName.IndexOf("FadeOutline_", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
             var mr = mf.GetComponent<MeshRenderer>();
-            if (mr != null) return ShouldExcludeRendererForBaseAlignment(mr);
-            return ShouldExcludeGameObjectForBaseAlignment(mf.gameObject);
+            // Sin renderer visible (p. ej. MeshFilter huérfano en raíz de unidad): no generar silueta ni hover duplicado.
+            if (mr == null || !mr.enabled) return true;
+            return ShouldExcludeRendererForBaseAlignment(mr);
         }
 
         /// <summary>Recoge renderers del root para tint de selección/hover (mismo criterio que outline).</summary>

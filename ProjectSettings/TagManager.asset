@@ -13,24 +13,24 @@ TagManager:
   - UI
   - Ground
   - Building
-  - Unit
+  - GroundTerrain
   - Obstacle
-  - Ghost
+  - EntitySelection
+  - BaseTerrain
+  - GridVisual
+  - Border
   - Resource
   - 
   - 
   - 
+  - MinimapUI
+  - HoverHealthBar
+  - MvtTargetObj
+  - AllCams
   - 
-  - 
-  - 
-  - 
-  - 
-  - 
-  - 
-  - 
-  - 
-  - 
-  - 
+  - AirTerrain
+  - PostProcessing
+  - A*GridObstacle
   - 
   - 
   - 

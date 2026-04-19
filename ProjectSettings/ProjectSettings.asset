@@ -83,7 +83,7 @@ PlayerSettings:
   androidApplicationEntry: 2
   defaultIsNativeResolution: 1
   macRetinaSupport: 1
-  runInBackground: 0
+  runInBackground: 1
   muteOtherAudioSources: 0
   Prepare IOS For Recording: 0
   Force IOS Speakers When Recording: 0
@@ -258,7 +258,7 @@ PlayerSettings:
   shaderPrecisionModel: 0
   clonedFromGUID: 3c72c65a16f0acb438eed22b8b16c24a
   templatePackageId: com.unity.template.urp-blank@17.0.14
-  templateDefaultScene: Assets/Scenes/SampleScene.unity
+  templateDefaultScene: Assets/_Project/07_Scenes/SampleScene.unity
   useCustomMainManifest: 0
   useCustomLauncherManifest: 0
   useCustomMainGradleTemplate: 0
@@ -826,22 +826,25 @@ PlayerSettings:
   webWasm2023: 0
   webEnableSubmoduleStrippingCompatibility: 0
   scriptingDefineSymbols:
-    Android: APP_UI_EDITOR_ONLY;UNITY_POST_PROCESSING_STACK_V2
-    EmbeddedLinux: UNITY_POST_PROCESSING_STACK_V2
-    GameCoreScarlett: UNITY_POST_PROCESSING_STACK_V2
-    GameCoreXboxOne: UNITY_POST_PROCESSING_STACK_V2
-    Kepler: UNITY_POST_PROCESSING_STACK_V2
-    LinuxHeadlessSimulation: UNITY_POST_PROCESSING_STACK_V2
-    Nintendo Switch: UNITY_POST_PROCESSING_STACK_V2
-    Nintendo Switch 2: UNITY_POST_PROCESSING_STACK_V2
-    PS4: UNITY_POST_PROCESSING_STACK_V2
-    PS5: UNITY_POST_PROCESSING_STACK_V2
-    QNX: UNITY_POST_PROCESSING_STACK_V2
-    Standalone: APP_UI_EDITOR_ONLY;UNITY_POST_PROCESSING_STACK_V2
-    VisionOS: UNITY_POST_PROCESSING_STACK_V2
-    WebGL: UNITY_POST_PROCESSING_STACK_V2
-    XboxOne: UNITY_POST_PROCESSING_STACK_V2
-    tvOS: UNITY_POST_PROCESSING_STACK_V2
+    Android: APP_UI_EDITOR_ONLY;UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    EmbeddedLinux: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    GameCoreScarlett: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    GameCoreXboxOne: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    Kepler: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    LinuxHeadlessSimulation: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    Nintendo Switch: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    Nintendo Switch 2: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    PS4: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    PS5: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    QNX: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    Server: UNITY_MCP_READY
+    Standalone: APP_UI_EDITOR_ONLY;UNITY_POST_PROCESSING_STACK_V2;VISTA;UNITY_MCP_READY
+    VisionOS: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    WebGL: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    Windows Store Apps: UNITY_MCP_READY
+    XboxOne: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
+    iPhone: UNITY_MCP_READY
+    tvOS: UNITY_POST_PROCESSING_STACK_V2;UNITY_MCP_READY
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend:

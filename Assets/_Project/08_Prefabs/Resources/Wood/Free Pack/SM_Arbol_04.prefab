@@ -11,7 +11,7 @@ GameObject:
   - component: {fileID: 411208893430393801}
   - component: {fileID: 8716986344478924009}
   - component: {fileID: 7839838849798944150}
-  m_Layer: 11
+  m_Layer: 14
   m_Name: SM_Arbol_04
   m_TagString: Untagged
   m_Icon: {fileID: 0}

@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 7749945899234026413}
   - component: {fileID: 5060262258226706431}
   - component: {fileID: 4134642886688565410}
-  m_Layer: 11
+  m_Layer: 14
   m_Name: PF_Animal
   m_TagString: Untagged
   m_Icon: {fileID: 0}

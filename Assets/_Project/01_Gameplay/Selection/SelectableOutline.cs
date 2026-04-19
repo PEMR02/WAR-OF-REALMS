@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.AI;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Units;
@@ -30,12 +31,15 @@ namespace Project.Gameplay
         private Material _outlineMaterial;
         private OutlineState _state;
         private bool _isUnit;
+        /// <summary>Comida animada (vaca, ciervo): mismo criterio de borde que unidades (paleta + BakeMesh alineado).</summary>
+        bool _movingAnimalFoodUnitOutline;
         bool _hostileToPlayer;
         /// <summary>Evita reintentar CreateOutline cada frame si no hay mallas válidas o falló el shader.</summary>
         bool _outlineCreationAttempted;
 
         void Awake()
         {
+            _movingAnimalFoodUnitOutline = IsMovingAnimalFoodUnitStyleOutline();
             _hostileToPlayer = GetComponent<UnitSelectable>() != null && FactionMember.IsHostileToPlayer(gameObject);
             ApplyPaletteFromMode();
             TryCreateOutlineRenderers();
@@ -69,6 +73,15 @@ namespace Project.Gameplay
                 return;
             }
 
+            if (_movingAnimalFoodUnitOutline && SelectionOutlineConfig.Global != null)
+            {
+                var u = SelectionOutlineConfig.Global.units;
+                selectionColor = u.selectionColor;
+                hoverColor = u.hoverColor;
+                outlineScale = u.outlineScale;
+                return;
+            }
+
             if (SelectionOutlineConfig.Global != null)
             {
                 OutlineAppearance app = GetAppearanceFromConfig();
@@ -90,6 +103,38 @@ namespace Project.Gameplay
             if (GetComponent<ResourceSelectable>() != null) return SelectionOutlineConfig.Global.resources;
             if (GetComponent<BuildingSelectable>() != null) return SelectionOutlineConfig.Global.buildings;
             return SelectionOutlineConfig.Global.buildings;
+        }
+
+        /// <summary>Comida con desplazamiento (pastor o agente): mismo pipeline de outline que <see cref="UnitSelectable"/>.</summary>
+        bool IsMovingAnimalFoodUnitStyleOutline()
+        {
+            if (GetComponent<ResourceSelectable>() == null) return false;
+            var node = GetComponent<ResourceNode>();
+            if (node == null || node.kind != ResourceKind.Food) return false;
+            if (GetComponentInChildren<AnimalPastureBehaviour>(true) != null) return true;
+            if (GetComponentInChildren<NavMeshAgent>(true) != null) return true;
+            return false;
+        }
+
+        /// <summary>El SMR con mayor volumen de bounds en mundo (suele ser el cuerpo; descarta collares/LOD minúsculos o duplicados).</summary>
+        static int FindPrimarySkinnedMeshIndexForMovingFood(SkinnedMeshRenderer[] skinned)
+        {
+            int best = -1;
+            float bestVol = -1f;
+            for (int i = 0; i < skinned.Length; i++)
+            {
+                var smr = skinned[i];
+                if (smr == null || smr.sharedMesh == null) continue;
+                if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(smr)) continue;
+                Vector3 s = smr.bounds.size;
+                float vol = s.x * s.y * s.z;
+                if (vol > bestVol)
+                {
+                    bestVol = vol;
+                    best = i;
+                }
+            }
+            return best;
         }
 
         void TryCreateOutlineRenderers()
@@ -129,7 +174,8 @@ namespace Project.Gameplay
             _isUnit = GetComponent<UnitSelectable>() != null;
             _hostileToPlayer = _isUnit && FactionMember.IsHostileToPlayer(gameObject);
             ApplyPaletteFromMode();
-            bool centerByBounds = _isUnit;
+            // Solo unidades: MeshFilter con -bounds.center. Comida animada (FBX): mezclar criterio de unidad aquí infla colliders/proxy del modelo.
+            bool centerStaticMeshByBounds = _isUnit;
 
             _outlineMaterial = new Material(shader);
             _outlineObjects = new GameObject[nMesh + nSkinned];
@@ -141,11 +187,11 @@ namespace Project.Gameplay
             {
                 for (int i = 0; i < meshFilters.Length; i++)
                 {
+                    if (_movingAnimalFoodUnitOutline)
+                        continue;
                     var mf = meshFilters[i];
                     if (mf == null || BuildingTerrainAlignment.ShouldExcludeMeshFilterForOutline(mf)) continue;
-                    // Recursos/edificios: el mesh suele tener pivot lejos del centro; compensar como en unidades
-                    // para que el outline coincida con el volumen visible (evita silueta corrida al suelo).
-                    _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, true, null);
+                    _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, centerStaticMeshByBounds, null);
                     _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
                     _outlineSkinnedSources[idx] = null;
                     _outlineBakedMeshes[idx] = null;
@@ -154,18 +200,37 @@ namespace Project.Gameplay
             }
             if (skinned != null)
             {
-                for (int i = 0; i < skinned.Length; i++)
+                // Comida animada (vaca FBX): varios SMR duplican siluetas o uno tiene bounds raros → un solo outline en el SMR de mayor volumen visible.
+                if (_movingAnimalFoodUnitOutline)
                 {
-                    var smr = skinned[i];
-                    if (smr == null || smr.sharedMesh == null) continue;
-                    if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(smr)) continue;
-                    var bakedMesh = new Mesh();
-                    bakedMesh.name = "OutlineBaked";
-                    _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerByBounds, smr);
-                    _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
-                    _outlineSkinnedSources[idx] = smr;
-                    _outlineBakedMeshes[idx] = bakedMesh;
-                    idx++;
+                    int pick = FindPrimarySkinnedMeshIndexForMovingFood(skinned);
+                    if (pick >= 0)
+                    {
+                        var smr = skinned[pick];
+                        var bakedMesh = new Mesh();
+                        bakedMesh.name = "OutlineBaked";
+                        _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerStaticMeshByBounds, smr);
+                        _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
+                        _outlineSkinnedSources[idx] = smr;
+                        _outlineBakedMeshes[idx] = bakedMesh;
+                        idx++;
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < skinned.Length; i++)
+                    {
+                        var smr = skinned[i];
+                        if (smr == null || smr.sharedMesh == null) continue;
+                        if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(smr)) continue;
+                        var bakedMesh = new Mesh();
+                        bakedMesh.name = "OutlineBaked";
+                        _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerStaticMeshByBounds, smr);
+                        _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
+                        _outlineSkinnedSources[idx] = smr;
+                        _outlineBakedMeshes[idx] = bakedMesh;
+                        idx++;
+                    }
                 }
             }
             if (idx < _outlineObjects.Length)
@@ -219,13 +284,17 @@ namespace Project.Gameplay
             if (_outlineMaterial != null && _outlineMaterial.renderQueue < 2500)
                 _outlineMaterial.renderQueue = 2500;
 
+            int outlineVisLayer = LayerMask.NameToLayer("Ignore Raycast");
+            if (outlineVisLayer >= 0)
+                go.layer = outlineVisLayer;
+
             go.SetActive(false);
             return go;
         }
 
         void LateUpdate()
         {
-            if (_state == OutlineState.Off || _outlineObjects == null || !_isUnit) return;
+            if (_state == OutlineState.Off || _outlineObjects == null) return;
             for (int i = 0; i < _outlineObjects.Length; i++)
             {
                 var smr = _outlineSkinnedSources[i];
@@ -234,8 +303,8 @@ namespace Project.Gameplay
                 smr.BakeMesh(baked);
                 var mf = _outlineMeshFilters != null && i < _outlineMeshFilters.Length ? _outlineMeshFilters[i] : null;
                 if (mf != null) mf.sharedMesh = baked;
-                if (_isUnit)
-                    _outlineObjects[i].transform.localPosition = -baked.bounds.center;
+                // Unidades y comida animada: misma corrección de bake que <see cref="UnitSelectable"/>.
+                _outlineObjects[i].transform.localPosition = (_isUnit || _movingAnimalFoodUnitOutline) ? -baked.bounds.center : Vector3.zero;
             }
         }
 

@@ -14896,7 +14896,6 @@ GameObject:
   - component: {fileID: 8051236254236449048}
   - component: {fileID: 6616987591531431951}
   - component: {fileID: -2246716814632497654}
-  - component: {fileID: 8765838440089718542}
   - component: {fileID: 9123456789012345678}
   - component: {fileID: -4284576207649672655}
   - component: {fileID: 6718035930616474837}
@@ -15126,14 +15125,6 @@ MonoBehaviour:
   autoAnchorName: BarAnchor
   autoUseRendererTopWhenNoAnchor: 1
   rendererTopPadding: 0.3
---- !u!33 &8765838440089718542
-MeshFilter:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 179124}
-  m_Mesh: {fileID: 10208, guid: 0000000000000000e000000000000000, type: 0}
 --- !u!114 &9123456789012345678
 MonoBehaviour:
   m_ObjectHideFlags: 0

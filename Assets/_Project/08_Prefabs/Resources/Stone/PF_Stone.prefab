@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 3841517327866278379}
   - component: {fileID: 638631289761393568}
   - component: {fileID: 816522152583746426}
-  m_Layer: 11
+  m_Layer: 14
   m_Name: PF_Stone
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -129,5 +129,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Resources.ResourceNode
   kind: 1
   amount: 300
+  maxAmount: 0
   snapToNavMeshOnAwake: 1
   snapRadius: 3

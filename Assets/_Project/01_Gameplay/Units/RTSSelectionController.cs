@@ -93,14 +93,16 @@ namespace Project.Gameplay.Units
 
         void EnsureResourceLayerMaskFromMap()
         {
-            if (resourceLayerMask != 0) return;
             string layerName = "Resource";
             var gen = FindFirstObjectByType<RTSMapGenerator>();
             if (gen != null && !string.IsNullOrEmpty(gen.resourceLayerName))
                 layerName = gen.resourceLayerName;
-            int layer = LayerMask.NameToLayer(layerName);
-            if (layer < 0) layer = 11;
-            resourceLayerMask = 1 << layer;
+            int layer = MapResourcePlacer.ResolveResourceLayerIndex(layerName);
+            if (layer < 0) return;
+            int bit = 1 << layer;
+            // La escena puede tener serializado solo BaseTerrain (11); los recursos colocados van a "Resource".
+            if ((resourceLayerMask.value & bit) == 0)
+                resourceLayerMask |= bit;
         }
 
         /// <summary>Si el mask quedó en Nothing en el prefab, usar capa Building para raycasts de hover/clic.</summary>

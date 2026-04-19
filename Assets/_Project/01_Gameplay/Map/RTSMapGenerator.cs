@@ -2162,7 +2162,7 @@ namespace Project.Gameplay.Map
         {
             int mask = ~0;
             string layerName = string.IsNullOrEmpty(resourceLayerName) ? "Resource" : resourceLayerName;
-            int resourceLayer = LayerMask.NameToLayer(layerName);
+            int resourceLayer = MapResourcePlacer.ResolveResourceLayerIndex(layerName);
             if (resourceLayer >= 0)
                 mask &= ~(1 << resourceLayer);
             return mask;

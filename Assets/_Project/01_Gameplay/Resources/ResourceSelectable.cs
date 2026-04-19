@@ -27,7 +27,7 @@ namespace Project.Gameplay.Resources
 
         void Awake()
         {
-            if (renderers == null || renderers.Length == 0)
+            if (renderers == null || renderers.Length == 0 || !HasAnyNonNullRenderer(renderers))
                 renderers = BuildingTerrainAlignment.CollectRenderersForSelectionHighlight(transform);
 
             if (renderers == null) renderers = new Renderer[0];
@@ -40,6 +40,16 @@ namespace Project.Gameplay.Resources
 
             _outline = GetComponent<SelectableOutline>();
             if (_outline == null) _outline = gameObject.AddComponent<SelectableOutline>();
+        }
+
+        static bool HasAnyNonNullRenderer(Renderer[] list)
+        {
+            if (list == null) return false;
+            for (int i = 0; i < list.Length; i++)
+            {
+                if (list[i] != null) return true;
+            }
+            return false;
         }
 
         static Color GetMaterialColor(Material mat)

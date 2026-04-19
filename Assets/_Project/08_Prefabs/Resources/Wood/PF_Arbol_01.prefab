@@ -9,7 +9,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 6901475203299401781}
-  m_Layer: 11
+  m_Layer: 14
   m_Name: PF_Arbol_01
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -98,7 +98,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 919132149155446097, guid: 672d1970845cdc6418a69f25828dce73, type: 3}
       propertyPath: m_Layer
-      value: 11
+      value: 14
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

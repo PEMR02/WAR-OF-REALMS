@@ -920,6 +920,10 @@ namespace Project.UI
             int gridVis = LayerMask.NameToLayer("GridVisual");
             if (gridVis >= 0)
                 mask &= ~(1 << gridVis);
+            // Siluetas de selección/hover (SelectableOutline / FadeOutline) se colocan en Ignore Raycast para no pintar el RT del minimapa.
+            int ignoreRaycast = LayerMask.NameToLayer("Ignore Raycast");
+            if (ignoreRaycast >= 0)
+                mask &= ~(1 << ignoreRaycast);
             return mask;
         }
 

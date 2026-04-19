@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering;
+using Project.Gameplay.Buildings;
 
 namespace Project.Gameplay.Resources
 {
@@ -89,6 +90,7 @@ namespace Project.Gameplay.Resources
             {
                 var mf = meshFilters[i];
                 if (mf == null || mf.sharedMesh == null) continue;
+                if (BuildingTerrainAlignment.ShouldExcludeMeshFilterForOutline(mf)) continue;
 
                 var go = new GameObject("FadeOutline_" + i);
                 go.transform.SetParent(mf.transform, false);
@@ -103,6 +105,10 @@ namespace Project.Gameplay.Resources
                 outlineMr.sharedMaterial = _outlineMaterial;
                 outlineMr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 outlineMr.receiveShadows = false;
+
+                int outlineVisLayer = LayerMask.NameToLayer("Ignore Raycast");
+                if (outlineVisLayer >= 0)
+                    go.layer = outlineVisLayer;
 
                 go.SetActive(false);
                 _outlineObjects[i] = go;

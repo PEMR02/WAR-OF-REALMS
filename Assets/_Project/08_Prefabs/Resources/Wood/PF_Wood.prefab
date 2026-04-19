@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 7880873947696001706}
   - component: {fileID: 6725302043634936511}
   - component: {fileID: 592711335033930206}
-  m_Layer: 11
+  m_Layer: 14
   m_Name: PF_Wood
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -129,5 +129,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Resources.ResourceNode
   kind: 0
   amount: 300
+  maxAmount: 0
   snapToNavMeshOnAwake: 1
   snapRadius: 3

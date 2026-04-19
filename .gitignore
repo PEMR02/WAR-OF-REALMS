@@ -1,29 +1,69 @@
+# --- Unity generated (never commit) ---
 [Ll]ibrary/
 [Tt]emp/
 [Oo]bj/
+[Ll]ogs/
 [Bb]uild/
 [Bb]uilds/
-[Ll]ogs/
+[Uu]ser[Ss]ettings/
 [Mm]emoryCaptures/
+[Rr]ecordings/
 
-# User settings
-UserSettings/
+# Crash / diagnostics
+sysinfo.txt
+mono_crash.*
+*.stacktrace
+CrashReports/
+UnityCrashHandler*
 
-# OS files
+# Visual Studio / MSBuild / JetBrains
+.vs/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# OS
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
-
-# Crash reports
-sysinfo.txt
-
-# External assets (not to be versioned)
+# --- Project-specific ---
+# Large or vendored drops not meant for Git
 Assets/Externo/
 
-# Unity meta files
+# Unity auto-recovery / temp trees (regenerated locally)
+Assets/_Recovery/
+Assets/_Recovery.meta
+Assets/_TerrainAutoUpgrade/
+Assets/_TerrainAutoUpgrade.meta
+
+# Loose terrain experiments at Assets root
+Assets/New Terrain*.asset
+Assets/New Terrain*.asset.meta
+
+# MCP / CLI probe leftovers (repository root)
+/_mcp_*
+
+# Blender / heavy exports at repo root
+*.blend
+*.blend1
+
+# Optional tooling trees at repository root (not game code)
+/SKILLS/
+/Tools/
+/scripts_blender/
+/Docs/
+
+# --- Unity .meta: keep for tracked assets under Assets/, Packages/, ProjectSettings/ ---
 !Assets/**/*.meta
 !Packages/**/*.meta
 !ProjectSettings/**/*.meta
