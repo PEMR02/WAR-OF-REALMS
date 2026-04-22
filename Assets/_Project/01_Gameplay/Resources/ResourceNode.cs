@@ -21,6 +21,9 @@ namespace Project.Gameplay.Resources
         [Tooltip("Si true, en Start() proyecta el nodo al NavMesh más cercano. Desactivado para recursos colocados por el generador (NavMesh aún no rebakeado).")]
         public bool snapToNavMeshOnAwake = true;
         public float snapRadius = 3f;
+        [Header("UI")]
+        [Tooltip("RTS-style: recursos normalmente no muestran barra world-space permanente.")]
+        public bool showWorldBar = false;
 
         int _initialMax;
 
@@ -51,7 +54,7 @@ namespace Project.Gameplay.Resources
         public float GetBarRatio01() => MaxAmount > 0 ? Mathf.Clamp01(amount / (float)MaxAmount) : 0f;
         public Color GetBarFullColor() => GetColorForKind(kind);
         public Color GetBarEmptyColor() => new Color(0.2f, 0.2f, 0.2f, 0.9f);
-        public bool IsBarVisible() => !IsDepleted;
+        public bool IsBarVisible() => showWorldBar && !IsDepleted;
 
         static Color GetColorForKind(ResourceKind k)
         {

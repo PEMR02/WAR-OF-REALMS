@@ -29,6 +29,7 @@ namespace Project.Gameplay
         private SkinnedMeshRenderer[] _outlineSkinnedSources;
         private Mesh[] _outlineBakedMeshes;
         private Material _outlineMaterial;
+        private Material _outlineLeafMaterial;
         private OutlineState _state;
         private bool _isUnit;
         /// <summary>Comida animada (vaca, ciervo): mismo criterio de borde que unidades (paleta + BakeMesh alineado).</summary>
@@ -137,6 +138,38 @@ namespace Project.Gameplay
             return best;
         }
 
+        static bool IsLikelyFoliageMaterial(Material mat)
+        {
+            if (mat == null) return false;
+            string n = mat.name.ToLowerInvariant();
+            return n.Contains("leaf") || n.Contains("leaves") || n.Contains("foliage") ||
+                   n.Contains("hoja") || n.Contains("copa") || n.Contains("canopy") || n.Contains("fronda");
+        }
+
+        static Texture ResolveAlphaTexture(Material source)
+        {
+            if (source == null) return null;
+            if (source.HasProperty("_BaseMap"))
+            {
+                var t = source.GetTexture("_BaseMap");
+                if (t != null) return t;
+            }
+            if (source.HasProperty("_MainTex"))
+            {
+                var t = source.GetTexture("_MainTex");
+                if (t != null) return t;
+            }
+            return null;
+        }
+
+        static float ResolveAlphaCutoff(Material source)
+        {
+            if (source == null) return 0.33f;
+            if (source.HasProperty("_Cutoff")) return Mathf.Clamp01(source.GetFloat("_Cutoff"));
+            if (source.HasProperty("_AlphaClipThreshold")) return Mathf.Clamp01(source.GetFloat("_AlphaClipThreshold"));
+            return 0.33f;
+        }
+
         void TryCreateOutlineRenderers()
         {
             if (_outlineObjects != null) return;
@@ -174,8 +207,9 @@ namespace Project.Gameplay
             _isUnit = GetComponent<UnitSelectable>() != null;
             _hostileToPlayer = _isUnit && FactionMember.IsHostileToPlayer(gameObject);
             ApplyPaletteFromMode();
-            // Solo unidades: MeshFilter con -bounds.center. Comida animada (FBX): mezclar criterio de unidad aquí infla colliders/proxy del modelo.
-            bool centerStaticMeshByBounds = _isUnit;
+            // Unidades y recursos estáticos: escalar alrededor del centro del bounds local para evitar "engordar"
+            // el tronco por pivote en la base y mejorar ajuste en copas.
+            bool centerStaticMeshByBounds = _isUnit || GetComponent<ResourceNode>() != null;
 
             _outlineMaterial = new Material(shader);
             _outlineObjects = new GameObject[nMesh + nSkinned];
@@ -191,7 +225,8 @@ namespace Project.Gameplay
                         continue;
                     var mf = meshFilters[i];
                     if (mf == null || BuildingTerrainAlignment.ShouldExcludeMeshFilterForOutline(mf)) continue;
-                    _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, centerStaticMeshByBounds, null);
+                    var mr = mf.GetComponent<MeshRenderer>();
+                    _outlineObjects[idx] = CreateOutlineObject(mf.sharedMesh, mf.transform, centerStaticMeshByBounds, null, mr);
                     _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
                     _outlineSkinnedSources[idx] = null;
                     _outlineBakedMeshes[idx] = null;
@@ -209,7 +244,7 @@ namespace Project.Gameplay
                         var smr = skinned[pick];
                         var bakedMesh = new Mesh();
                         bakedMesh.name = "OutlineBaked";
-                        _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerStaticMeshByBounds, smr);
+                        _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerStaticMeshByBounds, smr, smr);
                         _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
                         _outlineSkinnedSources[idx] = smr;
                         _outlineBakedMeshes[idx] = bakedMesh;
@@ -225,7 +260,7 @@ namespace Project.Gameplay
                         if (BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(smr)) continue;
                         var bakedMesh = new Mesh();
                         bakedMesh.name = "OutlineBaked";
-                        _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerStaticMeshByBounds, smr);
+                        _outlineObjects[idx] = CreateOutlineObject(bakedMesh, smr.transform, centerStaticMeshByBounds, smr, smr);
                         _outlineMeshFilters[idx] = _outlineObjects[idx] != null ? _outlineObjects[idx].GetComponent<MeshFilter>() : null;
                         _outlineSkinnedSources[idx] = smr;
                         _outlineBakedMeshes[idx] = bakedMesh;
@@ -253,6 +288,11 @@ namespace Project.Gameplay
                     Destroy(_outlineMaterial);
                     _outlineMaterial = null;
                 }
+                if (_outlineLeafMaterial != null)
+                {
+                    Destroy(_outlineLeafMaterial);
+                    _outlineLeafMaterial = null;
+                }
                 _outlineObjects = System.Array.Empty<GameObject>();
                 _outlineMeshFilters = System.Array.Empty<MeshFilter>();
                 _outlineSkinnedSources = System.Array.Empty<SkinnedMeshRenderer>();
@@ -260,25 +300,61 @@ namespace Project.Gameplay
             }
         }
 
-        GameObject CreateOutlineObject(Mesh mesh, Transform parentForOutline, bool centerByBounds, SkinnedMeshRenderer skinnedSource)
+        GameObject CreateOutlineObject(Mesh mesh, Transform parentForOutline, bool centerByBounds, SkinnedMeshRenderer skinnedSource, Renderer sourceRenderer)
         {
             var go = new GameObject("Outline");
             go.transform.SetParent(parentForOutline != null ? parentForOutline : transform, false);
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one * outlineScale;
             if (centerByBounds && skinnedSource == null)
             {
                 var bounds = mesh.bounds;
-                go.transform.localPosition = -bounds.center;
+                Vector3 ls = go.transform.localScale;
+                go.transform.localPosition = new Vector3(
+                    bounds.center.x * (1f - ls.x),
+                    bounds.center.y * (1f - ls.y),
+                    bounds.center.z * (1f - ls.z));
             }
             else
                 go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.identity;
-            go.transform.localScale = Vector3.one * outlineScale;
 
             var outlineMf = go.AddComponent<MeshFilter>();
             outlineMf.sharedMesh = mesh;
 
             var outlineMr = go.AddComponent<MeshRenderer>();
-            outlineMr.sharedMaterial = _outlineMaterial;
+            if (mesh != null && mesh.subMeshCount > 1)
+            {
+                var mats = new Material[mesh.subMeshCount];
+                Material[] src = sourceRenderer != null ? sourceRenderer.sharedMaterials : null;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    bool foliage = src != null && i < src.Length && IsLikelyFoliageMaterial(src[i]);
+                    if (foliage)
+                    {
+                        if (_outlineLeafMaterial == null)
+                        {
+                            _outlineLeafMaterial = new Material(_outlineMaterial);
+                            Color c = _outlineLeafMaterial.color;
+                            c.a *= 0.35f;
+                            _outlineLeafMaterial.color = c;
+                            if (_outlineLeafMaterial.HasProperty("_BaseColor"))
+                                _outlineLeafMaterial.SetColor("_BaseColor", c);
+                            _outlineLeafMaterial.SetFloat("_UseTextureAlpha", 1f);
+                        }
+                        var srcMat = src[i];
+                        var alphaTex = ResolveAlphaTexture(srcMat);
+                        if (alphaTex != null)
+                            _outlineLeafMaterial.SetTexture("_MainTex", alphaTex);
+                        _outlineLeafMaterial.SetFloat("_Cutoff", ResolveAlphaCutoff(srcMat));
+                        mats[i] = _outlineLeafMaterial;
+                    }
+                    else
+                        mats[i] = _outlineMaterial;
+                }
+                outlineMr.sharedMaterials = mats;
+            }
+            else
+                outlineMr.sharedMaterial = _outlineMaterial;
             outlineMr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             outlineMr.receiveShadows = false;
             if (_outlineMaterial != null && _outlineMaterial.renderQueue < 2500)
@@ -349,6 +425,14 @@ namespace Project.Gameplay
                 _outlineMaterial.color = c;
                 if (_outlineMaterial.HasProperty("_BaseColor"))
                     _outlineMaterial.SetColor("_BaseColor", c);
+                if (_outlineLeafMaterial != null)
+                {
+                    Color lc = c;
+                    lc.a *= 0.35f;
+                    _outlineLeafMaterial.color = lc;
+                    if (_outlineLeafMaterial.HasProperty("_BaseColor"))
+                        _outlineLeafMaterial.SetColor("_BaseColor", lc);
+                }
             }
         }
     }

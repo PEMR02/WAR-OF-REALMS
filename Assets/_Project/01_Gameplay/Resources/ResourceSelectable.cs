@@ -38,6 +38,7 @@ namespace Project.Gameplay.Resources
                     _baseColors[i] = GetMaterialColor(renderers[i].material);
             }
 
+            // Misma base que BuildingSelectable / UnitSelectable: outline desde SelectionOutlineConfig (recursos).
             _outline = GetComponent<SelectableOutline>();
             if (_outline == null) _outline = gameObject.AddComponent<SelectableOutline>();
         }

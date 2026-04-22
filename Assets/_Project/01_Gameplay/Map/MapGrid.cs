@@ -158,7 +158,7 @@ namespace Project.Gameplay.Map
         /// <summary>Altura del terreno en el centro de la celda (requiere Terrain en escena).</summary>
         public static float GetCellHeight(Terrain terrain, Vector2Int cell)
         {
-            if (terrain == null || Instance == null || !Instance.IsReady) return 0f;
+            if (terrain == null || terrain.terrainData == null || Instance == null || !Instance.IsReady) return 0f;
             Vector3 w = Instance.CellToWorld(cell);
             return terrain.SampleHeight(new Vector3(w.x, 0f, w.z)) + terrain.transform.position.y;
         }

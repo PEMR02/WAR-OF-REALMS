@@ -13,6 +13,8 @@ namespace Project.Gameplay.Buildings
         public static bool ShouldExcludeRendererForBaseAlignment(Renderer r)
         {
             if (r == null) return true;
+            if (IsDegenerateSelectionOrOutlineRenderer(r))
+                return true;
             if (r is ParticleSystemRenderer || r is TrailRenderer || r is LineRenderer)
                 return true;
             if (IsUnderNamedAncestor(r.transform, "HealthBar"))
@@ -46,6 +48,22 @@ namespace Project.Gameplay.Buildings
             // BuildingBasePlatform: mismo criterio que arriba (solo el GO con el componente).
             if (go.GetComponent<BuildingGroundDecal>() != null) return true;
             if (go.GetComponent<BuildingBasePlatform>() != null) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Descarta renderers con escala local nula/casi nula o bounds nulos (ojos apagados, LOD roto, etc.)
+        /// para tint/outline y bounds de pick.
+        /// </summary>
+        public static bool IsDegenerateSelectionOrOutlineRenderer(Renderer r)
+        {
+            if (r == null) return true;
+            Vector3 ls = r.transform.localScale;
+            if (Mathf.Abs(ls.x) < 1e-4f || Mathf.Abs(ls.y) < 1e-4f || Mathf.Abs(ls.z) < 1e-4f)
+                return true;
+            Vector3 sz = r.bounds.size;
+            if (sz.sqrMagnitude < 1e-8f)
+                return true;
             return false;
         }
 

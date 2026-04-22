@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   units:
     ringColor: {r: 0.6057693, g: 1, b: 0, a: 1}
-    ringBrightness: 2
+    ringBrightness: 3
     ringRadius: 0.6
     ringInnerPercent: 0.8
     ringHeightOffset: 0.08
@@ -27,14 +27,18 @@ MonoBehaviour:
     ringRadius: 0.6
     ringInnerPercent: 0.65
     ringHeightOffset: 0.08
-    selectionColor: {r: 0.62, g: 0.14, b: 0.12, a: 0.98}
+    selectionColor: {r: 0.88235295, g: 0, b: 0, a: 1}
     hoverColor: {r: 1, g: 0.52, b: 0.48, a: 0.85}
     outlineScale: 1.04
   buildings:
     selectionColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
     hoverColor: {r: 1, g: 1, b: 1, a: 1}
-    outlineScale: 1.02
+    outlineScale: 1.06
   resources:
     selectionColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
     hoverColor: {r: 1, g: 1, b: 1, a: 1}
-    outlineScale: 1.12
+    outlineScale: 1.08
+  movingFoodResources:
+    selectionColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+    hoverColor: {r: 1, g: 1, b: 1, a: 1}
+    outlineScale: 1.06

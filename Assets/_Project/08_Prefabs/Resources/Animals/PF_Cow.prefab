@@ -1,5 +1,75 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!1 &6890054496253221356
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1793795208890758199}
+  - component: {fileID: 4407216520179475619}
+  - component: {fileID: 2550309598866573254}
+  m_Layer: 14
+  m_Name: __ResourcePickRoot
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1793795208890758199
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6890054496253221356}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 652872388816624274}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!65 &4407216520179475619
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6890054496253221356}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Size: {x: 1.2, y: 1.25, z: 2.4}
+  m_Center: {x: 0, y: 0.62, z: 0.05}
+--- !u!114 &2550309598866573254
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6890054496253221356}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e1652c197f2888c468b53cce1d96f309, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Resources.ResourcePickProxy
+  selectable: {fileID: 5406114914069147882}
+  node: {fileID: -4119205499202519433}
+  pickCollider: {fileID: 4407216520179475619}
+  debugDrawBounds: 0
 --- !u!1001 &848392615827363626
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -228,30 +298,6 @@ PrefabInstance:
       propertyPath: m_Layer
       value: 14
       objectReference: {fileID: 0}
-    - target: {fileID: 1630794972795428178, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Center.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1630794972795428178, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Center.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1630794972795428178, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Center.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1630794972795428178, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Extent.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1630794972795428178, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Extent.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1630794972795428178, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Extent.z
-      value: 0
-      objectReference: {fileID: 0}
     - target: {fileID: 1783629567915233096, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
       propertyPath: m_Layer
       value: 14
@@ -306,30 +352,6 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4167280743394806330, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
       propertyPath: m_LocalRotation.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 5241284212654878085, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Center.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 5241284212654878085, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Center.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 5241284212654878085, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Center.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 5241284212654878085, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Extent.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 5241284212654878085, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Extent.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 5241284212654878085, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-      propertyPath: m_AABB.m_Extent.z
       value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 5259275019459582636, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
@@ -458,7 +480,7 @@ Animator:
   m_GameObject: {fileID: 506498033739459195}
   m_Enabled: 1
   m_Avatar: {fileID: 0}
-  m_Controller: {fileID: 9100000, guid: 30ecce7739d117b41a340fd26ed7ae83, type: 2}
+  m_Controller: {fileID: 9100000, guid: 10209663287bbb04ab53028fd3f2cf68, type: 2}
   m_CullingMode: 0
   m_UpdateMode: 0
   m_ApplyRootMotion: 1
@@ -492,11 +514,6 @@ Transform:
 --- !u!137 &2118846824679901816 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 1630794972795428178, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
-  m_PrefabInstance: {fileID: 848392615827363626}
-  m_PrefabAsset: {fileID: 0}
---- !u!137 &4862428193952135855 stripped
-SkinnedMeshRenderer:
-  m_CorrespondingSourceObject: {fileID: 5241284212654878085, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
   m_PrefabInstance: {fileID: 848392615827363626}
   m_PrefabAsset: {fileID: 0}
 --- !u!1001 &1046469571905469817
@@ -584,6 +601,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: -8679921383154817045, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
       insertIndex: -1
       addedObject: {fileID: 886261260306952385}
+    - targetCorrespondingSourceObject: {fileID: -8679921383154817045, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1793795208890758199}
     m_AddedComponents:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
       insertIndex: -1
@@ -623,6 +643,7 @@ MonoBehaviour:
   maxAmount: 0
   snapToNavMeshOnAwake: 1
   snapRadius: 1
+  showWorldBar: 0
 --- !u!114 &5406114914069147882
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -630,14 +651,13 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 163439474731319336}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1c36cf9716eed9d4088c5ee26180c499, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Resources.ResourceSelectable
   renderers:
   - {fileID: 2118846824679901816}
-  - {fileID: 4862428193952135855}
   useMaterialHighlight: 0
   highlightIntensity: 0.5
   selectionTint: {r: 1, g: 0, b: 0, a: 1}
@@ -659,7 +679,7 @@ CapsuleCollider:
   m_LayerOverridePriority: 0
   m_IsTrigger: 0
   m_ProvidesContacts: 0
-  m_Enabled: 1
+  m_Enabled: 0
   serializedVersion: 2
   m_Radius: 0.2
   m_Height: 1

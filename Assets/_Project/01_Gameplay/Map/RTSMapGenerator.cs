@@ -739,7 +739,7 @@ namespace Project.Gameplay.Map
 
         public float SampleHeight(Vector3 world)
         {
-            if (terrain == null) return world.y;
+            if (terrain == null || terrain.terrainData == null) return world.y;
             return terrain.SampleHeight(world) + terrain.transform.position.y;
         }
         public Vector3 SnapToGrid(Vector3 world)

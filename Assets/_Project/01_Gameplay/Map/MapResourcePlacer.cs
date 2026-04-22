@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.AI;
+using Project.Gameplay;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Map.Generator;
@@ -772,6 +774,10 @@ namespace Project.Gameplay.Map
             ResourceSelectable selectable = go.GetComponent<ResourceSelectable>();
             if (selectable == null)
                 selectable = go.AddComponent<ResourceSelectable>();
+            // Fuerza lista completa para hover/outline en recursos multi-mesh (copa+tronco, etc.)
+            // evitando configuraciones parciales heredadas del prefab.
+            selectable.renderers = BuildingTerrainAlignment.CollectRenderersForSelectionHighlight(go.transform);
+            ApplyResourceOutlineConfigNow(go, node, kind);
 
             if (generator != null && res.forceResourceShadowCasting)
                 EnsureResourceCastsShadows(go);
@@ -791,8 +797,10 @@ namespace Project.Gameplay.Map
                 ApplyMaterialToRenderers(go, res.stoneMaterialOverride);
             if (kind == ResourceKind.Wood && res.treeMaterialOverrides != null && res.treeMaterialOverrides.Length > 0)
                 ApplyTreeMaterialOverrides(go, generator, res);
-            if (kind == ResourceKind.Wood && go.GetComponent<FadeableByCamera>() == null)
-                go.AddComponent<FadeableByCamera>();
+            // FadeableByCamera queda aislado por ahora: no se aplica en recursos procedurales.
+            var fade = go.GetComponent<FadeableByCamera>();
+            if (fade != null)
+                fade.enabled = false;
 
             EnsureRobustResourcePickCollider(go, node, selectable, generator, resourceLayer);
         }
@@ -878,15 +886,17 @@ namespace Project.Gameplay.Map
             localSize.x = Mathf.Max(0.55f, localSize.x);
             localSize.y = Mathf.Max(0.85f, localSize.y);
             localSize.z = Mathf.Max(0.55f, localSize.z);
-            localSize.x = Mathf.Min(localSize.x, 2.85f);
+            bool isWood = node != null && node.kind == ResourceKind.Wood;
+            float maxXZ = isWood ? 7.5f : 2.85f;
+            localSize.x = Mathf.Min(localSize.x, maxXZ);
             localSize.y = Mathf.Min(localSize.y, 8.5f);
-            localSize.z = Mathf.Min(localSize.z, 2.85f);
+            localSize.z = Mathf.Min(localSize.z, maxXZ);
 
             // Árboles isométricos: ligero ensanche horizontal respecto a la altura (sin inflar con AABB mundo de modelos rotados).
             localCenter.y = Mathf.Max(localCenter.y, localSize.y * 0.28f);
             float capXZ = Mathf.Max(localSize.x, localSize.z);
-            capXZ = Mathf.Max(capXZ, localSize.y * 0.36f);
-            capXZ = Mathf.Min(capXZ, 2.85f);
+            capXZ = Mathf.Max(capXZ, localSize.y * (isWood ? 0.58f : 0.36f));
+            capXZ = Mathf.Min(capXZ, maxXZ);
             localSize.x = capXZ;
             localSize.z = capXZ;
 
@@ -897,6 +907,7 @@ namespace Project.Gameplay.Map
             box.center = localCenter;
             box.size = localSize;
             proxy.Bind(selectable, node, box);
+            TryDisableRedundantRootCollidersForStaticScaledFood(go, node, proxy, generator);
 
             if (generator != null && generator.debugLogs)
             {
@@ -918,6 +929,50 @@ namespace Project.Gameplay.Map
                 if (hadNoUsefulCollider)
                     Debug.Log($"[ResourcePick] '{go.name}': collider principal de pick regenerado desde bounds visuales.", go);
             }
+        }
+
+        /// <summary>
+        /// Vacas estáticas (SkinnedMesh con escala local muy alta): el CapsuleCollider de la raíz suele ser el hit más cercano
+        /// pero <see cref="ResourcePickResolver"/> solo acepta el collider del <see cref="ResourcePickProxy"/> → hover falla.
+        /// No aplica a comida con <see cref="NavMeshAgent"/> (pasto / ciervo móvil).
+        /// </summary>
+        static void TryDisableRedundantRootCollidersForStaticScaledFood(GameObject go, ResourceNode node, ResourcePickProxy proxy, RTSMapGenerator generator)
+        {
+            if (go == null || node == null || proxy == null || node.kind != ResourceKind.Food)
+                return;
+            if (go.GetComponentInChildren<NavMeshAgent>(true) != null)
+                return;
+            const float highRigScaleThreshold = 8f;
+            if (!HasFoodSkinnedMeshWithHighLocalScale(go.transform, highRigScaleThreshold))
+                return;
+
+            Collider pick = proxy.PickCollider;
+            var rootCols = go.GetComponents<Collider>();
+            for (int i = 0; i < rootCols.Length; i++)
+            {
+                Collider c = rootCols[i];
+                if (c == null || !c.enabled || c.isTrigger) continue;
+                if (c == pick) continue;
+                if (c.transform != go.transform) continue;
+                c.enabled = false;
+                if (generator != null && generator.debugLogs)
+                    Debug.Log($"[ResourcePick] '{go.name}': desactivado collider raíz '{c.GetType().Name}' (pick = __ResourcePickRoot).", go);
+            }
+        }
+
+        static bool HasFoodSkinnedMeshWithHighLocalScale(Transform root, float threshold)
+        {
+            var smrs = root.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            if (smrs == null) return false;
+            for (int i = 0; i < smrs.Length; i++)
+            {
+                var smr = smrs[i];
+                if (smr == null || BuildingTerrainAlignment.ShouldExcludeRendererForBaseAlignment(smr)) continue;
+                Vector3 ls = smr.transform.localScale;
+                if (Mathf.Max(Mathf.Abs(ls.x), Mathf.Max(Mathf.Abs(ls.y), Mathf.Abs(ls.z))) >= threshold)
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>Asegura que los recursos (árboles, animales, piedra, oro) proyecten sombras aunque el prefab tenga Off.</summary>
@@ -1011,6 +1066,35 @@ namespace Project.Gameplay.Map
             if (go == null || mat == null) return;
             foreach (var r in go.GetComponentsInChildren<MeshRenderer>(true))
                 if (r != null) r.sharedMaterial = mat;
+        }
+
+        static void ApplyResourceOutlineConfigNow(GameObject go, ResourceNode node, ResourceKind kind)
+        {
+            if (go == null) return;
+            var outline = go.GetComponent<SelectableOutline>();
+            if (outline == null)
+                outline = go.AddComponent<SelectableOutline>();
+            var cfg = SelectionOutlineConfig.Global;
+            if (cfg == null || outline == null)
+                return;
+
+            // Animales recurso móviles (PF_Cow/PF_Cow2/PF_Deer con nav): bloque dedicado en config.
+            bool movingFood =
+                kind == ResourceKind.Food &&
+                (go.GetComponentInChildren<AnimalPastureBehaviour>(true) != null ||
+                 go.GetComponent<NavMeshAgent>() != null ||
+                 go.GetComponentInChildren<NavMeshAgent>(true) != null);
+            if (movingFood)
+            {
+                outline.selectionColor = cfg.movingFoodResources.selectionColor;
+                outline.hoverColor = cfg.movingFoodResources.hoverColor;
+                outline.outlineScale = cfg.movingFoodResources.outlineScale;
+                return;
+            }
+
+            outline.selectionColor = cfg.resources.selectionColor;
+            outline.hoverColor = cfg.resources.hoverColor;
+            outline.outlineScale = cfg.resources.outlineScale;
         }
 
         sealed class PlayerResourcesStats

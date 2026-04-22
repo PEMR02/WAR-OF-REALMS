@@ -26,9 +26,22 @@ namespace Project.Gameplay.Map.Generator
             Vector2 grassTileSize = default, Vector2 dirtTileSize = default, Vector2 rockTileSize = default,
             TerrainLayer sandOverride = null, Vector2 sandTileSize = default, int sandShoreCells = 3)
         {
-            if (terrain == null || terrain.terrainData == null || grid == null || config == null) return;
+            if (terrain == null || grid == null || config == null) return;
 
+            // Un Terrain en escena puede no tener TerrainData asignado (asset borrado o prefab sin datos).
+            // Antes se hacía return aquí y el pipeline seguía llamando SampleHeight() → error en runtime.
             var data = terrain.terrainData;
+            if (data == null)
+            {
+                data = new TerrainData();
+                terrain.terrainData = data;
+                var tc = terrain.GetComponent<TerrainCollider>();
+                if (tc != null)
+                    tc.terrainData = data;
+                Debug.LogWarning(
+                    "TerrainExporter: el Terrain no tenía TerrainData; se creó uno en runtime. " +
+                    "Asigna un TerrainData en el Inspector o conserva el asset en el repo para evitar esto.");
+            }
             int res = Mathf.Clamp(config.heightmapResolution, 33, 4097);
             float w = grid.Width * grid.CellSizeWorld;
             float h = grid.Height * grid.CellSizeWorld;

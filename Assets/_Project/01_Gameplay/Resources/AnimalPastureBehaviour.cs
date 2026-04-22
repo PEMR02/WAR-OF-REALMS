@@ -210,8 +210,25 @@ namespace Project.Gameplay.Resources
                             {
                                 _agent.SetDestination(hit.position);
                                 _agent.speed = walkSpeed;
-                                while (_agent.pathPending || (_agent.remainingDistance > _agent.stoppingDistance + 0.2f && _state != State.Fleeing))
+                                while (_state != State.Fleeing)
+                                {
+                                    if (_agent.pathPending)
+                                    {
+                                        yield return null;
+                                        continue;
+                                    }
+
+                                    // Evita salir antes de tiempo: remainingDistance puede fluctuar
+                                    // durante recalculos de ruta y dejar al animal moviendose con estado Idle.
+                                    bool reachedDestination =
+                                        _agent.remainingDistance <= _agent.stoppingDistance + 0.2f &&
+                                        (!_agent.hasPath || _agent.velocity.sqrMagnitude < 0.01f);
+
+                                    if (reachedDestination)
+                                        break;
+
                                     yield return null;
+                                }
                             }
                         }
                         _state = State.Idle;

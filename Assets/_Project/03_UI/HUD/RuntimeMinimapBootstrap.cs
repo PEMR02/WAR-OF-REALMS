@@ -924,6 +924,11 @@ namespace Project.UI
             int ignoreRaycast = LayerMask.NameToLayer("Ignore Raycast");
             if (ignoreRaycast >= 0)
                 mask &= ~(1 << ignoreRaycast);
+            // Agua (AQUAS): si el minimapa renderiza water, OnWillRenderObject llama Camera.Render()
+            // de reflejo dentro del mismo frame URP → "UniversalCameraData has already been created".
+            int water = LayerMask.NameToLayer("Water");
+            if (water >= 0)
+                mask &= ~(1 << water);
             return mask;
         }
 

@@ -75,6 +75,15 @@ namespace Project.Gameplay
 
         [Header("Recursos (outline 3D alrededor del mesh)")]
         public OutlineAppearance resources = new OutlineAppearance();
+        
+        [Header("Animales recurso móviles (PF_Cow/PF_Cow2/PF_Deer con NavMesh)")]
+        [Tooltip("Override específico para animales de recurso en movimiento. Se usa en lugar de Unidades para evitar depender del outlineScale de unidades.")]
+        public OutlineAppearance movingFoodResources = new OutlineAppearance
+        {
+            selectionColor = new Color(0.15f, 0.85f, 0.35f, 0.98f),
+            hoverColor = new Color(0.4f, 0.75f, 0.4f, 0.8f),
+            outlineScale = 1.06f
+        };
 
         static SelectionOutlineConfig _global;
 

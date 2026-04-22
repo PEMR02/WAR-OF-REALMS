@@ -65,7 +65,14 @@ namespace Project.Gameplay.Resources
             if (proxy != null)
             {
                 if (!proxy.OwnsCollider(collider))
-                    return false;
+                {
+                    // Regla oficial: cuando existe proxy, éste define el pick autoritativo.
+                    // Si el raycast golpea otro collider del mismo recurso (compatibilidad), reencauzamos
+                    // al selectable/node del proxy en lugar de descartar el hit.
+                    if (!proxy.TryResolve(out resource, out node))
+                        return false;
+                    return resource != null && node != null;
+                }
 
                 if (!proxy.TryResolve(out resource, out node))
                     return false;
