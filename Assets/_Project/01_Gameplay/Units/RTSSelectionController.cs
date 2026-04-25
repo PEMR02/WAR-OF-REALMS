@@ -7,6 +7,10 @@ using Project.Gameplay.Buildings;
 using Project.Gameplay.Map;
 using Project.UI;
 using Project.Gameplay.Faction;
+using Project.Core;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace Project.Gameplay.Units
 {
@@ -21,6 +25,7 @@ namespace Project.Gameplay.Units
         public bool IsDraggingSelection => _isDragging && Mouse.current != null && Mouse.current.leftButton.isPressed;
 
         [Header("Selection")]
+        [Tooltip("Incluir la capa Units (y Default). Se rellenará en runtime si hace falta; ver ProjectLayers.Units.")]
         public LayerMask unitLayerMask;
         [Tooltip("Mantener pulsado Shift al hacer clic/doble clic para sumar unidades a la selección (mismo tipo en doble clic).")]
         public bool addToSelectionWithShift = true;
@@ -75,10 +80,9 @@ namespace Project.Gameplay.Units
                 selectionBoxUI = FindFirstObjectByType<Project.UI.SelectionBoxUI>();
             if (buildingPlacer == null)
                 buildingPlacer = FindFirstObjectByType<Project.Gameplay.Buildings.BuildingPlacer>();
+            EnsureUnitLayerMask();
             EnsureResourceLayerMaskFromMap();
             EnsureBuildingLayerMaskFromMap();
-            if (unitLayerMask.value != 0)
-                unitLayerMask |= 1 << 0;
             if (resourceLayerMask.value != 0)
                 resourceLayerMask |= 1 << 0;
             if (buildingLayerMask.value != 0)
@@ -87,8 +91,23 @@ namespace Project.Gameplay.Units
 
         void Start()
         {
+            EnsureUnitLayerMask();
             EnsureResourceLayerMaskFromMap();
             EnsureBuildingLayerMaskFromMap();
+        }
+
+        /// <summary>Todas las unidades usan <see cref="ProjectLayers.Units"/>. Asegura el bit en el mask aunque la escena tenga valores viejos.</summary>
+        void EnsureUnitLayerMask()
+        {
+            int u = LayerMask.NameToLayer(ProjectLayers.Units);
+            if (u < 0) return;
+            if (unitLayerMask.value == 0)
+                unitLayerMask = (1 << u) | 1;
+            else
+            {
+                unitLayerMask |= 1 << u;
+                unitLayerMask |= 1;
+            }
         }
 
         void EnsureResourceLayerMaskFromMap()
@@ -118,6 +137,7 @@ namespace Project.Gameplay.Units
         {
             var kb = Keyboard.current;
             var mouse = Mouse.current;
+            if (!ShouldReadPointerInput()) return;
 
             // ESC: primero retroceder en el menú de construcción (categoría / colocación); si no hay menú activo, deseleccionar.
             // Debe ir antes del return por IsPlacing para que Esc funcione al colocar y dentro de submenús aunque el puntero no esté sobre la UI.
@@ -188,17 +208,19 @@ namespace Project.Gameplay.Units
                     return; // Hay UI bajo el cursor, no procesar selección
                 }
 
-                bool isBox = Vector2.Distance(_dragStart, dragEnd) > 12f;
-
                 var kbSel = Keyboard.current;
                 bool additive = kbSel != null && (
                     (addToSelectionWithShift && (kbSel.leftShiftKey.isPressed || kbSel.rightShiftKey.isPressed)) ||
                     (addToSelectionWithCtrl && (kbSel.leftCtrlKey.isPressed || kbSel.rightCtrlKey.isPressed)));
 
-                // Detectar doble clic antes de decidir si limpiar (tolerancia 24px)
+                // Doble clic: si el segundo clic cae en la ventana temporal y cerca del primero, no tratarlo
+                // como selección por caja aunque el ratón se haya movido ~12–20 px al soltar (evita fallos del doble clic).
                 float timeSinceLastClick = Time.time - _lastClickTime;
-                bool isDoubleClick = !isBox && timeSinceLastClick <= doubleClickTime &&
-                                    Vector2.Distance(_lastClickPos, dragEnd) < 24f;
+                bool inDoubleClickWindow = _lastClickTime > 0f && timeSinceLastClick <= doubleClickTime &&
+                    Vector2.Distance(_lastClickPos, dragEnd) < 24f;
+                float dragDist = Vector2.Distance(_dragStart, dragEnd);
+                bool isBox = dragDist > 12f && !inDoubleClickWindow;
+                bool isDoubleClick = !isBox && inDoubleClickWindow;
 
                 // En doble clic no limpiar aquí; DoubleClickSelect usa ClearSelectionForDoubleClick (no oculta barras de unidades)
                 if (!additive && !isDoubleClick) ClearSelection();
@@ -223,6 +245,20 @@ namespace Project.Gameplay.Units
                     }
                 }
             }
+        }
+
+        static bool ShouldReadPointerInput()
+        {
+#if UNITY_EDITOR
+            // Igual que en RTSOrderController: no mezclar clics de Scene/Inspector con coordenadas de GameView.
+            var focused = EditorWindow.focusedWindow;
+            var hovered = EditorWindow.mouseOverWindow;
+            bool gameFocused = focused != null && focused.GetType().Name == "GameView";
+            bool gameHovered = hovered != null && hovered.GetType().Name == "GameView";
+            return gameFocused || gameHovered;
+#else
+            return true;
+#endif
         }
 
         void ClickSelect(Vector2 screenPos, bool additive = false)
@@ -306,12 +342,6 @@ namespace Project.Gameplay.Units
             }
             if (clickedUnit == null) return;
 
-            // Obtener el nombre base del prefab (sin el número de clon)
-            // "Aldeano (2)" -> "Aldeano"
-            // "Unit_01 (3)" -> "Unit_01"
-            string clickedName = clickedUnit.gameObject.name;
-            string baseName = clickedName.Split('(')[0].Trim();
-
             // Solo limpiar selección si NO es aditivo (sin shift).
             // Importante: en doble clic no ocultamos las barras de las unidades antes de reañadirlas,
             // para evitar que la unidad sobre la que se hizo doble clic pierda su barra (Hide + Register
@@ -324,13 +354,8 @@ namespace Project.Gameplay.Units
             {
                 var u = allUnits[i];
                 if (u == null) continue;
-                
-                // Obtener el nombre base de esta unidad
-                string uName = u.gameObject.name;
-                string uBaseName = uName.Split('(')[0].Trim();
-                
-                // Verificar que sea del mismo tipo (mismo nombre base)
-                if (uBaseName != baseName) continue;
+
+                if (!SameUnitTypeForDoubleClick(clickedUnit, u)) continue;
 
                 // Verificar que esté visible en cámara (margen para incluir unidades en el borde)
                 Vector3 screenPoint = cam.WorldToScreenPoint(u.transform.position);
@@ -670,6 +695,35 @@ namespace Project.Gameplay.Units
                 HealthBarManager.ShowBarForEntity(entity);
             else
                 HealthBarManager.HideBarForEntity(entity);
+        }
+
+        /// <summary>
+        /// Mismo tipo para doble clic: preferir <see cref="UnitStatsRuntime.ResolvedUnitDefinition"/> (UnitSO)
+        /// para que coincida aunque los nombres de instancia difieran; si no hay SO en ambos, comparar nombre base.
+        /// </summary>
+        static bool SameUnitTypeForDoubleClick(UnitSelectable a, UnitSelectable b)
+        {
+            if (a == null || b == null) return false;
+            var sa = a.GetComponent<UnitStatsRuntime>();
+            var sb = b.GetComponent<UnitStatsRuntime>();
+            var defA = sa != null ? sa.ResolvedUnitDefinition : null;
+            var defB = sb != null ? sb.ResolvedUnitDefinition : null;
+            if (defA != null && defB != null)
+                return defA == defB;
+            return GetBaseInstanceName(a.gameObject.name) == GetBaseInstanceName(b.gameObject.name);
+        }
+
+        static string GetBaseInstanceName(string goName)
+        {
+            if (string.IsNullOrEmpty(goName)) return string.Empty;
+            string s = goName.Trim();
+            const string cloneSuffix = "(Clone)";
+            if (s.EndsWith(cloneSuffix, System.StringComparison.Ordinal))
+                s = s.Substring(0, s.Length - cloneSuffix.Length).TrimEnd();
+            int paren = s.IndexOf('(');
+            if (paren >= 0)
+                s = s.Substring(0, paren).TrimEnd();
+            return s;
         }
     }
 }

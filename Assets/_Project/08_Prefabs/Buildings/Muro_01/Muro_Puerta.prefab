@@ -234,7 +234,7 @@ MonoBehaviour:
   openRadius: 3.5
   unitLayers:
     serializedVersion: 2
-    m_Bits: 256
+    m_Bits: 1024
   animatorOpenParam: Open
   affectPathfinding: 1
   affectColliders: 0
@@ -276,7 +276,7 @@ MonoBehaviour:
   repathRadius: 8
   unitLayer:
     serializedVersion: 2
-    m_Bits: 256
+    m_Bits: 1024
   allowEnemies: 0
   openDelay: 0.1
   closeDelay: 4

@@ -18,7 +18,7 @@ namespace Project.Core.Commands
         public void Execute()
         {
             if (_mover != null)
-                _mover.RequestMove(_target);
+                _mover.RequestPlayerMove(_target);
         }
     }
 }

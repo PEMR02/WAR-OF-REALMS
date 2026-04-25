@@ -90,12 +90,28 @@ namespace Project.Gameplay.Units.Movement
                 return true;
 
             var waypoints = CellsToWorldPoints(result.cells);
+            TrimLeadingCurrentCellWaypoints(from, waypoints);
             if (waypoints.Count == 0)
                 return true;
 
             plan.isDirectFallback = false;
             plan.waypoints = waypoints;
             return true;
+        }
+
+        void TrimLeadingCurrentCellWaypoints(Vector3 from, List<Vector3> waypoints)
+        {
+            if (waypoints == null || waypoints.Count == 0 || MapGrid.Instance == null || !MapGrid.Instance.IsReady)
+                return;
+
+            Vector2Int fromCell = MapGrid.Instance.WorldToCell(from);
+            while (waypoints.Count > 0)
+            {
+                Vector2Int waypointCell = MapGrid.Instance.WorldToCell(waypoints[0]);
+                if (waypointCell != fromCell)
+                    break;
+                waypoints.RemoveAt(0);
+            }
         }
 
         List<Vector3> CellsToWorldPoints(List<Vector2Int> cells)

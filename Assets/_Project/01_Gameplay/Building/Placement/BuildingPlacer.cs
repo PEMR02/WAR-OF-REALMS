@@ -62,6 +62,10 @@ namespace Project.Gameplay.Buildings
         [Range(0.05f, 0.5f)] public float pathPreviewLineWidth = 0.25f;
         [Tooltip("Permitir confirmar path con doble clic (además de Enter).")]
         public bool pathConfirmWithDoubleClick = true;
+        [Tooltip("Distancia mínima XZ entre puntos consecutivos del path (además de cellSize*0.5). Evita duplicados por doble clic / snap.")]
+        [SerializeField] float minWallPathPointSpacingFloor = 0.75f;
+        [Tooltip("Longitud mínima XZ de cada tramo entre puntos al confirmar el muro (además de cellSize*0.35).")]
+        [SerializeField] float minWallSegmentLengthFloor = 1f;
         private readonly List<Vector3> _pathPoints = new List<Vector3>(32);
         private readonly List<int> _pathGatePointIndices = new List<int>(8);
         private bool _isPlacingPath;
@@ -90,6 +94,86 @@ namespace Project.Gameplay.Buildings
         float GetCellSize()
         {
             return MapGrid.GetCellSizeOrDefault();
+        }
+
+        float GetMinWallPathPointSpacing()
+        {
+            float cs = GetCellSize();
+            return Mathf.Max(minWallPathPointSpacingFloor, cs * 0.5f);
+        }
+
+        float GetMinWallSegmentLength()
+        {
+            float cs = GetCellSize();
+            return Mathf.Max(minWallSegmentLengthFloor, cs * 0.35f);
+        }
+
+        static float SqrDistXZPath(Vector3 a, Vector3 b)
+        {
+            float dx = a.x - b.x;
+            float dz = a.z - b.z;
+            return dx * dx + dz * dz;
+        }
+
+        /// <summary>Quita puntos consecutivos duplicados o demasiado cercanos y reasigna índices de puerta.</summary>
+        bool TrySanitizeWallPathForConfirm(out List<Vector3> cleaned, out List<int> cleanedGateIndices)
+        {
+            cleaned = new List<Vector3>(_pathPoints.Count);
+            cleanedGateIndices = new List<int>(8);
+            float minPt = GetMinWallPathPointSpacing();
+            float minSeg = GetMinWallSegmentLength();
+
+            if (_pathPoints.Count == 0)
+                return false;
+
+            var srcToCleaned = new int[_pathPoints.Count];
+            for (int i = 0; i < srcToCleaned.Length; i++)
+                srcToCleaned[i] = -1;
+
+            cleaned.Add(_pathPoints[0]);
+            srcToCleaned[0] = 0;
+
+            for (int i = 1; i < _pathPoints.Count; i++)
+            {
+                Vector3 last = cleaned[cleaned.Count - 1];
+                float sqr = SqrDistXZPath(_pathPoints[i], last);
+                if (sqr < minPt * minPt)
+                {
+                    srcToCleaned[i] = cleaned.Count - 1;
+                    Debug.Log($"[WallBuild] ignored duplicate/too-close path point pos={_pathPoints[i]} last={last} distXZ={Mathf.Sqrt(sqr):F3} min={minPt:F3}");
+                    continue;
+                }
+                cleaned.Add(_pathPoints[i]);
+                srcToCleaned[i] = cleaned.Count - 1;
+            }
+
+            for (int g = 0; g < _pathGatePointIndices.Count; g++)
+            {
+                int oldIdx = _pathGatePointIndices[g];
+                if (oldIdx < 0 || oldIdx >= srcToCleaned.Length) continue;
+                int ni = srcToCleaned[oldIdx];
+                if (ni < 0) continue;
+                if (!cleanedGateIndices.Contains(ni))
+                    cleanedGateIndices.Add(ni);
+            }
+
+            if (cleaned.Count < 2)
+            {
+                Debug.LogWarning($"[WallBuild] path confirm rejected: after dedupe fewer than 2 points (had {_pathPoints.Count}).");
+                return false;
+            }
+
+            for (int i = 0; i < cleaned.Count - 1; i++)
+            {
+                float leg = Mathf.Sqrt(SqrDistXZPath(cleaned[i], cleaned[i + 1]));
+                if (leg < minSeg)
+                {
+                    Debug.LogWarning($"[WallBuild] path confirm rejected: segment {i}→{i + 1} too short legXZ={leg:F3} min={minSeg:F3} a={cleaned[i]} b={cleaned[i + 1]}");
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         void Update()
@@ -917,6 +1001,30 @@ namespace Project.Gameplay.Buildings
             return TerrainPlacementValidator.IsValid(sample, maxHeightDelta, maxSlopeDegrees, new Vector2(bw, bh));
         }
 
+        /// <summary>
+        /// Colliders de muros/cercas ya construidos (compound path) no deben consumir el clic de "añadir punto":
+        /// el ray largo los atraviesa antes que el suelo y el fantasma ya valida el terreno/ocupación.
+        /// </summary>
+        static bool IsCompoundPathWallColliderForPathBlock(Collider c)
+        {
+            if (c == null) return false;
+            var bi = c.GetComponentInParent<BuildingInstance>();
+            return bi != null && bi.buildingSO != null && bi.buildingSO.compoundPathMode;
+        }
+
+        static bool PathBlockingRayHasRealBlocker(Ray ray, float maxDistance, LayerMask pathBlockingLayers)
+        {
+            var hits = Physics.RaycastAll(ray, maxDistance, pathBlockingLayers, QueryTriggerInteraction.Ignore);
+            if (hits == null || hits.Length == 0) return false;
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            for (int i = 0; i < hits.Length; i++)
+            {
+                if (!IsCompoundPathWallColliderForPathBlock(hits[i].collider))
+                    return true;
+            }
+            return false;
+        }
+
         void UpdatePathPlacement(Mouse mouse, Keyboard kb, Camera camera)
         {
             if (camera == null || mouse == null) return;
@@ -975,12 +1083,14 @@ namespace Project.Gameplay.Buildings
             void TryConfirmPath()
             {
                 if (_pathPoints.Count < 2) return;
+                if (!TrySanitizeWallPathForConfirm(out List<Vector3> pathForSite, out List<int> gatesForSite))
+                    return;
                 if (!CanAfford(selectedBuilding)) { if (debugLogs) Debug.LogWarning("BuildingPlacer: No hay recursos para el muro."); return; }
                 if (buildSitePrefab == null) { Debug.LogError("BuildingPlacer: buildSitePrefab no asignado."); return; }
 
-                BuildSite.ComputePathOccupiedRect(_pathPoints, out Vector2Int pathMin, out Vector2Int pathSize);
+                BuildSite.ComputePathOccupiedRect(pathForSite, out Vector2Int pathMin, out Vector2Int pathSize);
                 Quaternion rot = Quaternion.identity;
-                GameObject go = Instantiate(buildSitePrefab, _pathPoints[0], rot);
+                GameObject go = Instantiate(buildSitePrefab, pathForSite[0], rot);
                 go.name = $"[SITE] {selectedBuilding.id}";
                 var site = go.GetComponent<BuildSite>();
                 if (site == null) { Destroy(go); return; }
@@ -992,9 +1102,9 @@ namespace Project.Gameplay.Buildings
                 site.finalPrefab = selectedBuilding.prefab;
                 site.buildTime = GetBuildTime(selectedBuilding);
                 site.owner = owner;
-                site.targetBaseY = _pathPoints[0].y;
-                site.SetPathPoints(_pathPoints);
-                site.SetPathPointGates(_pathGatePointIndices);
+                site.targetBaseY = pathForSite[0].y;
+                site.SetPathPoints(pathForSite);
+                site.SetPathPointGates(gatesForSite);
                 site.SetPathOccupiedRect(pathMin, pathSize);
 
                 // No ocupar celdas aquí: el aldeano debe poder entrar a construir. Se ocupan al completar (BuildingInstance.OccupyCellsOnStart).
@@ -1004,7 +1114,8 @@ namespace Project.Gameplay.Buildings
                 DisplaceUnitsInRect(pathMin, pathSize);
 
                 LastPlacedSite = site;
-                if (debugLogs) Debug.Log($"🏗️ Muro path creado: {selectedBuilding.id} con {_pathPoints.Count} puntos.");
+                if (debugLogs) Debug.Log($"🏗️ Muro path creado: {selectedBuilding.id} con {pathForSite.Count} puntos.");
+                Debug.Log($"[WallBuild] site created name={site.name} points={pathForSite.Count}");
                 AutoAssignBuilders(site);
                 Cancel();
             }
@@ -1026,8 +1137,13 @@ namespace Project.Gameplay.Buildings
             {
                 // Solo no añadir punto si el clic impacta una unidad/edificio (pathBlockingLayers), para poder dar órdenes
                 // Si Path Blocking Layers = Everything, no bloquear (si no, el clic en el suelo bloquearía siempre)
-                bool blockAdd = pathBlockingLayers != 0 && pathBlockingLayers != (LayerMask)(-1)
-                    && Physics.Raycast(ray, out RaycastHit blockHit, 5000f, pathBlockingLayers);
+                // Acotar al suelo: evita hits "delante" del punto de colocación; ignorar muros compound ya construidos alinea con el preview verde.
+                bool blockAdd = false;
+                if (pathBlockingLayers != 0 && pathBlockingLayers != (LayerMask)(-1))
+                {
+                    float blockRayLen = hitGround ? hit.distance + 0.12f : 5000f;
+                    blockAdd = PathBlockingRayHasRealBlocker(ray, blockRayLen, pathBlockingLayers);
+                }
                 if (blockAdd)
                 {
                     UpdatePathPreviewAndGhost(hitGround ? p : (Vector3?)null);
@@ -1038,18 +1154,36 @@ namespace Project.Gameplay.Buildings
                 bool isDoubleClick = pathConfirmWithDoubleClick && _pathPoints.Count >= 1 && timeSinceLastClick <= 0.35f && Vector2.Distance(_pathLastClickPos, mousePos2) < 24f;
                 bool asGate = kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed);
 
+                // Doble clic: confirmar sin añadir punto nuevo (evita duplicados por segundo clic).
+                if (isDoubleClick)
+                {
+                    if (_pathPoints.Count >= 2)
+                    {
+                        TryConfirmPath();
+                        return;
+                    }
+                    UpdatePathPreviewAndGhost(hitGround ? p : (Vector3?)null);
+                    return;
+                }
+
+                if (_pathPoints.Count > 0)
+                {
+                    float minPt = GetMinWallPathPointSpacing();
+                    float sqr = SqrDistXZPath(p, _pathPoints[_pathPoints.Count - 1]);
+                    if (sqr < minPt * minPt)
+                    {
+                        Debug.Log($"[WallBuild] ignored duplicate/too-close path point pos={p} last={_pathPoints[_pathPoints.Count - 1]} distXZ={Mathf.Sqrt(sqr):F3} min={minPt:F3}");
+                        UpdatePathPreviewAndGhost(hitGround ? p : (Vector3?)null);
+                        return;
+                    }
+                }
+
                 _pathPoints.Add(p);
                 if (asGate && selectedBuilding.compoundGatePrefab != null)
                     _pathGatePointIndices.Add(_pathPoints.Count - 1);
                 _pathLastClickTime = Time.time;
                 _pathLastClickPos = mousePos2;
                 Debug.Log($"Muro: punto {_pathPoints.Count} añadido en {p}{(asGate ? " (puerta)" : "")}. Sigue clicando o pulsa Enter/doble clic para confirmar.");
-
-                if (isDoubleClick && _pathPoints.Count >= 2)
-                {
-                    TryConfirmPath();
-                    return;
-                }
             }
 
             UpdatePathPreviewAndGhost(hitGround ? p : (Vector3?)null);
@@ -1090,6 +1224,8 @@ namespace Project.Gameplay.Buildings
 					{
 						builder.SetBuildTarget(site, "BuildingPlacer.AutoAssignBuilders selección");
 						assigned++;
+                        if (site != null && site.IsCompoundPathBuilding)
+                            Debug.Log($"[WallBuild] builder assigned builder={builder.name} site={site.name} source=selection");
 					}
 				}
 			}
@@ -1114,6 +1250,8 @@ namespace Project.Gameplay.Buildings
 				if (nearest != null)
 				{
 					nearest.SetBuildTarget(site, "BuildingPlacer.AutoAssignBuilders más cercano");
+                    if (site != null && site.IsCompoundPathBuilding)
+                        Debug.Log($"[WallBuild] builder assigned builder={nearest.name} site={site.name} source=nearest");
 					if (debugLogs) Debug.Log($"BuildingPlacer: sin aldeanos seleccionados, asignado el más cercano a {site.name}");
 				}
 			}

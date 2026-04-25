@@ -57,6 +57,7 @@ namespace Project.Gameplay.Buildings
         readonly HashSet<Project.Gameplay.Units.Builder> _builders = new();
         readonly List<Project.Gameplay.Units.Builder> _buildersSnapshot = new List<Project.Gameplay.Units.Builder>(16);
         static readonly Collider[] ResourceOverlapBuffer = new Collider[32];
+        readonly Dictionary<int, int> _stickyWorkSlotByBuilder = new Dictionary<int, int>(16);
         bool _completed;
         bool _cellsOccupied;
         Image _progressFill;
@@ -79,15 +80,45 @@ namespace Project.Gameplay.Buildings
         List<Vector3> _approachWaypoints;
 
         const float CompoundApproachNavSampleRadius = 2.75f;
+        static readonly float[] WallApproachNavSampleRadii = { CompoundApproachNavSampleRadius, 4f, 8f };
         /// <summary>Prioriza tramos tocando segmento ya levantado (cierra huecos en lugar de saltar al centro del muro).</summary>
         const float CompoundSlotAdjacentBuiltScoreBonus = 900f;
+        float _wallBuildSiteDbgLastUnscaled;
+        float _wallApproachDbgLastUnscaled;
+        const float WallBuildDbgInterval = 0.35f;
+
+        bool ShouldWallBuildSiteDbg(Builder b)
+        {
+            if (b == null || !b.ShouldWallBuildRuntimeLog()) return false;
+            return b.CurrentBuildSite == this;
+        }
+
+        bool WallBuildSiteDbgThrottle(ref float lastUnscaled, bool ignoreThrottle = false)
+        {
+            if (ignoreThrottle) return true;
+            float t = Time.unscaledTime;
+            if (t - lastUnscaled < WallBuildDbgInterval) return false;
+            lastUnscaled = t;
+            return true;
+        }
+
+        void GetCompoundSlotSegmentEndpoints(int slotIndex, out Vector3 segStart, out Vector3 segMid, out Vector3 segEnd)
+        {
+            segStart = segMid = segEnd = transform.position;
+            if (_compoundSegments == null || slotIndex < 0 || slotIndex >= _compoundSegments.Count) return;
+            var slot = _compoundSegments[slotIndex];
+            segMid = slot.pos;
+            float halfLen = buildingSO != null ? Mathf.Max(0.25f, buildingSO.compoundSegmentLength * 0.5f) : 0.5f;
+            Vector3 f = GetSlotTangentXZ(slot);
+            segStart = slot.pos - f * halfLen;
+            segEnd = slot.pos + f * halfLen;
+        }
         public Vector3 GetCurrentWorkPosition()
         {
             if (!IsCompoundPathBuilding || _compoundSegments == null || _slotProgress == null) return transform.position;
             for (int i = 0; i < _compoundSegments.Count; i++)
             {
-                if (_slotRemoved != null && _slotRemoved[i]) continue;
-                if (_slotProgress[i] < 1f) return _compoundSegments[i].pos;
+                if (IsSlotBuildable(i)) return _compoundSegments[i].pos;
             }
             return transform.position;
         }
@@ -105,8 +136,7 @@ namespace Project.Gameplay.Buildings
             if (_slotProgress == null || _compoundSegments == null) return -1;
             for (int i = 0; i < _compoundSegments.Count; i++)
             {
-                if (_slotRemoved != null && _slotRemoved[i]) continue;
-                if (_slotProgress[i] < 1f) return i;
+                if (IsSlotBuildable(i)) return i;
             }
             return -1;
         }
@@ -124,12 +154,44 @@ namespace Project.Gameplay.Buildings
         {
             if (!IsCompoundPathBuilding || _compoundSegments == null) return transform.position;
             Vector3 pos = b != null ? b.transform.position : transform.position;
-            // Misma heurística que AddWorkSeconds: el aldeano camina hacia el approach del tramo donde va a aportar,
-            // no solo hacia el slot “más cercano para moverse” (evita IA u orden distinto quedando en un lateral sin seguir el frente).
-            int workSlot = ResolveWorkSlot(b);
-            if (workSlot >= 0 && TryGetBestApproachPointForSlot(workSlot, pos, out Vector3 approach))
-                return approach;
+            if (TryGetNavigableApproachForBuilder(b, pos, out Vector3 navigable))
+                return navigable;
             return GetDynamicApproachPoint(pos);
+        }
+
+        /// <summary>
+        /// Punto de approach sobre NavMesh para movimiento (muro compuesto). Prueba el tramo de trabajo y el resto de slots incompletos.
+        /// </summary>
+        public bool TryGetNavigableApproachForBuilder(Builder b, Vector3 fromWorld, out Vector3 approach)
+        {
+            approach = transform.position;
+            if (!IsCompoundPathBuilding || _compoundSegments == null) return false;
+
+            int workSlot = b != null ? ResolveWorkSlot(b) : -1;
+            if (workSlot >= 0 && TryResolveApproachWorldForSlot(workSlot, fromWorld, out approach, out _))
+                return true;
+
+            float bestSq = float.MaxValue;
+            Vector3 best = default;
+            bool any = false;
+            for (int i = 0; i < _compoundSegments.Count; i++)
+            {
+                if (!IsSlotBuildable(i)) continue;
+                if (!TryResolveApproachWorldForSlot(i, fromWorld, out Vector3 ap, out _)) continue;
+                float d = SqrDistXZ(fromWorld, ap);
+                if (d < bestSq)
+                {
+                    bestSq = d;
+                    best = ap;
+                    any = true;
+                }
+            }
+            if (any)
+            {
+                approach = best;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -203,6 +265,71 @@ namespace Project.Gameplay.Buildings
             return dx * dx + dz * dz;
         }
 
+        /// <summary>Coincide con el umbral de tramos de path; evita slots con eje ~punto (esquinas en lista legada, bugs).</summary>
+        static float GetMinCompoundWallSpanXZ()
+        {
+            float cell = MapGrid.GetCellSizeOrDefault();
+            return Mathf.Max(0.5f, Mathf.Max(0.25f, cell * 0.35f));
+        }
+
+        static float GetMinCompoundWallSpanXZSqr() => GetMinCompoundWallSpanXZ() * GetMinCompoundWallSpanXZ();
+
+        /// <summary>Extremos del eje del tramo (no esquina): longitud mínima en XZ &gt; 0.</summary>
+        bool IsCompoundSlotSpanAdequateForWork(int slotIndex)
+        {
+            if (_compoundSegments == null || buildingSO == null || slotIndex < 0 || slotIndex >= _compoundSegments.Count) return false;
+            GetCompoundSlotSegmentEndpoints(slotIndex, out Vector3 segStart, out _, out Vector3 segEnd);
+            return SqrDistXZ(segStart, segEnd) >= GetMinCompoundWallSpanXZSqr() - 1e-6f;
+        }
+
+        static bool NewWallPathSlotHasAdequateSpanXZ(Vector3 worldPos, Vector3 direction, BuildingSO so)
+        {
+            if (so == null) return false;
+            direction.y = 0f;
+            if (direction.sqrMagnitude < 1e-8f) return false;
+            direction.Normalize();
+            float halfLen = Mathf.Max(0.25f, so.compoundSegmentLength * 0.5f);
+            Vector3 a = worldPos - direction * halfLen;
+            Vector3 b = worldPos + direction * halfLen;
+            return SqrDistXZ(a, b) >= GetMinCompoundWallSpanXZSqr() - 1e-6f;
+        }
+
+        void AutocompleteNonBuildableCompoundSlots()
+        {
+            if (_compoundSegments == null || _slotProgress == null) return;
+            for (int i = 0; i < _compoundSegments.Count; i++)
+            {
+                if (_slotRemoved != null && _slotRemoved[i]) continue;
+                if (_slotProgress[i] >= 1f - 1e-4f) continue;
+                bool unbuildable = !IsCompoundSlotSpanAdequateForWork(i);
+                if (!unbuildable) continue;
+                GetCompoundSlotSegmentEndpoints(i, out Vector3 s0, out Vector3 sm, out Vector3 s1);
+                Debug.LogWarning($"[WallBuild] skipped degenerate compound slot index={i} start={s0} segMid={sm} end={s1} (autocompleted, no work)");
+                if (_slotRemoved != null)
+                    _slotRemoved[i] = true;
+                _slotProgress[i] = 1f;
+            }
+        }
+
+        void SpawnPathCornerOnlyFoundationGhosts(BuildingSO so, IReadOnlyList<Vector3> pathPts)
+        {
+            if (so == null || pathPts == null || pathPts.Count < 2) return;
+            var cornerSlots = BuildPathCornerVisualSlotsForPath(pathPts, so);
+            if (cornerSlots == null || cornerSlots.Count == 0) return;
+            Transform template = GetFoundationVisualTemplate();
+            if (template == null) return;
+            EnsureFoundationRaycastTarget(template.gameObject);
+            for (int c = 0; c < cornerSlots.Count; c++)
+            {
+                var cs = cornerSlots[c];
+                GameObject clone = Instantiate(template.gameObject, cs.pos, cs.rot, transform);
+                clone.name = $"Foundation_CornerPath_{c}";
+                clone.layer = gameObject.layer;
+                SetLayerRecursive(clone.transform, gameObject.layer);
+                EnsureFoundationRaycastTarget(clone);
+            }
+        }
+
         /// <summary>Misma separación lateral que <see cref="ComputeApproachWaypointsParallel"/> (1.5 celdas).</summary>
         float GetCompoundLateralOffsetDistance()
         {
@@ -255,10 +382,10 @@ namespace Project.Gameplay.Buildings
         }
 
         /// <summary>
-        /// Resuelve approach: dos laterales ±eje del tramo; prioriza el que tenga NavMesh cercano y esté más cerca en XZ del aldeano.
-        /// Si ningún lateral proyecta a NavMesh, devuelve el más cercano en XZ igualmente (fallback).
+        /// Resuelve approach sobre NavMesh: laterales del tramo, radios crecientes y sondas alrededor del punto medio.
+        /// No devuelve posiciones crudas fuera del NavMesh (evita MoveTo sin path).
         /// </summary>
-        bool TryResolveApproachWorldForSlot(int slotIndex, Vector3 fromWorld, out Vector3 approachWorld, out bool bothLateralsNavigable)
+        bool TryResolveApproachWorldForSlot(int slotIndex, Vector3 fromWorld, out Vector3 approachWorld, out bool bothLateralsNavigable, Builder wallDebugBuilder = null)
         {
             bothLateralsNavigable = false;
             approachWorld = transform.position;
@@ -269,34 +396,114 @@ namespace Project.Gameplay.Buildings
             ApplyApproachGroundY(slotIndex, ref w1);
             ApplyApproachGroundY(slotIndex, ref w2);
 
-            float probeY = Mathf.Max(w1.y, w2.y) + 3f;
-            var p1 = new Vector3(w1.x, probeY, w1.z);
-            var p2 = new Vector3(w2.x, probeY, w2.z);
-            bool ok1 = NavMesh.SamplePosition(p1, out NavMeshHit hit1, CompoundApproachNavSampleRadius, NavMesh.AllAreas);
-            bool ok2 = NavMesh.SamplePosition(p2, out NavMeshHit hit2, CompoundApproachNavSampleRadius, NavMesh.AllAreas);
-            bothLateralsNavigable = ok1 && ok2;
+            float probeBaseY = Mathf.Max(w1.y, w2.y) + 3f;
+            var pLat1 = new Vector3(w1.x, probeBaseY, w1.z);
+            var pLat2 = new Vector3(w2.x, probeBaseY, w2.z);
+            bool ok1Prim = NavMesh.SamplePosition(pLat1, out NavMeshHit hit1Prim, WallApproachNavSampleRadii[0], NavMesh.AllAreas);
+            bool ok2Prim = NavMesh.SamplePosition(pLat2, out NavMeshHit hit2Prim, WallApproachNavSampleRadii[0], NavMesh.AllAreas);
+            bothLateralsNavigable = ok1Prim && ok2Prim;
 
-            if (ok1 && ok2)
+            GetCompoundSlotSegmentEndpoints(slotIndex, out Vector3 segStart, out Vector3 segMid, out Vector3 segEnd);
+            Vector3 tangent = segEnd - segStart;
+            tangent.y = 0f;
+            if (tangent.sqrMagnitude < 1e-6f)
+                tangent = GetSlotTangentXZ(_compoundSegments[slotIndex]);
+            else
+                tangent.Normalize();
+            Vector3 normal = GetSlotLateralAxisXZ(_compoundSegments[slotIndex]);
+            float cell = MapGrid.GetCellSizeOrDefault();
+            float step = Mathf.Max(1f, cell * 1.25f);
+            Vector3 mid = (segStart + segEnd) * 0.5f;
+            mid.y = segMid.y;
+            ApplyApproachGroundY(slotIndex, ref mid);
+
+            var probes = new List<(Vector3 xzGround, string tag)>(12)
             {
-                float d1 = SqrDistXZ(fromWorld, hit1.position);
-                float d2 = SqrDistXZ(fromWorld, hit2.position);
-                approachWorld = d1 <= d2 ? hit1.position : hit2.position;
-                approachWorld.y = d1 <= d2 ? hit1.position.y : hit2.position.y;
-                return true;
+                (w1, "lat+"),
+                (w2, "lat-"),
+                (mid, "mid")
+            };
+            void AddOffset(Vector3 delta, string tag)
+            {
+                Vector3 q = mid + delta;
+                q.y = mid.y;
+                ApplyApproachGroundY(slotIndex, ref q);
+                probes.Add((q, tag));
             }
-            if (ok1) { approachWorld = hit1.position; return true; }
-            if (ok2) { approachWorld = hit2.position; return true; }
+            AddOffset(normal * step, "mid+n");
+            AddOffset(-normal * step, "mid-n");
+            AddOffset(tangent * step, "mid+f");
+            AddOffset(-tangent * step, "mid-b");
+            Vector3 nd = (normal + tangent);
+            if (nd.sqrMagnitude > 1e-6f) AddOffset(nd.normalized * step, "mid+nf");
+            nd = normal - tangent;
+            if (nd.sqrMagnitude > 1e-6f) AddOffset(nd.normalized * step, "mid+n-f");
 
-            bool usePlus = SqrDistXZ(fromWorld, w1) <= SqrDistXZ(fromWorld, w2);
-            approachWorld = usePlus ? w1 : w2;
-            return false;
+            string chosen = "?";
+
+            if (ok1Prim && ok2Prim)
+            {
+                float d1 = SqrDistXZ(fromWorld, hit1Prim.position);
+                float d2 = SqrDistXZ(fromWorld, hit2Prim.position);
+                approachWorld = d1 <= d2 ? hit1Prim.position : hit2Prim.position;
+                approachWorld.y = d1 <= d2 ? hit1Prim.position.y : hit2Prim.position.y;
+                chosen = d1 <= d2 ? "dual_lat_pickA" : "dual_lat_pickB";
+            }
+            else if (ok1Prim)
+            {
+                approachWorld = hit1Prim.position;
+                chosen = $"latA_only_r{WallApproachNavSampleRadii[0]:F1}";
+            }
+            else if (ok2Prim)
+            {
+                approachWorld = hit2Prim.position;
+                chosen = $"latB_only_r{WallApproachNavSampleRadii[0]:F1}";
+            }
+            else
+            {
+                bool expanded = false;
+                for (int ri = 0; ri < WallApproachNavSampleRadii.Length && !expanded; ri++)
+                {
+                    float radius = WallApproachNavSampleRadii[ri];
+                    for (int pi = 0; pi < probes.Count; pi++)
+                    {
+                        var (ground, tag) = probes[pi];
+                        var probe = new Vector3(ground.x, ground.y + 3f, ground.z);
+                        if (!NavMesh.SamplePosition(probe, out NavMeshHit hit, radius, NavMesh.AllAreas))
+                            continue;
+                        approachWorld = hit.position;
+                        chosen = $"{tag}_r{radius:F1}";
+                        expanded = true;
+                        break;
+                    }
+                }
+                if (!expanded)
+                {
+                    Debug.LogWarning($"[WallBuild] no navmesh approach found for slot={slotIndex} site={name} skip/move blocked.", this);
+                    if (ShouldWallBuildSiteDbg(wallDebugBuilder) && WallBuildSiteDbgThrottle(ref _wallApproachDbgLastUnscaled))
+                        Debug.Log($"[WallBuildDbg] TryResolveApproach FAIL slot={slotIndex} site={name} sideA_raw={w1} sideB_raw={w2} navOk1Prim={ok1Prim} navOk2Prim={ok2Prim} mid={mid}", this);
+                    approachWorld = _compoundSegments[slotIndex].pos;
+                    return false;
+                }
+            }
+
+            if (ShouldWallBuildSiteDbg(wallDebugBuilder) && WallBuildSiteDbgThrottle(ref _wallApproachDbgLastUnscaled))
+            {
+                float dBuilderToChosen = Mathf.Sqrt(SqrDistXZ(fromWorld, approachWorld));
+                Debug.Log($"[WallBuildDbg] TryResolveApproach slot={slotIndex} site={name} sideA_raw={w1} sideB_raw={w2} navOk1Prim={ok1Prim} navOk2Prim={ok2Prim} chosen={chosen} approach={approachWorld} distBuilderToApproach={dBuilderToChosen:F3} bothNav={bothLateralsNavigable}", this);
+            }
+
+            return true;
         }
 
-        /// <summary>Punto de approach: lateral por eje del tramo + preferencia NavMesh + cercanía al aldeano.</summary>
+        /// <summary>Punto de approach para vista previa / gizmos; si no hay NavMesh, devuelve el centro del slot.</summary>
         Vector3 GetNearestLateralApproachWorldForSlot(int slotIndex, Vector3 fromWorld)
         {
-            TryResolveApproachWorldForSlot(slotIndex, fromWorld, out Vector3 approach, out _);
-            return approach;
+            if (TryResolveApproachWorldForSlot(slotIndex, fromWorld, out Vector3 approach, out _))
+                return approach;
+            if (_compoundSegments != null && slotIndex >= 0 && slotIndex < _compoundSegments.Count)
+                return _compoundSegments[slotIndex].pos;
+            return transform.position;
         }
 
         bool IsCompoundSegmentBuiltOrRemoved(int i)
@@ -325,6 +532,10 @@ namespace Project.Gameplay.Buildings
         float CompoundSlotContiguityScoreAdjustment(int slotIndex)
         {
             if (!IsCompoundSegmentIncompleteWork(slotIndex)) return 0f;
+            // Los esquineros son críticos para cerrar tramos visual y lógicamente;
+            // sin este sesgo pueden quedar postergados frente a segmentos rectos adyacentes.
+            if (_compoundSegments != null && slotIndex >= 0 && slotIndex < _compoundSegments.Count && _compoundSegments[slotIndex].isCorner)
+                return -(CompoundSlotAdjacentBuiltScoreBonus * 1.15f);
             // Solo atraer hacia tramos que tocan segmento ya levantado (cerrar huecos). Sin bonus por "extremo de cadena"
             // para no forzar que todo el mundo trabaje solo en índices 0 / último cuando el muro sigue todo en fantasmas.
             return -(CompoundSlotAdjacentBuiltScoreBonus * BuiltNeighborCountForIncompleteSlot(slotIndex));
@@ -335,30 +546,31 @@ namespace Project.Gameplay.Buildings
             if (_compoundSegments == null || _slotProgress == null) return false;
             if (slot < 0 || slot >= _compoundSegments.Count) return false;
             if (_slotRemoved != null && _slotRemoved[slot]) return false;
-            return _slotProgress[slot] < 1f - 1e-4f;
+            if (_slotProgress[slot] >= 1f - 1e-4f) return false;
+            return IsCompoundSlotSpanAdequateForWork(slot);
         }
 
         /// <summary>Mismo lateral que el visual (eje del tramo en XZ); en diagonales <c>rot*right</c> del prefab no coincide con perpendicular al muro.</summary>
-        bool TryGetBestApproachPointForSlot(int slot, Vector3 builderPos, out Vector3 approach)
+        bool TryGetBestApproachPointForSlot(int slot, Vector3 builderPos, out Vector3 approach, Builder wallDebugBuilder = null)
         {
             approach = transform.position;
             if (!IsSlotBuildable(slot)) return false;
-            TryResolveApproachWorldForSlot(slot, builderPos, out approach, out _);
-            return true;
+            return TryResolveApproachWorldForSlot(slot, builderPos, out approach, out _, wallDebugBuilder);
         }
 
-        public int FindBestDynamicWorkSlot(Vector3 builderPos, float maxPreferredDistance = 999f)
+        public int FindBestDynamicWorkSlot(Vector3 builderPos, float maxPreferredDistance = 999f, Builder wallDebugBuilder = null)
         {
             if (_compoundSegments == null || _slotProgress == null) return -1;
 
             int best = -1;
             float bestScore = float.MaxValue;
             float maxPreferredSqr = maxPreferredDistance * maxPreferredDistance;
+            string passUsed = "preferred";
 
             for (int i = 0; i < _compoundSegments.Count; i++)
             {
                 if (!IsSlotBuildable(i)) continue;
-                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 approach)) continue;
+                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 approach, null)) continue;
 
                 float distApproach = SqrDistXZ(approach, builderPos);
                 if (distApproach > maxPreferredSqr) continue;
@@ -374,13 +586,24 @@ namespace Project.Gameplay.Buildings
                 }
             }
 
-            if (best >= 0) return best;
+            if (best >= 0)
+            {
+                if (ShouldWallBuildSiteDbg(wallDebugBuilder) && WallBuildSiteDbgThrottle(ref _wallBuildSiteDbgLastUnscaled))
+                {
+                    TryGetBestApproachPointForSlot(best, builderPos, out Vector3 ap, null);
+                    float cont = CompoundSlotContiguityScoreAdjustment(best);
+                    GetCompoundSlotSegmentEndpoints(best, out Vector3 s0, out Vector3 sm, out Vector3 s1);
+                    Debug.Log($"[WallBuildDbg] FindBestDynamicWorkSlot pass={passUsed} site={name} slot={best} segStart={s0} segMid={sm} segEnd={s1} score={bestScore:F2} distWorkXZ={Mathf.Sqrt(GetSqrDistToCompoundSlotAxis(best, builderPos)):F3} distApproachXZ={Mathf.Sqrt(SqrDistXZ(ap, builderPos)):F3} contiguityAdj={cont:F1} neighborsBuilt={BuiltNeighborCountForIncompleteSlot(best)}", this);
+                }
+                return best;
+            }
 
+            passUsed = "unlimited";
             bestScore = float.MaxValue;
             for (int i = 0; i < _compoundSegments.Count; i++)
             {
                 if (!IsSlotBuildable(i)) continue;
-                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 approach)) continue;
+                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 approach, null)) continue;
 
                 float distApproach = SqrDistXZ(approach, builderPos);
                 float distWork = GetSqrDistToCompoundSlotAxis(i, builderPos);
@@ -391,6 +614,14 @@ namespace Project.Gameplay.Buildings
                     bestScore = score;
                     best = i;
                 }
+            }
+
+            if (best >= 0 && ShouldWallBuildSiteDbg(wallDebugBuilder) && WallBuildSiteDbgThrottle(ref _wallBuildSiteDbgLastUnscaled))
+            {
+                TryGetBestApproachPointForSlot(best, builderPos, out Vector3 ap, null);
+                float cont = CompoundSlotContiguityScoreAdjustment(best);
+                GetCompoundSlotSegmentEndpoints(best, out Vector3 s0, out Vector3 sm, out Vector3 s1);
+                Debug.Log($"[WallBuildDbg] FindBestDynamicWorkSlot pass={passUsed} site={name} slot={best} segStart={s0} segMid={sm} segEnd={s1} score={bestScore:F2} distWorkXZ={Mathf.Sqrt(GetSqrDistToCompoundSlotAxis(best, builderPos)):F3} distApproachXZ={Mathf.Sqrt(SqrDistXZ(ap, builderPos)):F3} contiguityAdj={cont:F1} neighborsBuilt={BuiltNeighborCountForIncompleteSlot(best)}", this);
             }
 
             return best;
@@ -422,7 +653,7 @@ namespace Project.Gameplay.Buildings
             {
                 if (!IsSlotBuildable(i)) continue;
                 if (GetSqrDistToCompoundSlotAxis(i, builderPos) > minAxisSq + tieSq) continue;
-                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 ap)) continue;
+                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 ap, null)) continue;
                 float dAp = SqrDistXZ(ap, builderPos);
                 if (dAp < bestApSq)
                 {
@@ -436,7 +667,7 @@ namespace Project.Gameplay.Buildings
             for (int i = 0; i < _compoundSegments.Count; i++)
             {
                 if (!IsSlotBuildable(i)) continue;
-                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 ap)) continue;
+                if (!TryGetBestApproachPointForSlot(i, builderPos, out Vector3 ap, null)) continue;
                 float dAp = SqrDistXZ(ap, builderPos);
                 if (dAp < bestApSq)
                 {
@@ -459,10 +690,10 @@ namespace Project.Gameplay.Buildings
         public Vector3 GetDynamicApproachPoint(Vector3 builderPos)
         {
             int slot = FindSlotForMovementTowardWall(builderPos);
-            if (slot >= 0 && TryGetBestApproachPointForSlot(slot, builderPos, out Vector3 approach))
+            if (slot >= 0 && TryGetBestApproachPointForSlot(slot, builderPos, out Vector3 approach, null))
                 return approach;
             int fi = FirstIncompleteSlotIndex();
-            if (fi >= 0 && TryGetBestApproachPointForSlot(fi, builderPos, out Vector3 ap2))
+            if (fi >= 0 && TryGetBestApproachPointForSlot(fi, builderPos, out Vector3 ap2, null))
                 return ap2;
             return transform.position;
         }
@@ -498,6 +729,7 @@ namespace Project.Gameplay.Buildings
         public void Unregister(Builder b)
         {
             _builders.Remove(b);
+            if (b != null) _stickyWorkSlotByBuilder.Remove(b.GetInstanceID());
         }
 
         /// <summary>Ranuras de grid marcadas como reemplazadas por puerta a mitad de obra.</summary>
@@ -586,12 +818,13 @@ namespace Project.Gameplay.Buildings
 
             int best = -1;
             float bestScore = float.MaxValue;
+            float switchMargin = (cell * 0.75f) * (cell * 0.75f);
             for (int i = 0; i < _compoundSegments.Count; i++)
             {
                 if (!IsSlotBuildable(i)) continue;
                 float axisSq = GetSqrDistToCompoundSlotAxis(i, pos);
                 if (axisSq > minAxisSq + tieSq) continue;
-                if (!TryGetBestApproachPointForSlot(i, pos, out Vector3 ap)) continue;
+                if (!TryGetBestApproachPointForSlot(i, pos, out Vector3 ap, null)) continue;
                 float score = axisSq * 0.65f + SqrDistXZ(ap, pos) * 0.35f + CompoundSlotContiguityScoreAdjustment(i);
                 if (score < bestScore)
                 {
@@ -599,8 +832,65 @@ namespace Project.Gameplay.Buildings
                     best = i;
                 }
             }
-            if (best >= 0) return best;
-            return FindBestDynamicWorkSlot(pos);
+            if (best >= 0)
+            {
+                if (builder != null && _stickyWorkSlotByBuilder.TryGetValue(builder.GetInstanceID(), out int sticky)
+                    && sticky >= 0 && sticky < _compoundSegments.Count && IsSlotBuildable(sticky)
+                    && TryGetBestApproachPointForSlot(sticky, pos, out Vector3 stickyAp, null))
+                {
+                    float stickyAxis = GetSqrDistToCompoundSlotAxis(sticky, pos);
+                    float stickyScore = stickyAxis * 0.65f + SqrDistXZ(stickyAp, pos) * 0.35f + CompoundSlotContiguityScoreAdjustment(sticky);
+                    // Evita ping-pong entre dos slots casi equivalentes (caso U/corner).
+                    if (stickyScore <= bestScore + switchMargin)
+                    {
+                        best = sticky;
+                        bestScore = stickyScore;
+                    }
+                }
+
+                if (!IsCompoundSlotSpanAdequateForWork(best))
+                {
+                    GetCompoundSlotSegmentEndpoints(best, out Vector3 s0, out Vector3 sm, out Vector3 s1);
+                    Debug.LogWarning($"[WallBuild] skipped degenerate compound slot index={best} start={s0} end={s1} (resolve primary)", this);
+                    best = -1;
+                }
+                else
+                {
+                    if (ShouldWallBuildSiteDbg(builder) && WallBuildSiteDbgThrottle(ref _wallBuildSiteDbgLastUnscaled))
+                    {
+                        TryGetBestApproachPointForSlot(best, pos, out Vector3 apLog, null);
+                        float axisSq = GetSqrDistToCompoundSlotAxis(best, pos);
+                        float cont = CompoundSlotContiguityScoreAdjustment(best);
+                        GetCompoundSlotSegmentEndpoints(best, out Vector3 s0, out Vector3 sm, out Vector3 s1);
+                        Debug.Log($"[WallBuildDbg] ResolveWorkSlot reason=tie_closest_axis+score site={name} slot={best} segStart={s0} segMid={sm} segEnd={s1} minAxisSq={minAxisSq:F4} axisSq={axisSq:F4} distApproachXZ={Mathf.Sqrt(SqrDistXZ(apLog, pos)):F3} score={bestScore:F2} contiguityAdj={cont:F1} neighborsBuilt={BuiltNeighborCountForIncompleteSlot(best)} progress={_slotProgress[best]:F3}", this);
+                    }
+                    if (ShouldWallBuildSiteDbg(builder))
+                        TryResolveApproachWorldForSlot(best, pos, out _, out _, builder);
+                    if (builder != null) _stickyWorkSlotByBuilder[builder.GetInstanceID()] = best;
+                    return best;
+                }
+            }
+            int fb = FindBestDynamicWorkSlot(pos, 999f, builder);
+            if (fb >= 0 && !IsCompoundSlotSpanAdequateForWork(fb))
+            {
+                GetCompoundSlotSegmentEndpoints(fb, out Vector3 s0, out Vector3 sm, out Vector3 s1);
+                Debug.LogWarning($"[WallBuild] skipped degenerate compound slot index={fb} start={s0} end={s1} (resolve fallback)", this);
+                return -1;
+            }
+            if (fb >= 0 && ShouldWallBuildSiteDbg(builder) && WallBuildSiteDbgThrottle(ref _wallBuildSiteDbgLastUnscaled))
+            {
+                TryGetBestApproachPointForSlot(fb, pos, out Vector3 apLog, null);
+                GetCompoundSlotSegmentEndpoints(fb, out Vector3 s0, out Vector3 sm, out Vector3 s1);
+                Debug.Log($"[WallBuildDbg] ResolveWorkSlot reason=fallback_FindBestDynamic site={name} slot={fb} segStart={s0} segMid={sm} segEnd={s1} distApproachXZ={Mathf.Sqrt(SqrDistXZ(apLog, pos)):F3}", this);
+            }
+            if (fb >= 0 && ShouldWallBuildSiteDbg(builder))
+                TryResolveApproachWorldForSlot(fb, pos, out _, out _, builder);
+            if (builder != null)
+            {
+                if (fb >= 0) _stickyWorkSlotByBuilder[builder.GetInstanceID()] = fb;
+                else _stickyWorkSlotByBuilder.Remove(builder.GetInstanceID());
+            }
+            return fb;
         }
 
         int PerSegmentHpShare()
@@ -869,6 +1159,7 @@ namespace Project.Gameplay.Buildings
 			// Init síncrono: AutoAssignBuilders corre en el mismo frame tras Instantiate; sin esto,
 			// _compoundSegments/_slotProgress faltan un frame y el Builder usa huella de edificio normal.
 			ValidateAndInitCompoundPath();
+			if (this == null) return;
 			_cellsOccupied = true;
 			EnsureBuildProgressBar();
 		}
@@ -944,6 +1235,10 @@ namespace Project.Gameplay.Buildings
 				{
 					if (debugLogs) Debug.LogWarning("BuildSite: path sin segmentos (¿todo en recursos?).");
 					_compoundSegments = null;
+					Debug.LogWarning($"[WallBuild] BuildSite destroyed: no valid compound segments after path init name={name}");
+					RefundPlacementCostsPartial();
+					Destroy(gameObject);
+					return;
 				}
 				else
 				{
@@ -961,10 +1256,12 @@ namespace Project.Gameplay.Buildings
 						_slotProgress[si] = 0f;
 						_slotRemoved[si] = false;
 					}
+					AutocompleteNonBuildableCompoundSlots();
 					_phasedSegmentBySlot.Clear();
 					var under = _compoundRoot.AddComponent<CompoundWallUnderConstruction>();
 					under.Initialize(this);
 					progress01 = 0f;
+					RecalculateCompoundProgress01();
 					ComputeApproachWaypointsParallel();
 					SpawnFoundationVisualsAlongPath();
 				}
@@ -1076,6 +1373,17 @@ namespace Project.Gameplay.Buildings
 			}
 		}
 
+        void RefundPlacementCostsPartial()
+        {
+            if (owner == null || buildingSO == null || buildingSO.costs == null) return;
+            foreach (var cost in buildingSO.costs)
+            {
+                int refund = Mathf.RoundToInt(cost.amount * refundOnCancel);
+                if (refund > 0)
+                    owner.Add(cost.kind, refund);
+            }
+        }
+
 		/// <summary>Cancela la construcción: reembolso parcial, libera aldeanos y celdas, destruye el solar.</summary>
 		public void CancelConstruction()
 		{
@@ -1084,16 +1392,7 @@ namespace Project.Gameplay.Buildings
 			_completed = true;
 			_cellsOccupied = false;
 
-			// Reembolso parcial al jugador
-			if (owner != null && buildingSO != null && buildingSO.costs != null)
-			{
-				foreach (var cost in buildingSO.costs)
-				{
-					int refund = Mathf.RoundToInt(cost.amount * refundOnCancel);
-					if (refund > 0)
-						owner.Add(cost.kind, refund);
-				}
-			}
+			RefundPlacementCostsPartial();
 
 			FreeCells();
 
@@ -1132,10 +1431,23 @@ namespace Project.Gameplay.Buildings
                     TryFinishCompoundPathIfComplete();
                     return;
                 }
+                if (!IsCompoundSlotSpanAdequateForWork(slot))
+                {
+                    int alt = FindBestDynamicWorkSlot(builder != null ? builder.transform.position : transform.position, 999f, builder);
+                    if (alt >= 0) slot = alt;
+                }
+                if (!IsCompoundSlotSpanAdequateForWork(slot))
+                {
+                    if (debugLogs)
+                        Debug.LogWarning($"[WallBuild] AddWorkSeconds: no valid wall slot for work after degenerate skip (index={slot}).", this);
+                    RecalculateCompoundProgress01();
+                    TryFinishCompoundPathIfComplete();
+                    return;
+                }
 
                 if (compoundConstructionDebug && builder != null)
                 {
-                    TryResolveApproachWorldForSlot(slot, builder.transform.position, out Vector3 appDbg, out bool navOk);
+                    TryResolveApproachWorldForSlot(slot, builder.transform.position, out Vector3 appDbg, out bool navOk, builder);
                     Vector3 workDbg = GetWorkPositionForBuilder(builder);
                     Debug.Log($"[Compound {name}] builder={builder.name} slot={slot} work={workDbg} approach={appDbg} navBothLaterals={navOk} distWorkXZ={SqrDistXZ(builder.transform.position, workDbg):F2}", this);
                 }
@@ -1326,6 +1638,54 @@ namespace Project.Gameplay.Buildings
         List<SegmentSlot> ComputeCompoundSegmentList(BuildingSO so)
             => ComputeCompoundSegmentListForPath(pathPoints, so, _pathGatePointIndices);
 
+        /// <summary>Esquinas de path para fundación/ghost; no se añaden como slots de <c>_compoundSegments</c> construibles (evita eje 0 m).</summary>
+        static List<SegmentSlot> BuildPathCornerVisualSlotsForPath(IReadOnlyList<Vector3> pathPts, BuildingSO so)
+        {
+            var result = new List<SegmentSlot>(16);
+            if (so == null || so.compoundCornerPrefab == null || pathPts == null || pathPts.Count < 2) return result;
+            float minAngleRad = so.compoundCornerMinAngleDeg * Mathf.Deg2Rad;
+
+            for (int j = 0; j < pathPts.Count; j++)
+            {
+                bool placeCorner = false;
+                Vector3 forwardDir = Vector3.forward;
+                if (j == 0 || j == pathPts.Count - 1)
+                {
+                    if (!so.compoundPlaceCornerAtEndpoints) { }
+                    else
+                    {
+                        placeCorner = true;
+                        if (j == 0 && pathPts.Count > 1)
+                            forwardDir = (pathPts[1] - pathPts[0]).normalized;
+                        else if (j == pathPts.Count - 1 && pathPts.Count > 1)
+                            forwardDir = (pathPts[j] - pathPts[j - 1]).normalized;
+                        forwardDir.y = 0f;
+                    }
+                }
+                else
+                {
+                    Vector3 dirIn = (pathPts[j] - pathPts[j - 1]).normalized;
+                    Vector3 dirOut = (pathPts[j + 1] - pathPts[j]).normalized;
+                    dirIn.y = 0f; dirOut.y = 0f;
+                    float dot = Vector3.Dot(dirIn, dirOut);
+                    if (Mathf.Acos(Mathf.Clamp(dot, -1f, 1f)) >= minAngleRad)
+                    {
+                        placeCorner = true;
+                        Vector3 bisector = (dirIn + dirOut).normalized;
+                        forwardDir = bisector.sqrMagnitude < 0.01f ? dirOut : bisector;
+                    }
+                }
+                if (!placeCorner) continue;
+                Vector3 pos = pathPts[j];
+                if (so.compoundPathRaycastTerrain)
+                    pos.y = SampleGroundHeight(pos, so.compoundPathGroundMask);
+                if (HasResourceAt(pos, so.compoundSegmentLength * 0.6f)) continue;
+                Quaternion cornerRot = SafeLookRotation(forwardDir) * Quaternion.Euler(so.compoundSegmentRotationOffset);
+                result.Add(new SegmentSlot { pos = pos, rot = cornerRot, isCorner = true, isGate = false });
+            }
+            return result;
+        }
+
         /// <summary>Versión estática para ocupar solo el perímetro en grid (sin depender de lista en vivo del BuildSite).</summary>
         static List<SegmentSlot> ComputeCompoundSegmentListForPath(
             IReadOnlyList<Vector3> pathPts,
@@ -1336,61 +1696,22 @@ namespace Project.Gameplay.Buildings
             if (pathPts == null || pathPts.Count < 2 || so == null) return list;
 
             float segLength = Mathf.Max(0.5f, so.compoundSegmentLength);
-            float minAngleRad = so.compoundCornerMinAngleDeg * Mathf.Deg2Rad;
+            list.AddRange(BuildPathCornerVisualSlotsForPath(pathPts, so));
 
-            for (int j = 0; j < pathPts.Count; j++)
+            for (int j = 0; j < pathPts.Count - 1; j++)
             {
-                // 1) Esquina en este punto (inicio, final o giro), si aplica
-                bool placeCorner = false;
-                Vector3 forwardDir = Vector3.forward;
-                if (so.compoundCornerPrefab != null && pathPts.Count >= 2)
-                {
-                    if (j == 0 || j == pathPts.Count - 1)
-                    {
-                        if (so.compoundPlaceCornerAtEndpoints)
-                        {
-                            placeCorner = true;
-                            if (j == 0 && pathPts.Count > 1)
-                                forwardDir = (pathPts[1] - pathPts[0]).normalized;
-                            else if (j == pathPts.Count - 1 && pathPts.Count > 1)
-                                forwardDir = (pathPts[j] - pathPts[j - 1]).normalized;
-                            forwardDir.y = 0f;
-                        }
-                    }
-                    else
-                    {
-                        Vector3 dirIn = (pathPts[j] - pathPts[j - 1]).normalized;
-                        Vector3 dirOut = (pathPts[j + 1] - pathPts[j]).normalized;
-                        dirIn.y = 0f; dirOut.y = 0f;
-                        float dot = Vector3.Dot(dirIn, dirOut);
-                        if (Mathf.Acos(Mathf.Clamp(dot, -1f, 1f)) >= minAngleRad)
-                        {
-                            placeCorner = true;
-                            Vector3 bisector = (dirIn + dirOut).normalized;
-                            forwardDir = bisector.sqrMagnitude < 0.01f ? dirOut : bisector;
-                        }
-                    }
-                }
-                if (placeCorner)
-                {
-                    Vector3 pos = pathPts[j];
-                    if (so.compoundPathRaycastTerrain)
-                        pos.y = SampleGroundHeight(pos, so.compoundPathGroundMask);
-                    if (!HasResourceAt(pos, so.compoundSegmentLength * 0.6f))
-                    {
-                        Quaternion cornerRot = SafeLookRotation(forwardDir) * Quaternion.Euler(so.compoundSegmentRotationOffset);
-                        list.Add(new SegmentSlot { pos = pos, rot = cornerRot, isCorner = true });
-                    }
-                }
-
-                // 2) Segmentos rectos del tramo [j] → [j+1] (el primero puede ser puerta si compoundGatePrefab y punto marcado)
-                if (j >= pathPts.Count - 1) continue;
+                // Tramo [j] → [j+1]. Esquinas: también son slots construibles, usando prefab de esquina.
                 Vector3 start = pathPts[j];
                 Vector3 end = pathPts[j + 1];
                 Vector3 toNext = end - start;
                 toNext.y = 0f;
                 float distance = toNext.magnitude;
-                if (distance < 0.01f) continue;
+                float minLeg = Mathf.Max(0.75f, MapGrid.GetCellSizeOrDefault() * 0.35f);
+                if (distance < minLeg)
+                {
+                    Debug.LogWarning($"[WallBuild] skipped degenerate wall segment index={j} start={start} end={end} lengthXZ={distance:F4} min={minLeg:F3}");
+                    continue;
+                }
                 Vector3 direction = toNext / distance;
                 int numSegs = Mathf.Max(2, Mathf.CeilToInt(distance / segLength));
                 float step = distance / numSegs;
@@ -1409,8 +1730,11 @@ namespace Project.Gameplay.Buildings
                         worldPos.y = start.y;
                     if (!HasResourceAt(worldPos, segLength * 0.6f))
                     {
-                        Quaternion rot = SafeLookRotation(direction) * Quaternion.Euler(so.compoundSegmentRotationOffset);
-                        list.Add(new SegmentSlot { pos = worldPos, rot = rot, isCorner = false, isGate = true });
+                        if (NewWallPathSlotHasAdequateSpanXZ(worldPos, direction, so))
+                        {
+                            Quaternion rot = SafeLookRotation(direction) * Quaternion.Euler(so.compoundSegmentRotationOffset);
+                            list.Add(new SegmentSlot { pos = worldPos, rot = rot, isCorner = false, isGate = true });
+                        }
                     }
                     for (int i = gateReplacesSegmentCount; i < numSegs; i++)
                     {
@@ -1421,6 +1745,7 @@ namespace Project.Gameplay.Buildings
                         else
                             worldPos.y = start.y;
                         if (HasResourceAt(worldPos, segLength * 0.6f)) continue;
+                        if (!NewWallPathSlotHasAdequateSpanXZ(worldPos, direction, so)) continue;
                         Quaternion rot = SafeLookRotation(direction) * Quaternion.Euler(so.compoundSegmentRotationOffset);
                         list.Add(new SegmentSlot { pos = worldPos, rot = rot, isCorner = false, isGate = false });
                     }
@@ -1436,6 +1761,7 @@ namespace Project.Gameplay.Buildings
                         else
                             worldPos.y = start.y;
                         if (HasResourceAt(worldPos, segLength * 0.6f)) continue;
+                        if (!NewWallPathSlotHasAdequateSpanXZ(worldPos, direction, so)) continue;
                         Quaternion rot = SafeLookRotation(direction) * Quaternion.Euler(so.compoundSegmentRotationOffset);
                         bool isGate = gateAtThisLeg && i == 0;
                         list.Add(new SegmentSlot { pos = worldPos, rot = rot, isCorner = false, isGate = isGate });
@@ -1663,12 +1989,15 @@ namespace Project.Gameplay.Buildings
 
         static float SampleGroundHeight(Vector3 xzPos, LayerMask groundMask)
         {
+            // Misma fuente de altura que el path en BuildingPlacer: el terreno. Un ray con máscara amplia
+            // (p. ej. todo en Muro_SO) impacta primero en colliders de muros vecinos → Y en el techo del muro.
+            var terrain = Terrain.activeTerrain != null ? Terrain.activeTerrain : Object.FindFirstObjectByType<Terrain>();
+            if (terrain != null)
+                return terrain.SampleHeight(xzPos) + terrain.transform.position.y;
+
             Vector3 rayStart = xzPos + Vector3.up * 50f;
             if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 100f, groundMask))
                 return hit.point.y;
-            var terrain = Object.FindFirstObjectByType<Terrain>();
-            if (terrain != null)
-                return terrain.SampleHeight(xzPos) + terrain.transform.position.y;
             return xzPos.y;
         }
 

@@ -188,7 +188,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Combat.Health
   maxHP: 50
   _currentHP: 50
-  barAnchor: {fileID: 0}
+  barAnchor: {fileID: 8367111456579333481}
   fallbackOffset: {x: 0, y: 2, z: 0}
   startWithPercentForTesting: 0
   startPercent: 52
@@ -424,7 +424,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &7158434297581621111
 RectTransform:
   m_ObjectHideFlags: 0

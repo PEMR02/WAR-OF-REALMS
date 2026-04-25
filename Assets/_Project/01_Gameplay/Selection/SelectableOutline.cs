@@ -303,20 +303,36 @@ namespace Project.Gameplay
         GameObject CreateOutlineObject(Mesh mesh, Transform parentForOutline, bool centerByBounds, SkinnedMeshRenderer skinnedSource, Renderer sourceRenderer)
         {
             var go = new GameObject("Outline");
-            go.transform.SetParent(parentForOutline != null ? parentForOutline : transform, false);
-            go.transform.localRotation = Quaternion.identity;
-            go.transform.localScale = Vector3.one * outlineScale;
-            if (centerByBounds && skinnedSource == null)
+            if (skinnedSource != null && _movingAnimalFoodUnitOutline)
             {
-                var bounds = mesh.bounds;
-                Vector3 ls = go.transform.localScale;
-                go.transform.localPosition = new Vector3(
-                    bounds.center.x * (1f - ls.x),
-                    bounds.center.y * (1f - ls.y),
-                    bounds.center.z * (1f - ls.z));
+                // Fix: evitar heredar escala del rig (FBX con escala 100) que inflaba los bounds del outline.
+                // El outline vive en el root del selectable y se sincroniza manualmente en LateUpdate.
+                var old = transform.Find("Outline");
+                if (old != null)
+                    Destroy(old.gameObject);
+
+                go.transform.SetParent(transform, false);
+                go.transform.localPosition = Vector3.zero;
+                go.transform.localRotation = Quaternion.identity;
+                go.transform.localScale = Vector3.one;
             }
             else
-                go.transform.localPosition = Vector3.zero;
+            {
+                go.transform.SetParent(parentForOutline != null ? parentForOutline : transform, false);
+                go.transform.localRotation = Quaternion.identity;
+                go.transform.localScale = Vector3.one * outlineScale;
+                if (centerByBounds && skinnedSource == null)
+                {
+                    var bounds = mesh.bounds;
+                    Vector3 ls = go.transform.localScale;
+                    go.transform.localPosition = new Vector3(
+                        bounds.center.x * (1f - ls.x),
+                        bounds.center.y * (1f - ls.y),
+                        bounds.center.z * (1f - ls.z));
+                }
+                else
+                    go.transform.localPosition = Vector3.zero;
+            }
 
             var outlineMf = go.AddComponent<MeshFilter>();
             outlineMf.sharedMesh = mesh;
@@ -379,8 +395,19 @@ namespace Project.Gameplay
                 smr.BakeMesh(baked);
                 var mf = _outlineMeshFilters != null && i < _outlineMeshFilters.Length ? _outlineMeshFilters[i] : null;
                 if (mf != null) mf.sharedMesh = baked;
-                // Unidades y comida animada: misma corrección de bake que <see cref="UnitSelectable"/>.
-                _outlineObjects[i].transform.localPosition = (_isUnit || _movingAnimalFoodUnitOutline) ? -baked.bounds.center : Vector3.zero;
+                if (_movingAnimalFoodUnitOutline)
+                {
+                    // Fix: evitar heredar escala del rig (FBX con escala 100) que inflaba los bounds del outline.
+                    // El outline vive en el root del selectable y se sincroniza manualmente.
+                    _outlineObjects[i].transform.position = smr.transform.position;
+                    _outlineObjects[i].transform.rotation = smr.transform.rotation;
+                    _outlineObjects[i].transform.localScale = Vector3.one;
+                }
+                else
+                {
+                    // Unidades y otros casos previos: misma corrección de bake que <see cref="UnitSelectable"/>.
+                    _outlineObjects[i].transform.localPosition = _isUnit ? -baked.bounds.center : Vector3.zero;
+                }
             }
         }
 

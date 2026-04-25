@@ -18,9 +18,52 @@ namespace Project.Gameplay.Map
     {
         const string ResourcePickRootName = "__ResourcePickRoot";
 
+        static GameObject InstantiateNavMeshSafe(GameObject prefab, Vector3 position, Quaternion rotation)
+        {
+            if (prefab == null) return null;
+
+            var agents = prefab.GetComponentsInChildren<NavMeshAgent>(true);
+            bool[] previousEnabled = null;
+            bool prefabWasActive = prefab.activeSelf;
+
+            if (agents != null && agents.Length > 0)
+            {
+                previousEnabled = new bool[agents.Length];
+                for (int i = 0; i < agents.Length; i++)
+                {
+                    if (agents[i] == null) continue;
+                    previousEnabled[i] = agents[i].enabled;
+                    agents[i].enabled = false;
+                }
+            }
+
+            if (prefabWasActive)
+                prefab.SetActive(false);
+
+            try
+            {
+                var instance = UnityEngine.Object.Instantiate(prefab, position, rotation);
+                NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(instance);
+                return instance;
+            }
+            finally
+            {
+                if (prefabWasActive)
+                    prefab.SetActive(true);
+                if (previousEnabled != null && agents != null)
+                {
+                    for (int i = 0; i < agents.Length; i++)
+                    {
+                        if (agents[i] == null) continue;
+                        agents[i].enabled = previousEnabled[i];
+                    }
+                }
+            }
+        }
+
         /// <summary>
         /// Resuelve el índice de capa para recursos colocados en runtime.
-        /// Si el nombre configurado no existe, intenta "Resource", luego "Obstacle" / "EntitySelection".
+        /// Si el nombre configurado no existe, intenta "Resource" y luego "Obstacle" (no usar la capa de unidades).
         /// Nunca usa BaseTerrain (11) como sustituto: en este proyecto coincidía con el fallback antiguo y horneaba NavMesh en copas.
         /// </summary>
         public static int ResolveResourceLayerIndex(string configuredLayerName)
@@ -34,8 +77,6 @@ namespace Project.Gameplay.Map
             if (resource >= 0) return resource;
             int obstacle = LayerMask.NameToLayer("Obstacle");
             if (obstacle >= 0) return obstacle;
-            int entity = LayerMask.NameToLayer("EntitySelection");
-            if (entity >= 0) return entity;
             return -1;
         }
         /// <summary>Margen interior respecto al borde del grid lógico (evita árboles en la faldilla del terreno / fuera del área jugable).</summary>
@@ -87,7 +128,7 @@ namespace Project.Gameplay.Map
                     Quaternion rot = GetPlacementRotation(kind, prefab, gen, res);
                     if (kind != ResourceKind.Food && res.randomRotationPerResource && gen.GetRng() != null)
                         rot = rot * Quaternion.Euler(0f, (float)(gen.GetRng().NextDouble() * 360.0), 0f);
-                    GameObject go = UnityEngine.Object.Instantiate(prefab, world, rot);
+                    GameObject go = InstantiateNavMeshSafe(prefab, world, rot);
                     NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
                     if (!go.activeSelf) go.SetActive(true);
                     DisableResourceNavMeshSnapForProceduralPlacement(go);
@@ -596,7 +637,7 @@ namespace Project.Gameplay.Map
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
             Quaternion rot = GetPlacementRotation(kind, prefab, generator, res);
             rot = ApplyRandomRotation(rot, generator, kind, res);
-            GameObject go = UnityEngine.Object.Instantiate(prefab, w, rot);
+            GameObject go = InstantiateNavMeshSafe(prefab, w, rot);
             NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
             DisableResourceNavMeshSnapForProceduralPlacement(go);
@@ -620,7 +661,7 @@ namespace Project.Gameplay.Map
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
             Quaternion rot = GetPlacementRotation(kind, prefab, generator, res);
             rot = ApplyRandomRotation(rot, generator, kind, res);
-            GameObject go = UnityEngine.Object.Instantiate(prefab, w, rot);
+            GameObject go = InstantiateNavMeshSafe(prefab, w, rot);
             NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
             DisableResourceNavMeshSnapForProceduralPlacement(go);
@@ -797,12 +838,49 @@ namespace Project.Gameplay.Map
                 ApplyMaterialToRenderers(go, res.stoneMaterialOverride);
             if (kind == ResourceKind.Wood && res.treeMaterialOverrides != null && res.treeMaterialOverrides.Length > 0)
                 ApplyTreeMaterialOverrides(go, generator, res);
+            if (kind == ResourceKind.Food)
+                EnsureAnimalRuntimeReady(go, generator);
             // FadeableByCamera queda aislado por ahora: no se aplica en recursos procedurales.
             var fade = go.GetComponent<FadeableByCamera>();
             if (fade != null)
                 fade.enabled = false;
 
             EnsureRobustResourcePickCollider(go, node, selectable, generator, resourceLayer);
+        }
+
+        static void EnsureAnimalRuntimeReady(GameObject go, RTSMapGenerator generator)
+        {
+            if (go == null) return;
+            var behaviour = go.GetComponentInChildren<AnimalPastureBehaviour>(true);
+            var agent = go.GetComponentInChildren<NavMeshAgent>(true);
+            var animator = go.GetComponentInChildren<Animator>(true);
+            if (animator != null)
+                animator.applyRootMotion = false;
+
+            var drivers = go.GetComponentsInChildren<MonoBehaviour>(true);
+            for (int i = 0; i < drivers.Length; i++)
+            {
+                var mb = drivers[i];
+                if (mb == null) continue;
+                if (mb.GetType().Name == "UnitAnimatorDriver")
+                    mb.enabled = false;
+            }
+
+            if (agent == null) return;
+            if (NavMesh.SamplePosition(go.transform.position, out var hit, 10f, NavMesh.AllAreas))
+            {
+                if (!agent.enabled) agent.enabled = true;
+                agent.Warp(hit.position);
+                agent.isStopped = false;
+                if (behaviour != null) behaviour.enabled = true;
+            }
+            else
+            {
+                agent.enabled = false;
+                if (behaviour != null) behaviour.enabled = false;
+                if (generator != null && generator.debugLogs)
+                    Debug.LogWarning($"[AnimalMove] {go.name}: sin NavMesh cercano al instanciar, comportamiento desactivado temporalmente.", go);
+            }
         }
 
         /// <summary>Encapsula un <see cref="Bounds"/> en espacio mundo como AABB en el espacio local de <paramref name="root"/>.</summary>

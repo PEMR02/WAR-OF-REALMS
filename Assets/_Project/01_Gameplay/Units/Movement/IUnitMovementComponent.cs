@@ -16,7 +16,12 @@ namespace Project.Gameplay.Units.Movement
         event Action<IUnitMovementComponent, Vector3> DestinationChanged;
         event Action<IUnitMovementComponent, string> PathFailed;
 
+        /// <summary>Movimiento automático (IA, rally, persecución leve): puede encolar destino tras un cruce de puerta.</summary>
         bool RequestMove(Vector3 worldPos);
+
+        /// <summary>Orden directa del jugador: cancela cruce de puerta / destino diferido y replanifica al instante.</summary>
+        bool RequestPlayerMove(Vector3 worldPos);
+
         void Stop();
     }
 }

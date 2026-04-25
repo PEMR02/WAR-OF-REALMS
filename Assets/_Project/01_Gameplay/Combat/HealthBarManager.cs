@@ -8,6 +8,7 @@ namespace Project.Gameplay.Combat
     /// y posicionadas con WorldToScreenPoint. Solo una instancia activa; duplicados en otras escenas se destruyen.
     /// Ciclo de vida: Awake valida Canvas, establece Instance y DontDestroyOnLoad; OnDestroy limpia Instance y barras (no se crea Canvas en runtime).
     /// </summary>
+    [DefaultExecutionOrder(-500)]
     public class HealthBarManager : MonoBehaviour
     {
         public static HealthBarManager Instance { get; private set; }
@@ -16,8 +17,10 @@ namespace Project.Gameplay.Combat
         [SerializeField] private Canvas canvas;
         [SerializeField] private RectTransform canvasRect;
         [SerializeField] private HealthBarUI healthBarPrefab;
-        [Tooltip("Barras más lejos que esta distancia no se actualizan (solo se ocultan). Reduce coste cuando hay muchas unidades.")]
-        [SerializeField] private float maxBarDistance = 120f;
+        [Tooltip("Barras más lejos que esta distancia (metros) no se actualizan (solo se ocultan). 0 = sin límite. Valores bajos (~120) ocultan barras con cámara RTS alejada.")]
+        [SerializeField] private float maxBarDistance = 0f;
+        [Tooltip("Margen extra en coordenadas de viewport (0–1) al decidir si la barra está en pantalla. La barra se dibuja por encima de la unidad; sin margen suele quedar fuera del rango Y y nunca verse.")]
+        [SerializeField] private float viewportVisibilityMargin = 0.35f;
 
         /// <summary>Una barra por entidad (GameObject), para que doble clic muestre barra en cada unidad aunque compartan Health (ej. mismo prefab con dos UnitSelectable).</summary>
         private readonly Dictionary<GameObject, (Health health, HealthBarUI bar)> _barsByEntity = new();
@@ -26,21 +29,60 @@ namespace Project.Gameplay.Combat
         private static bool _warnedMissingPrefab;
         private static bool _warnedMissingCamera;
         private static bool _warnedNoInstanceWhenShowingBar;
+        private static bool _warnedCanvasDelayed;
+        private bool _bootstrapFailed;
 
         private void Awake()
         {
             if (Instance != null && Instance != this)
             {
                 Debug.LogWarning(
-                    "[HealthBarManager] Ya existe una instancia activa. Destruyendo duplicado. Deja solo un HealthBarManager en el proyecto (ej. escena bootstrap o HUD).",
+                    "[HealthBarManager] Ya existe una instancia activa. Destruyendo duplicado. Deja solo un HealthBarManager en el proyecto (ej. en escena bootstrap o HUD).",
                     this);
                 Destroy(gameObject);
                 return;
             }
 
+            TryResolveCanvasAndRect();
+            if (canvas != null)
+                TryCommitSingleton();
+            else if (!_warnedCanvasDelayed)
+            {
+                _warnedCanvasDelayed = true;
+                Debug.LogWarning(
+                    "[HealthBarManager] No se encontró Canvas (Screen Space) en Awake. Se reintentará en Start (p. ej. si el HUD se activa un frame después).",
+                    this);
+            }
+        }
+
+        private void Start()
+        {
+            if (Instance != null && Instance != this)
+                return;
+
+            TryResolveCanvasAndRect();
             if (canvas == null)
             {
-                var canvases = FindObjectsByType<Canvas>(FindObjectsSortMode.None);
+                if (!_bootstrapFailed)
+                {
+                    _bootstrapFailed = true;
+                    Debug.LogError(
+                        "[HealthBarManager] Sin Canvas Screen Space / Camera tras Awake+Start. Asigna Canvas y RectTransform en el Inspector o asegura un Canvas HUD activo en la escena. Este objeto se destruye.",
+                        this);
+                    enabled = false;
+                    Destroy(gameObject);
+                }
+                return;
+            }
+
+            TryCommitSingleton();
+        }
+
+        void TryResolveCanvasAndRect()
+        {
+            if (canvas == null)
+            {
+                var canvases = FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None);
                 Canvas pick = null;
                 for (int i = 0; i < canvases.Length; i++)
                 {
@@ -56,22 +98,10 @@ namespace Project.Gameplay.Combat
                     }
                 }
                 canvas = pick;
-                if (canvas != null)
-                    canvasRect = canvas.GetComponent<RectTransform>();
             }
 
-            if (canvas == null)
-            {
-                Debug.LogError(
-                    "[HealthBarManager] Canvas no asignado y no hay Canvas Screen Space en escena. Asigna el Canvas del HUD en el Inspector; no se crea Canvas en runtime. Este componente se destruye.",
-                    this);
-                enabled = false;
-                Destroy(gameObject);
-                return;
-            }
-
-            Instance = this;
-            DontDestroyOnLoad(gameObject);
+            if (canvas != null && canvasRect == null)
+                canvasRect = canvas.GetComponent<RectTransform>();
 
             if (worldCamera == null)
                 worldCamera = Camera.main;
@@ -81,13 +111,37 @@ namespace Project.Gameplay.Combat
                 Debug.LogWarning("[HealthBarManager] Cámara no asignada y Camera.main es null. Asigna World Camera en el Inspector o asegura una cámara con tag MainCamera.", this);
             }
 
-            if (canvasRect == null)
-                canvasRect = canvas.GetComponent<RectTransform>();
-
             if (healthBarPrefab == null && !_warnedMissingPrefab)
             {
                 _warnedMissingPrefab = true;
                 Debug.LogWarning("[HealthBarManager] Health Bar Prefab no asignado. Asigna PF_HealthBarUI en el Inspector para que se muestren las barras.", this);
+            }
+        }
+
+        void TryCommitSingleton()
+        {
+            if (canvas == null || canvasRect == null)
+                return;
+            if (Instance != null && Instance != this)
+                return;
+
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+
+        /// <summary>Si Instance quedó null (orden de escena), fuerza bootstrap desde cualquier HealthBarManager en memoria.</summary>
+        static void TryWakeAnyInstance()
+        {
+            if (Instance != null)
+                return;
+            var all = FindObjectsByType<HealthBarManager>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] == null) continue;
+                all[i].TryResolveCanvasAndRect();
+                all[i].TryCommitSingleton();
+                if (Instance != null)
+                    return;
             }
         }
 
@@ -125,6 +179,7 @@ namespace Project.Gameplay.Combat
             HealthBarUI bar = Instantiate(healthBarPrefab, canvas.transform);
             bar.Bind(health);
             bar.gameObject.SetActive(true);
+            bar.transform.SetAsLastSibling();
             bar.Refresh();
             _barsByEntity[entity] = (health, bar);
         }
@@ -188,6 +243,7 @@ namespace Project.Gameplay.Combat
         public static void ShowBarForEntity(GameObject entity)
         {
             if (entity == null) return;
+            TryWakeAnyInstance();
             if (Instance == null)
             {
                 if (!_warnedNoInstanceWhenShowingBar)
@@ -242,11 +298,12 @@ namespace Project.Gameplay.Combat
                     continue;
                 }
 
-                Vector3 viewport = worldCamera.WorldToViewportPoint(worldPos);
-                // z>0 = delante del plano; x,y en [0,1] = dentro del encuadre (evita barras “colgadas” fuera de Game view).
+                Vector3 visibilitySample = entity.transform.position + Vector3.up * 0.75f;
+                Vector3 viewport = worldCamera.WorldToViewportPoint(visibilitySample);
+                float m = Mathf.Max(0f, viewportVisibilityMargin);
                 bool visible = viewport.z > 0f &&
-                    viewport.x >= 0f && viewport.x <= 1f &&
-                    viewport.y >= 0f && viewport.y <= 1f;
+                    viewport.x >= -m && viewport.x <= 1f + m &&
+                    viewport.y >= -m && viewport.y <= 1f + m;
                 bar.gameObject.SetActive(visible);
 
                 if (!visible)

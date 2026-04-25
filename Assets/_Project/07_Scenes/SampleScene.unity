@@ -2525,7 +2525,7 @@ GameObject:
   m_Component:
   - component: {fileID: 359595244}
   - component: {fileID: 359595243}
-  m_Layer: 8
+  m_Layer: 0
   m_Name: RTSSelection
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -2547,7 +2547,7 @@ MonoBehaviour:
   cam: {fileID: 330585545}
   unitLayerMask:
     serializedVersion: 2
-    m_Bits: 256
+    m_Bits: 1025
   addToSelectionWithShift: 1
   addToSelectionWithCtrl: 1
   doubleClickTime: 0.3
@@ -6253,11 +6253,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5c65093ed1e3a374d82d6ca20bfc3dd5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Combat.HealthBarManager
-  worldCamera: {fileID: 0}
-  canvas: {fileID: 0}
-  canvasRect: {fileID: 0}
+  worldCamera: {fileID: 330585545}
+  canvas: {fileID: 577813088}
+  canvasRect: {fileID: 577813089}
   healthBarPrefab: {fileID: 800005, guid: c54e5547f6a307c44b1d96a2ea58a90a, type: 3}
-  maxBarDistance: 120
+  maxBarDistance: 0
+  viewportVisibilityMargin: 0.35
 --- !u!4 &847107715
 Transform:
   m_ObjectHideFlags: 0
@@ -10784,10 +10785,10 @@ MonoBehaviour:
   terrain: {fileID: 0}
   blockingMask:
     serializedVersion: 2
-    m_Bits: 2944
+    m_Bits: 3712
   unitDisplacementMask:
     serializedVersion: 2
-    m_Bits: 256
+    m_Bits: 1024
   maxHeightDelta: 2
   maxSlopeDegrees: 15
   owner: {fileID: 1271764604}
@@ -10797,7 +10798,7 @@ MonoBehaviour:
   pathConfirmKey: 2
   pathBlockingLayers:
     serializedVersion: 2
-    m_Bits: 384
+    m_Bits: 1152
   pathPreviewLineWidth: 0.25
   pathConfirmWithDoubleClick: 1
   selection: {fileID: 0}

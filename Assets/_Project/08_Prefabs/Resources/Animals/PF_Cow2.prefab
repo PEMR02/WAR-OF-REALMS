@@ -497,9 +497,6 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 495b28ce0927ccd4ba7ba6b51e4f6ee2, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1618097369916601722}
-    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 495b28ce0927ccd4ba7ba6b51e4f6ee2, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 4369133067533379554}
   m_SourcePrefab: {fileID: 100100000, guid: 495b28ce0927ccd4ba7ba6b51e4f6ee2, type: 3}
 --- !u!4 &1602045827630102792 stripped
 Transform:
@@ -533,17 +530,3 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
---- !u!114 &4369133067533379554
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2121279664629064626}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitAnimatorDriver
-  speedParameter: Speed
-  runThreshold: 2

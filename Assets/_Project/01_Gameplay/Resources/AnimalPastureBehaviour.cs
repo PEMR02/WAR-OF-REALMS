@@ -49,6 +49,14 @@ namespace Project.Gameplay.Resources
         [Min(0.01f)]
         public float animSpeedSmoothTime = 0.2f;
 
+        [Header("Runtime NavMesh")]
+        [Tooltip("Radio para intentar recuperar un agente fuera de NavMesh.")]
+        public float navRecoverRadius = 8f;
+        [Tooltip("Intervalo entre intentos de recuperar NavMesh.")]
+        public float navRecoverInterval = 0.75f;
+        [Tooltip("Logs de diagnóstico de movimiento animal.")]
+        public bool debugMovementLogs = false;
+
         NavMeshAgent _agent;
         Vector3 _homePosition;
         State _state = State.Idle;
@@ -57,6 +65,8 @@ namespace Project.Gameplay.Resources
         float _idleAnimTimer;
         float _smoothedAnimSpeed;
         readonly Collider[] _unitDetectionBuffer = new Collider[24];
+        float _nextNavRecoverTime;
+        float _nextMovementLogTime;
 
         void Awake()
         {
@@ -68,6 +78,21 @@ namespace Project.Gameplay.Resources
             _agent.acceleration = 2f;
             _agent.stoppingDistance = 0.2f;
             _agent.autoBraking = true;
+            _agent.updatePosition = true;
+            _agent.updateRotation = true;
+
+            if (animator != null)
+                animator.applyRootMotion = false;
+
+            // AnimalPastureBehaviour controla Speed; evitar doble escritura desde UnitAnimatorDriver.
+            var drivers = GetComponentsInChildren<MonoBehaviour>(true);
+            for (int i = 0; i < drivers.Length; i++)
+            {
+                var mb = drivers[i];
+                if (mb == null) continue;
+                if (mb.GetType().Name == "UnitAnimatorDriver")
+                    mb.enabled = false;
+            }
         }
 
         void Start()
@@ -80,6 +105,7 @@ namespace Project.Gameplay.Resources
 
         void Update()
         {
+            EnsureAgentOnNavMesh();
             UpdateFleeFromUnits();
 
             if (_state == State.Fleeing && _nearestUnit != null && _agent != null && _agent.isOnNavMesh && _agent.enabled)
@@ -105,6 +131,31 @@ namespace Project.Gameplay.Resources
             }
             else
                 _idleAnimTimer = 1.5f;
+
+            if (debugMovementLogs && Time.time >= _nextMovementLogTime)
+            {
+                _nextMovementLogTime = Time.time + 1f;
+                float animSpeed = animator != null && animator.isInitialized ? animator.GetFloat(speedParameter) : -1f;
+                bool hasDriver = false;
+                var drivers = GetComponentsInChildren<MonoBehaviour>(true);
+                for (int i = 0; i < drivers.Length; i++)
+                {
+                    var mb = drivers[i];
+                    if (mb != null && mb.GetType().Name == "UnitAnimatorDriver" && mb.enabled)
+                    {
+                        hasDriver = true;
+                        break;
+                    }
+                }
+
+                string velocityText = _agent != null ? _agent.velocity.ToString("F3") : "<no_agent>";
+                string destinationText = _agent != null ? _agent.destination.ToString("F3") : "<no_agent>";
+                Debug.Log(
+                    $"[AnimalMove] name={name}, isOnNavMesh={(_agent != null && _agent.enabled && _agent.isOnNavMesh)}, " +
+                    $"hasPath={(_agent != null && _agent.hasPath)}, velocity={velocityText}, destination={destinationText}, " +
+                    $"animatorSpeed={animSpeed:F3}, rootMotion={(animator != null && animator.applyRootMotion)}, hasUnitAnimatorDriver={hasDriver}",
+                    this);
+            }
         }
 
         void LateUpdate()
@@ -116,19 +167,55 @@ namespace Project.Gameplay.Resources
         {
             if (animator == null || !animator.isInitialized) return;
 
-            // Solo por estado: en Walking/Fleeing la animación Walk todo el rato. hasPath/remainingDistance
-            // fallan en medio del camino (recalculos) y la vaca quedaba estática.
             float targetSpeed = 0f;
-            if (_state == State.Walking)
-                targetSpeed = walkSpeed;
-            else if (_state == State.Fleeing)
-                targetSpeed = fleeSpeed;
+            if (_state == State.Fleeing)
+                targetSpeed = _agent != null && _agent.enabled && _agent.isOnNavMesh
+                    ? Mathf.Max(fleeSpeed * 0.15f, _agent.velocity.magnitude)
+                    : 0f;
+            else if (_state == State.Walking)
+            {
+                // No forzar walkSpeed si no hay movimiento real (SetDestination fallido / sin path → animación "caminando" en el sitio).
+                if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
+                {
+                    if (_agent.pathPending)
+                        targetSpeed = walkSpeed;
+                    else
+                        targetSpeed = _agent.velocity.magnitude;
+                }
+            }
             else if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
                 targetSpeed = _agent.velocity.magnitude;
 
             float smooth = Mathf.Clamp01(Time.deltaTime / Mathf.Max(0.01f, animSpeedSmoothTime));
             _smoothedAnimSpeed = Mathf.Lerp(_smoothedAnimSpeed, targetSpeed, smooth);
             animator.SetFloat(speedParameter, _smoothedAnimSpeed);
+        }
+
+        void SyncAnimatorSpeed(float forcedSpeed)
+        {
+            if (animator == null || !animator.isInitialized) return;
+            _smoothedAnimSpeed = forcedSpeed;
+            animator.SetFloat(speedParameter, forcedSpeed);
+        }
+
+        void EnsureAgentOnNavMesh()
+        {
+            if (_agent == null) return;
+            if (_agent.enabled && _agent.isOnNavMesh) return;
+            if (Time.time < _nextNavRecoverTime) return;
+            _nextNavRecoverTime = Time.time + navRecoverInterval;
+
+            if (NavMesh.SamplePosition(transform.position, out var hit, navRecoverRadius, NavMesh.AllAreas))
+            {
+                if (!_agent.enabled) _agent.enabled = true;
+                _agent.Warp(hit.position);
+                _agent.isStopped = false;
+            }
+            else
+            {
+                if (_agent.enabled) _agent.enabled = false;
+                SyncAnimatorSpeed(0f);
+            }
         }
 
         void UpdateFleeFromUnits()
@@ -171,8 +258,9 @@ namespace Project.Gameplay.Resources
                     continue;
                 }
 
-                if (!_agent.isOnNavMesh)
+                if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh)
                 {
+                    SyncAnimatorSpeed(0f);
                     yield return null;
                     continue;
                 }
@@ -202,7 +290,7 @@ namespace Project.Gameplay.Resources
                         break;
 
                     case State.Walking:
-                        if (_agent.isOnNavMesh)
+                        if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
                         {
                             Vector3 randomPoint = _homePosition + Random.insideUnitSphere * wanderRadius;
                             randomPoint.y = _homePosition.y;
@@ -212,6 +300,13 @@ namespace Project.Gameplay.Resources
                                 _agent.speed = walkSpeed;
                                 while (_state != State.Fleeing)
                                 {
+                                    if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh)
+                                    {
+                                        SyncAnimatorSpeed(0f);
+                                        yield return null;
+                                        continue;
+                                    }
+
                                     if (_agent.pathPending)
                                     {
                                         yield return null;
@@ -231,7 +326,8 @@ namespace Project.Gameplay.Resources
                                 }
                             }
                         }
-                        _state = State.Idle;
+                        if (_state != State.Fleeing)
+                            _state = State.Idle;
                         break;
                 }
 

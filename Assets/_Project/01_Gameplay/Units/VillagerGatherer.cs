@@ -4,9 +4,12 @@ using Project.Gameplay.Resources;
 using Project.Gameplay.Players;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Faction;
+using Project.Gameplay.Units.Movement;
 
 namespace Project.Gameplay.Units
 {
+    /// <summary>Ejecuta después de <see cref="UnitMover"/> (orden 0) para que órdenes de gather/deposit no las pise el avance de waypoints A*.</summary>
+    [DefaultExecutionOrder(50)]
     [RequireComponent(typeof(NavMeshAgent))]
     public class VillagerGatherer : MonoBehaviour
     {
@@ -29,11 +32,18 @@ namespace Project.Gameplay.Units
         [Header("Deposit Retry")]
         public float retryDepositEvery = 0.8f;
 
+        [Header("Anti-atasco")]
+        [Tooltip("Si no avanza hacia el recurso o el depósito durante este tiempo (seg), se fuerza repath o nueva búsqueda de depósito.")]
+        public float stuckRecoverSeconds = 2.4f;
+        [Tooltip("Velocidad mínima (m/s) en XZ para considerar que sí avanza hacia el objetivo.")]
+        public float stuckMinMoveSpeed = 0.06f;
+
         [Header("Debug")]
         public bool debugLogs = false;
 
         private NavMeshAgent _agent;
         private UnitMover _mover;
+        private Builder _builder;
         private ResourceNode _targetNode;
         private Collider _targetCollider;
         private DropOffPoint _deposit;
@@ -42,8 +52,19 @@ namespace Project.Gameplay.Units
         private ResourceKind _carriedKind;
         private float _gatherTimer;
         private float _retryTimer;
+        private float _stuckTimer;
+        private Vector3 _stuckSamplePos;
 
         private State _state = State.Idle;
+
+        /// <summary>
+        /// Tras <see cref="PauseGatherKeepCarried"/> el aldeano puede seguir cargando recursos; sin esto, el siguiente
+        /// <c>Update</c> (DefaultExecutionOrder 50, después de <see cref="RTSOrderController"/>) vuelve a forzar depósito
+        /// y anula el movimiento que el jugador acaba de dar.
+        /// </summary>
+        bool _playerOverrodeGatherAutomation;
+        /// <summary>No reactivar depósito automático hasta esta hora (evita mismo frame / fallo NavMesh tras orden de movimiento).</summary>
+        float _manualOrderDepositResumeAfterTime = -1f;
 
         // RTS: ignorar Y en distancias de interaccin (evita "se ve cerca pero nunca interacta")
         static float FlatDistance(Vector3 a, Vector3 b)
@@ -80,6 +101,7 @@ namespace Project.Gameplay.Units
         {
             _agent = GetComponent<NavMeshAgent>();
             _mover = GetComponent<UnitMover>();
+            _builder = GetComponent<Builder>();
             if (_agent.stoppingDistance < 0.25f) _agent.stoppingDistance = 0.6f;
 
             // Fail-safe: si se desconfigura el prefab, igual se amarra al PlayerResources en escena
@@ -89,12 +111,15 @@ namespace Project.Gameplay.Units
 
         public void Gather(ResourceNode node)
         {
+            _playerOverrodeGatherAutomation = false;
+            _manualOrderDepositResumeAfterTime = -1f;
             _targetNode = node;
             _targetCollider = _targetNode != null ? _targetNode.GetComponentInChildren<Collider>(true) : null;
             _deposit = null;
 
             _gatherTimer = 0f;
             _retryTimer = 0f;
+            ResetStuckTracking();
 
             if (_targetNode != null)
             {
@@ -123,9 +148,42 @@ namespace Project.Gameplay.Units
             {
                 if (_carried > 0)
                 {
+                    if (_builder != null && _builder.HasBuildTarget)
+                        return;
+
+                    if (_playerOverrodeGatherAutomation)
+                    {
+                        if (Time.time < _manualOrderDepositResumeAfterTime)
+                            return;
+                        // MovementState puede marcar Idle un frame antes que el NavMeshAgent cierre el path;
+                        // si aquí llamamos EnsureDepositMode() pisamos el destino del jugador y parece que "no se mueven".
+                        bool navStillMoving = _agent != null && _agent.enabled && _agent.isOnNavMesh
+                            && (_agent.pathPending
+                                || (_agent.hasPath && _agent.remainingDistance > _agent.stoppingDistance + 0.08f));
+                        bool moverIdle = (_mover == null || _mover.MovementState == UnitMovementState.Idle) && !navStillMoving;
+                        bool navSettled = _agent == null || (!_agent.hasPath && !_agent.pathPending);
+                        bool constructing = _builder != null && _builder.HasBuildTarget;
+                        if (!constructing && moverIdle && navSettled)
+                        {
+                            _playerOverrodeGatherAutomation = false;
+                            // No EnsureDepositMode aquí: el siguiente Update (rama sin override) lo hace y evita carrera con UnitMover.
+                        }
+                        return;
+                    }
+
+                    if (TryRecoverCarryingIdleState())
+                        return;
+
                     EnsureDepositMode();
                     TickDeposit();
                 }
+                return;
+            }
+
+            // Nodo agotado sin carga: evitar Gathering con Take() siempre 0 (bloquea órdenes).
+            if (_targetNode.IsDepleted && _carried == 0)
+            {
+                ClearGatherTargetIdle();
                 return;
             }
 
@@ -155,10 +213,118 @@ namespace Project.Gameplay.Units
                 if (debugLogs)
                     Debug.Log($"[{gameObject.name}] Cambiando a modo depsito. Llevando: {_carried} {_carriedKind}");
 
-                _agent.ResetPath();
+                // Imprescindible: UnitMover puede seguir avanzando waypoints A* al recurso; ResetPath solo no limpia ese estado
+                // y el aldeano queda “pegado” al árbol/piedra sin ir a depositar (jugador e IA).
+                if (_mover != null)
+                    _mover.Stop();
+                else if (_agent != null && _agent.isOnNavMesh)
+                    _agent.ResetPath();
+
                 _state = State.GoingToDrop;
                 _deposit = null; // forzar bsqueda fresh
+                ResetStuckTracking();
             }
+        }
+
+        bool TryRecoverCarryingIdleState()
+        {
+            bool noTargetNode = _targetNode == null;
+            bool noBuildTarget = _builder == null || !_builder.HasBuildTarget;
+            bool noRecentManualOrder = !_playerOverrodeGatherAutomation && Time.time >= _manualOrderDepositResumeAfterTime;
+            if (!IsCarrying || !IsIdle || !noTargetNode || !noBuildTarget || !noRecentManualOrder)
+                return false;
+
+            bool staleMover = _mover != null
+                              && _mover.MovementState == UnitMovementState.Moving
+                              && (_agent == null
+                                  || !_agent.enabled
+                                  || !_agent.isOnNavMesh
+                                  || (!_agent.pathPending && !_agent.hasPath && _agent.velocity.sqrMagnitude < 0.01f));
+            if (staleMover)
+                _mover.Stop();
+
+            var drop = DropOffFinder.FindNearest(transform.position, _carriedKind, GetComponent<FactionMember>());
+            if (drop != null)
+            {
+                if (GoDepositAt(drop))
+                    return true;
+            }
+            else
+            {
+                if (_mover != null && _mover.MovementState == UnitMovementState.Moving)
+                    _mover.Stop();
+                else if (_agent != null && _agent.isOnNavMesh)
+                    _agent.ResetPath();
+                _state = State.Idle;
+                return true;
+            }
+
+            return false;
+        }
+
+        void ResetStuckTracking()
+        {
+            _stuckTimer = 0f;
+            _stuckSamplePos = transform.position;
+        }
+
+        void ClearGatherTargetIdle()
+        {
+            _targetNode = null;
+            _targetCollider = null;
+            _gatherTimer = 0f;
+            if (_mover != null)
+                _mover.Stop();
+            else if (_agent != null && _agent.isOnNavMesh)
+                _agent.ResetPath();
+            _state = State.Idle;
+        }
+
+        /// <summary>True si parece atascado: casi sin moverse en XZ durante el intervalo de muestreo.</summary>
+        bool IsLikelyStuckNav()
+        {
+            if (_agent == null || !_agent.enabled) return false;
+            Vector3 p = transform.position;
+            p.y = 0f;
+            Vector3 s = _stuckSamplePos;
+            s.y = 0f;
+            float moved = Vector3.Distance(p, s);
+            Vector3 v = _agent.velocity;
+            v.y = 0f;
+            bool barelyMoved = moved < 0.04f && v.sqrMagnitude < stuckMinMoveSpeed * stuckMinMoveSpeed;
+            if (!barelyMoved)
+            {
+                _stuckSamplePos = transform.position;
+                _stuckTimer = 0f;
+                return false;
+            }
+            _stuckTimer += Time.deltaTime;
+            return _stuckTimer >= stuckRecoverSeconds;
+        }
+
+        void ClearStuckAndRepathTowardResource()
+        {
+            ResetStuckTracking();
+            if (_mover != null)
+                _mover.Stop();
+            else if (_agent != null && _agent.isOnNavMesh)
+                _agent.ResetPath();
+            SetDestinationSmart(GetDesiredNodeApproachWorld());
+            if (debugLogs)
+                Debug.Log($"[{gameObject.name}] Anti-atasco: repath hacia recurso.", this);
+        }
+
+        void ClearStuckAndRetryDeposit()
+        {
+            ResetStuckTracking();
+            _deposit = null;
+            _retryTimer = 0f;
+            if (_mover != null)
+                _mover.Stop();
+            else if (_agent != null && _agent.isOnNavMesh)
+                _agent.ResetPath();
+            if (debugLogs)
+                Debug.Log($"[{gameObject.name}] Anti-atasco: rebuscar depósito.", this);
         }
 
         void TickGather()
@@ -176,7 +342,9 @@ namespace Project.Gameplay.Units
 
             if (dist > interactRange && !arrivedByNav)
             {
-                if (!_agent.pathPending && (!_agent.hasPath || _agent.remainingDistance <= _agent.stoppingDistance + 0.15f))
+                if (IsLikelyStuckNav())
+                    ClearStuckAndRepathTowardResource();
+                else if (!_agent.pathPending && (!_agent.hasPath || _agent.remainingDistance <= _agent.stoppingDistance + 0.15f))
                 {
                     SetDestinationSmart(GetDesiredNodeApproachWorld());
                 }
@@ -194,7 +362,21 @@ namespace Project.Gameplay.Units
                 _gatherTimer = 0f;
 
                 int taken = _targetNode.Take(gatherPerTick);
-                if (taken <= 0) return;
+                if (_targetNode == null)
+                {
+                    _targetCollider = null;
+                    if (_carried > 0)
+                        EnsureDepositMode();
+                    else
+                        ClearGatherTargetIdle();
+                    return;
+                }
+                if (taken <= 0)
+                {
+                    if (_targetNode.IsDepleted)
+                        ClearGatherTargetIdle();
+                    return;
+                }
 
                 _carried += taken;
 
@@ -234,7 +416,10 @@ namespace Project.Gameplay.Units
 
                     if (_deposit == null)
                     {
-                        _agent.ResetPath();
+                        if (_mover != null)
+                            _mover.Stop();
+                        else if (_agent != null && _agent.isOnNavMesh)
+                            _agent.ResetPath();
                         _state = State.Idle;
                         return;
                     }
@@ -260,6 +445,9 @@ namespace Project.Gameplay.Units
 
             bool arrivedByDist = FlatDistance(transform.position, dropPos) <= interactRange + 0.8f;
 
+            if (!arrivedByNav && !arrivedByDist && FlatDistance(transform.position, dropPos) > interactRange + 0.35f && IsLikelyStuckNav())
+                ClearStuckAndRetryDeposit();
+
             if (arrivedByNav || arrivedByDist)
             {
                 _state = State.Depositing;
@@ -281,12 +469,25 @@ namespace Project.Gameplay.Units
                     _agent.ResetPath();
                     _state = State.Idle;
                 }
+
+                ResetStuckTracking();
             }
         }
 
         void SetDestinationSmart(Vector3 desired)
         {
-            if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh) return;
+            if (_agent == null || !_agent.enabled) return;
+            if (!_agent.isOnNavMesh)
+            {
+                if (NavMesh.SamplePosition(transform.position, out NavMeshHit snapSelf, navSampleRadius * 2f, NavMesh.AllAreas))
+                {
+                    _agent.Warp(snapSelf.position);
+                    if (debugLogs)
+                        Debug.Log($"[{gameObject.name}] SetDestinationSmart: proyectado a NavMesh antes de orden.", this);
+                }
+                else
+                    return;
+            }
 
             Vector3 target = desired;
             if (NavMesh.SamplePosition(desired, out NavMeshHit hit, navSampleRadius, NavMesh.AllAreas))
@@ -301,6 +502,8 @@ namespace Project.Gameplay.Units
 		
 		public void AbortGatherAndBankCarried()
 		{
+			_playerOverrodeGatherAutomation = false;
+			_manualOrderDepositResumeAfterTime = -1f;
 			// Deposita instantaneo lo que lleva para evitar perder recursos y evitar ping-pong
 			if (owner != null && _carried > 0)
 				owner.Add(_carriedKind, _carried);
@@ -335,6 +538,16 @@ namespace Project.Gameplay.Units
 		if (_agent != null && _agent.isOnNavMesh)
 			_agent.ResetPath();
 		_state = State.Idle;
+		if (_carried > 0)
+		{
+			_playerOverrodeGatherAutomation = true;
+			_manualOrderDepositResumeAfterTime = Time.time + 0.4f;
+		}
+		else
+		{
+			_playerOverrodeGatherAutomation = false;
+			_manualOrderDepositResumeAfterTime = -1f;
+		}
 	}
 
 	/// <summary>
@@ -348,6 +561,8 @@ namespace Project.Gameplay.Units
 		if (_carried <= 0) return false;
 		if (!point.Accepts(_carriedKind)) return false;
 
+		_playerOverrodeGatherAutomation = false;
+		_manualOrderDepositResumeAfterTime = -1f;
 		_deposit = point;
 		_retryTimer = 0f;
 		_state = State.GoingToDrop;

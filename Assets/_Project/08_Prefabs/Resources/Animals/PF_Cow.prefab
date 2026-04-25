@@ -728,7 +728,7 @@ MonoBehaviour:
   fleeSpeed: 1.2
   unitLayerMask:
     serializedVersion: 2
-    m_Bits: 512
+    m_Bits: 1025
   fleeStartDistance: 4
   fleeStopDistance: 8
   detectionRadius: 12

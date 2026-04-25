@@ -37,7 +37,7 @@ namespace Project.Gameplay.Units.Movement
 
             for (int i = 0; i < units.Count && i < slots.Count; i++)
             {
-                units[i]?.RequestMove(slots[i]);
+                units[i]?.RequestPlayerMove(slots[i]);
             }
         }
     }

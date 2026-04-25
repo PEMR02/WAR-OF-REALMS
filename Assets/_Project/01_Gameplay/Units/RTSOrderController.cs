@@ -324,7 +324,20 @@ namespace Project.Gameplay.Units
             for (int i = 0; i < cached.Count; i++)
             {
                 var c = cached[i];
-                if (c.builder != null) c.builder.SetBuildTarget(null, "RTSOrder DispatchMove");
+                if (c.builder != null)
+                {
+                    // Guarda mínima: si el click cae sobre/cerca del mismo muro activo, no cancelar build target.
+                    var site = c.builder.CurrentBuildSite;
+                    if (c.builder.ShouldWallBuildRuntimeLog() && site != null && site.IsCompoundPathBuilding && !site.IsCompleted)
+                    {
+                        bool kept = ShouldKeepActiveWallTarget(c.builder, target);
+                        Vector3 closest = site.GetClosestPointOnActiveCompoundSegment(target, c.builder);
+                        float dClick = Vector3.Distance(target, closest);
+                        Debug.Log($"[WallBuildDbg] DispatchMove builder={c.builder.name} keptWallTarget={kept} click={target} distClickToActiveSeg={dClick:F3} site={site.name}", c.builder);
+                    }
+                    if (!ShouldKeepActiveWallTarget(c.builder, target))
+                        c.builder.SetBuildTarget(null, "RTSOrder DispatchMove");
+                }
                 if (c.repairer != null) c.repairer.SetRepairTarget(null);
                 if (c.gatherer != null) c.gatherer.PauseGatherKeepCarried();
             }
@@ -360,6 +373,24 @@ namespace Project.Gameplay.Units
                 dynamicSpacing,
                 effectiveStyle,
                 formationRandomOffset);
+        }
+
+        bool ShouldKeepActiveWallTarget(Builder builder, Vector3 moveTarget)
+        {
+            if (builder == null)
+                return false;
+            var site = builder.CurrentBuildSite;
+            if (site == null || !site.IsCompoundPathBuilding || site.IsCompleted)
+                return false;
+
+            Vector3 closest = site.GetClosestPointOnActiveCompoundSegment(moveTarget, builder);
+            float dist = Vector3.Distance(moveTarget, closest);
+            float cell = 2.5f;
+            var grid = Project.Gameplay.Map.MapGrid.Instance;
+            if (grid != null && grid.IsReady)
+                cell = grid.cellSize;
+            float keepThreshold = Mathf.Max(1.25f, cell * 0.9f);
+            return dist <= keepThreshold;
         }
     }
 }

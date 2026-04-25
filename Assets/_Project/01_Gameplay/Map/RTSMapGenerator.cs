@@ -1883,6 +1883,49 @@ namespace Project.Gameplay.Map
             return null;
         }
 
+        static GameObject InstantiateNavMeshSafe(GameObject prefab, Vector3 position, Quaternion rotation)
+        {
+            if (prefab == null) return null;
+
+            var agents = prefab.GetComponentsInChildren<NavMeshAgent>(true);
+            bool[] previousEnabled = null;
+            bool prefabWasActive = prefab.activeSelf;
+
+            if (agents != null && agents.Length > 0)
+            {
+                previousEnabled = new bool[agents.Length];
+                for (int i = 0; i < agents.Length; i++)
+                {
+                    if (agents[i] == null) continue;
+                    previousEnabled[i] = agents[i].enabled;
+                    agents[i].enabled = false;
+                }
+            }
+
+            if (prefabWasActive)
+                prefab.SetActive(false);
+
+            try
+            {
+                var instance = Instantiate(prefab, position, rotation);
+                NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(instance);
+                return instance;
+            }
+            finally
+            {
+                if (prefabWasActive)
+                    prefab.SetActive(true);
+                if (previousEnabled != null && agents != null)
+                {
+                    for (int i = 0; i < agents.Length; i++)
+                    {
+                        if (agents[i] == null) continue;
+                        agents[i].enabled = previousEnabled[i];
+                    }
+                }
+            }
+        }
+
         /// <summary>3 aldeanos por Town Center (humano = bando Player; IA = Enemy para enfrentamiento). Población HUD solo humano.</summary>
         void SpawnStartingVillagersAroundTownCenters(MatchConfig match)
         {
@@ -1909,7 +1952,7 @@ namespace Project.Gameplay.Map
                     Vector3 offset = new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius);
                     Vector3 targetPos = tcPos + offset;
                     targetPos.y = SampleHeight(targetPos);
-                    GameObject u = Instantiate(villPrefab, targetPos, Quaternion.identity);
+                    GameObject u = InstantiateNavMeshSafe(villPrefab, targetPos, Quaternion.identity);
                     NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(u);
                     u.name = $"Villager_Player{tcIndex + 1}_{v + 1}";
                     ApplySkirmishFactionToRoot(u, humanSlot);

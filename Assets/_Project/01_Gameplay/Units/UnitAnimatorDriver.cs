@@ -17,6 +17,8 @@ namespace Project.Gameplay.Units
 
         [Tooltip("Velocidad del agente que se considera 'run' para el animator (opcional, escala visual).")]
         public float runThreshold = 2f;
+        [Tooltip("Velocidad mínima visual mientras NavMesh está calculando path (evita corte brusco Idle entre órdenes).")]
+        public float pendingPathVisualSpeed = 0.12f;
 
         Animator _animator;
         NavMeshAgent _agent;
@@ -38,7 +40,11 @@ namespace Project.Gameplay.Units
 
             float speed = 0f;
             if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
+            {
                 speed = _agent.velocity.magnitude;
+                if (_agent.pathPending && speed < pendingPathVisualSpeed)
+                    speed = pendingPathVisualSpeed;
+            }
 
             _animator.SetFloat(speedParameter, speed);
         }

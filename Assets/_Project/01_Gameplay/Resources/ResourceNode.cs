@@ -70,7 +70,11 @@ namespace Project.Gameplay.Resources
 
         public int Take(int request)
         {
-            if (amount <= 0) return 0;
+            if (amount <= 0)
+            {
+                Destroy(gameObject);
+                return 0;
+            }
 
             int taken = Mathf.Min(request, amount);
             amount -= taken;

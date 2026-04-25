@@ -69,6 +69,14 @@ namespace Project.Gameplay.Units
         float _stuckTime;
         Vector3 _stuckLastPos;
         bool _stuckTrackingInitialized;
+        float _staleMovingTimer;
+        const float StaleMovingRecoverDelay = 0.5f;
+        float _skipStaleWatchdogUntilTime;
+        bool _playerOrderTimingPending;
+        float _playerOrderReceivedTime;
+        float _playerOrderSetDestinationTime;
+        float _wallMoverDbgLastUnscaled;
+        float _wallMoverIdleDbgLastUnscaled;
 
         /// <summary>Reutilizado para comprobar si el path del NavMesh cruza agua lógica (el mesh suele existir bajo lagos).</summary>
         NavMeshPath _navWaterCheckPath;
@@ -95,6 +103,9 @@ namespace Project.Gameplay.Units
             if (_agent != null)
             {
                 _agent.autoBraking = false;
+                if (_agent.acceleration < 16f) _agent.acceleration = 16f;
+                if (_agent.angularSpeed < 420f) _agent.angularSpeed = 420f;
+                if (_agent.stoppingDistance > 0.35f) _agent.stoppingDistance = 0.35f;
                 _agent.avoidancePriority = 20 + Mathf.Abs(GetInstanceID()) % 60;
             }
         }
@@ -120,13 +131,57 @@ namespace Project.Gameplay.Units
         //  API PÚBLICA
         // ─────────────────────────────────────────────────────────────
 
-        /// <summary>Mantiene la API legacy; redirige a la nueva petición de movimiento.</summary>
+        /// <summary>Mantiene la API legacy; redirige a movimiento no prioritario (rally, IA, etc.).</summary>
         public void MoveTo(Vector3 worldPos) => RequestMove(worldPos);
 
-        /// <summary>Entrada moderna del sistema: la capa de órdenes solicita movimiento, no toca el agente directamente.</summary>
-        public bool RequestMove(Vector3 worldPos)
+        /// <inheritdoc />
+        public bool RequestPlayerMove(Vector3 worldPos) => RequestMoveInternal(worldPos, playerOrder: true);
+
+        /// <summary>Movimiento automático: durante cruce de puerta solo actualiza el destino final (no corta el flujo).</summary>
+        public bool RequestMove(Vector3 worldPos) => RequestMoveInternal(worldPos, playerOrder: false);
+
+        const float WallMoverDbgInterval = 0.35f;
+
+        bool WallBuildNavDebugActive()
+        {
+            return _cachedBuilder != null && _cachedBuilder.ShouldWallBuildRuntimeLog()
+                   && _cachedBuilder.CurrentBuildSite != null && _cachedBuilder.CurrentBuildSite.IsCompoundPathBuilding;
+        }
+
+        void WallMoverDbgLogMoveRequest(Vector3 requestedDest, string pathKind, bool playerOrder)
+        {
+            if (playerOrder || !WallBuildNavDebugActive()) return;
+            float t = Time.unscaledTime;
+            if (t - _wallMoverDbgLastUnscaled < WallMoverDbgInterval) return;
+            _wallMoverDbgLastUnscaled = t;
+            bool hasPath = _agent != null && _agent.hasPath;
+            bool pending = _agent != null && _agent.pathPending;
+            float rem = _agent != null ? _agent.remainingDistance : -1f;
+            int wpC = _waypoints != null ? _waypoints.Count : 0;
+            Debug.Log($"[WallBuildDbg] UnitMover RequestMove pathKind={pathKind} unit={name} dest={requestedDest} followingA*={_followingAStarPath} wpCount={wpC} wpIndex={_waypointIndex} gateLeg={_isHeadingToGateIntermediate} hasPath={hasPath} pathPending={pending} remDist={rem:F3} velSqr={(_agent != null ? _agent.velocity.sqrMagnitude : 0f):F4} moveState={MovementState}", this);
+        }
+
+        /// <summary>Entrada interna: la capa de órdenes solicita movimiento, no toca el agente directamente.</summary>
+        bool RequestMoveInternal(Vector3 worldPos, bool playerOrder)
         {
             if (_agent == null || !_agent.enabled) return false;
+            UnitMovementState oldState = MovementState;
+            Vector3 oldDest = CurrentDestination;
+            if (playerOrder)
+                _playerOrderReceivedTime = Time.realtimeSinceStartup;
+
+            if (playerOrder)
+            {
+                ImmediateInterruptForPlayerOrder(worldPos, oldDest);
+            }
+
+            void LogPlayerTransitionIfNeeded()
+            {
+                if (!playerOrder || !debugLogs) return;
+                bool acceptedSameFrame = _agent != null && (_agent.hasPath || _agent.pathPending);
+                bool pathPending = _agent != null && _agent.pathPending;
+                Debug.Log($"[UnitMover] Player transition oldState={oldState} newDest={worldPos} resetPath=true acceptedSameFrame={acceptedSameFrame} pathPending={pathPending}", this);
+            }
 
             ApplyMinStoppingDistance();
             if (_locomotion == null || !_locomotion.TryEnsureOnNavMesh())
@@ -135,14 +190,15 @@ namespace Project.Gameplay.Units
                 return false;
             }
 
-            // Mientras la unidad ya está comprometida con una puerta, no permitimos que nuevas órdenes
-            // reseteen el subflujo de cruce. Solo actualizamos el destino final a alcanzar al salir.
-            if (_isHeadingToGateIntermediate)
+            // Cruce de puerta: órdenes automáticas encolan el destino real; el jugador interrumpe y replanifica ya.
+            if (_isHeadingToGateIntermediate && !playerOrder)
             {
                 _postGateDestination = worldPos;
                 _hasPostGateDestination = true;
                 CurrentDestination = worldPos;
                 DestinationChanged?.Invoke(this, worldPos);
+                LogPlayerTransitionIfNeeded();
+                WallMoverDbgLogMoveRequest(worldPos, "gate_queue_update_dest", playerOrder);
                 return true;
             }
 
@@ -161,6 +217,23 @@ namespace Project.Gameplay.Units
             _gateSecondLeg = false;
             _hasPostGateDestination = false;
             _activeGate = null;
+
+            if (playerOrder)
+            {
+                _followingAStarPath = false;
+                _waypoints = null;
+                _waypointIndex = 0;
+                _hasAStarGoal = false;
+                SetMovementState(UnitMovementState.Moving);
+                SetAgentDestinationDirect(worldPos);
+                MovementStarted?.Invoke(this);
+                _playerOrderSetDestinationTime = Time.realtimeSinceStartup;
+                _playerOrderTimingPending = true;
+                if (debugLogs)
+                    Debug.Log($"[UnitMover] player order timing received={_playerOrderReceivedTime:F4} setDestination={_playerOrderSetDestinationTime:F4} unit={name}", this);
+                LogPlayerTransitionIfNeeded();
+                return true;
+            }
 
             GateController ignoredGate = ShouldIgnoreGate(_ignoreGateTemporarily) ? _ignoreGateTemporarily : null;
             if (_planner != null && _planner.TryCreateGateTraversal(transform.position, worldPos, ignoredGate, out GateTraversalPlan gatePlan) && gatePlan.isValid)
@@ -181,6 +254,8 @@ namespace Project.Gameplay.Units
                 if (debugLogs)
                     Debug.Log($"{name}: Destino al otro lado del muro → forzando paso por puerta '{gatePlan.gate.name}' (primero approach).", this);
                 MovementStarted?.Invoke(this);
+                LogPlayerTransitionIfNeeded();
+                WallMoverDbgLogMoveRequest(worldPos, "gate_traversal", playerOrder);
                 return true;
             }
 
@@ -193,13 +268,23 @@ namespace Project.Gameplay.Units
                     _hasAStarGoal = true;
                     _waypoints = plan.waypoints;
                     _waypointIndex = 0;
+                    SkipReachedWaypoints();
                     _followingAStarPath = true;
                     ResetStuckTracking();
                     SetMovementState(UnitMovementState.Moving);
-                    SendAgentTo(_waypoints[0]);
+                    if (_waypoints == null || _waypoints.Count == 0 || _waypointIndex >= _waypoints.Count)
+                    {
+                        _followingAStarPath = false;
+                        _hasAStarGoal = false;
+                        SetAgentDestinationDirect(worldPos);
+                    }
+                    else
+                        SendAgentTo(_waypoints[_waypointIndex]);
                     if (debugLogs)
                         Debug.Log($"{name}: Ruta A* con {_waypoints.Count} waypoints.");
                     MovementStarted?.Invoke(this);
+                    LogPlayerTransitionIfNeeded();
+                    WallMoverDbgLogMoveRequest(worldPos, _followingAStarPath ? "astar_waypoints" : "astar_degenerate_direct", playerOrder);
                     return true;
                 }
 
@@ -207,6 +292,8 @@ namespace Project.Gameplay.Units
                 SetMovementState(UnitMovementState.Moving);
                 SendAgentTo(plan.finalDestination);
                 MovementStarted?.Invoke(this);
+                LogPlayerTransitionIfNeeded();
+                WallMoverDbgLogMoveRequest(worldPos, "astar_planner_final", playerOrder);
                 return true;
             }
 
@@ -217,10 +304,55 @@ namespace Project.Gameplay.Units
                     Debug.Log($"{name}: A* sin ruta ({failureReason}). Fallback NavMesh directo.", this);
             }
 
+            bool builderCompoundAutoMove = !playerOrder && _cachedBuilder != null && _cachedBuilder.HasBuildTarget
+                && _cachedBuilder.CurrentBuildSite != null && _cachedBuilder.CurrentBuildSite.IsCompoundPathBuilding;
+            if (builderCompoundAutoMove)
+            {
+                const float builderDestNavValidateRadius = 6f;
+                if (!NavMesh.SamplePosition(worldPos, out _, builderDestNavValidateRadius, NavMesh.AllAreas))
+                {
+                    Debug.LogWarning($"[UnitMover] rejected non-navigable builder destination dest={worldPos} unit={name}", this);
+                    Stop();
+                    return false;
+                }
+            }
+
             SetMovementState(UnitMovementState.Moving);
             SendAgentTo(worldPos);
             MovementStarted?.Invoke(this);
+            LogPlayerTransitionIfNeeded();
+            WallMoverDbgLogMoveRequest(worldPos, "navmesh_direct_fallback", playerOrder);
             return true;
+        }
+
+        void ImmediateInterruptForPlayerOrder(Vector3 newDest, Vector3 oldDest)
+        {
+            _followingAStarPath = false;
+            _waypoints = null;
+            _waypointIndex = 0;
+            _hasAStarGoal = false;
+            _hasPostGateDestination = false;
+            _isHeadingToGateIntermediate = false;
+            _gateSecondLeg = false;
+            _activeGate = null;
+            _ignoreGateTemporarily = null;
+            _ignoreGateUntilTime = 0f;
+            _repathCooldownTimer = 0f;
+            _staleMovingTimer = 0f;
+            _skipStaleWatchdogUntilTime = Time.time + 0.75f;
+            ResetStuckTracking();
+            CurrentDestination = oldDest;
+            SetMovementState(UnitMovementState.Repathing);
+
+            if (_agent != null && _agent.enabled)
+            {
+                if (_agent.isOnNavMesh)
+                    _agent.ResetPath();
+                _agent.isStopped = false;
+            }
+
+            if (debugLogs)
+                Debug.Log($"[UnitMover] Player order immediate interrupt: unit={name}, oldDest={oldDest}, newDest={newDest}", this);
         }
 
         public void Stop()
@@ -254,6 +386,9 @@ namespace Project.Gameplay.Units
 
         void Update()
         {
+            if (TryRecoverStaleMovingState())
+                return;
+
             if (_agent == null || !_agent.isOnNavMesh)
                 return;
 
@@ -304,6 +439,18 @@ namespace Project.Gameplay.Units
                 }
             }
 
+            if (_playerOrderTimingPending && _agent != null && _agent.enabled && _agent.isOnNavMesh)
+            {
+                if (_agent.velocity.sqrMagnitude > 0.01f)
+                {
+                    float firstVelocityTime = Time.realtimeSinceStartup;
+                    float delay = firstVelocityTime - _playerOrderSetDestinationTime;
+                    if (debugLogs)
+                        Debug.Log($"[UnitMover] player order timing received={_playerOrderReceivedTime:F4} setDestination={_playerOrderSetDestinationTime:F4} firstVelocity={firstVelocityTime:F4} delay={delay:F3}s unit={name}", this);
+                    _playerOrderTimingPending = false;
+                }
+            }
+
             if (!_followingAStarPath || _waypoints == null)
             {
                 if (!_isHeadingToGateIntermediate
@@ -312,6 +459,16 @@ namespace Project.Gameplay.Units
                     && _agent.velocity.sqrMagnitude < 0.01f
                     && MovementState != UnitMovementState.Idle)
                 {
+                    if (WallBuildNavDebugActive())
+                    {
+                        float tu = Time.unscaledTime;
+                        if (tu - _wallMoverIdleDbgLastUnscaled >= WallMoverDbgInterval)
+                        {
+                            _wallMoverIdleDbgLastUnscaled = tu;
+                            float dGoal = FlatDistanceXZ(transform.position, CurrentDestination);
+                            Debug.Log($"[WallBuildDbg] UnitMover→Idle (no A* path) unit={name} distXZ_to_CurrentDestination={dGoal:F3} hasPath={_agent.hasPath} rem={_agent.remainingDistance:F3} stop={_agent.stoppingDistance:F3} prevState={MovementState}", this);
+                        }
+                    }
                     SetMovementState(UnitMovementState.Idle);
                     MovementStopped?.Invoke(this);
                 }
@@ -323,30 +480,118 @@ namespace Project.Gameplay.Units
             if (enableStuckRepath && _hasAStarGoal && !_isHeadingToGateIntermediate)
                 UpdateStuckRepath();
 
-            // Si el agente llegó al waypoint actual, avanzar al siguiente
+            // Si el agente llegó al waypoint actual, avanzar al siguiente.
+            // Importante: sin path válido, remainingDistance suele ser 0 y NO implica "llegué al waypoint"
+            // (p. ej. ResetPath, fallo de path o carrera con otro sistema). Exigir hasPath o cercanía real en XZ.
             if (!_agent.pathPending && _agent.remainingDistance <= _agent.stoppingDistance + 0.3f)
             {
-                _waypointIndex++;
-                ResetStuckTracking();
-                if (_waypointIndex < _waypoints.Count)
+                List<Vector3> currentWaypoints = _waypoints;
+                bool canAdvance = _agent.hasPath;
+                int waypointCount = currentWaypoints != null ? currentWaypoints.Count : 0;
+                if (!canAdvance && _waypointIndex >= 0 && _waypointIndex < waypointCount)
                 {
-                    SendAgentTo(_waypoints[_waypointIndex]);
+                    Vector3 w = currentWaypoints[_waypointIndex];
+                    float dx = transform.position.x - w.x;
+                    float dz = transform.position.z - w.z;
+                    float distXZ = Mathf.Sqrt(dx * dx + dz * dz);
+                    canAdvance = distXZ <= _agent.stoppingDistance + 0.95f;
                 }
-                else
+
+                if (canAdvance)
                 {
-                    // Ruta completada en celdas: el último waypoint es centro de celda; el objetivo real
-                    // (depósito, recurso junto a NavMeshObstacle) suele estar en otro punto walkable.
-                    // Sin este tramo final el agente se queda en el borde de la celda / fuera de alcance del interact.
-                    Vector3 finalGoal = _astarGoalWorld;
-                    _followingAStarPath = false;
-                    _waypoints = null;
-                    _waypointIndex = 0;
-                    _hasAStarGoal = false;
-                    SetAgentDestinationDirect(finalGoal);
-                    if (debugLogs)
-                        Debug.Log($"{name}: Ruta A* completada → tramo final NavMesh al objetivo.", this);
+                    _waypointIndex++;
+                    ResetStuckTracking();
+                    currentWaypoints = _waypoints;
+                    waypointCount = currentWaypoints != null ? currentWaypoints.Count : 0;
+                    if (currentWaypoints != null && _waypointIndex >= 0 && _waypointIndex < waypointCount)
+                    {
+                        SendAgentTo(currentWaypoints[_waypointIndex]);
+                    }
+                    else
+                    {
+                        // Ruta completada en celdas: el último waypoint es centro de celda; el objetivo real
+                        // (depósito, recurso junto a NavMeshObstacle) suele estar en otro punto walkable.
+                        // Sin este tramo final el agente se queda en el borde de la celda / fuera de alcance del interact.
+                        Vector3 finalGoal = _astarGoalWorld;
+                        _followingAStarPath = false;
+                        _waypoints = null;
+                        _waypointIndex = 0;
+                        _hasAStarGoal = false;
+                        SetAgentDestinationDirect(finalGoal);
+                        if (debugLogs)
+                            Debug.Log($"{name}: Ruta A* completada → tramo final NavMesh al objetivo.", this);
+                    }
                 }
             }
+        }
+
+        bool TryRecoverStaleMovingState()
+        {
+            if (Time.time < _skipStaleWatchdogUntilTime)
+                return false;
+
+            bool claimsMoving = MovementState == UnitMovementState.Moving || IsFollowingPath;
+            if (!claimsMoving)
+            {
+                _staleMovingTimer = 0f;
+                return false;
+            }
+
+            bool agentInvalid = _agent == null || !_agent.enabled || !_agent.isOnNavMesh;
+            bool noUsablePath = !agentInvalid
+                                && !_agent.pathPending
+                                && !_agent.hasPath
+                                && _agent.velocity.sqrMagnitude < 0.01f;
+
+            if (!agentInvalid && !noUsablePath)
+            {
+                _staleMovingTimer = 0f;
+                return false;
+            }
+
+            _staleMovingTimer += Time.deltaTime;
+            if (_staleMovingTimer < StaleMovingRecoverDelay)
+                return false;
+
+            _staleMovingTimer = 0f;
+            float stopping = _agent != null ? Mathf.Max(0.4f, _agent.stoppingDistance + 0.2f) : 0.6f;
+            bool destinationIsFar = FlatDistanceXZ(transform.position, CurrentDestination) > stopping;
+            bool recovered = false;
+
+            if (destinationIsFar && _agent != null && _agent.enabled && _agent.isOnNavMesh)
+            {
+                if (NavMesh.SamplePosition(CurrentDestination, out NavMeshHit hit, EffectiveSnapRadiusForDestination(), NavMesh.AllAreas))
+                {
+                    _locomotion.SetDestination(hit.position);
+                    recovered = _agent.pathPending || _agent.hasPath;
+                }
+            }
+
+            if (debugLogs)
+            {
+                string unit = gameObject != null ? gameObject.name : "<null>";
+                bool hasAgent = _agent != null;
+                bool hasPath = hasAgent && _agent.hasPath;
+                bool onNavMesh = hasAgent && _agent.enabled && _agent.isOnNavMesh;
+                Debug.Log($"[UnitMover] Recover stale moving state: unit={unit}, currentDest={CurrentDestination}, agentHasPath={hasPath}, isOnNavMesh={onNavMesh}, recovered={recovered}", this);
+            }
+
+            if (recovered)
+            {
+                SetMovementState(UnitMovementState.Moving);
+                return true;
+            }
+
+            Stop();
+            SetMovementState(UnitMovementState.Idle);
+            return true;
+        }
+
+        static float FlatDistanceXZ(Vector3 a, Vector3 b)
+        {
+            a.y = 0f;
+            b.y = 0f;
+            return Vector3.Distance(a, b);
         }
 
         void ResetStuckTracking()
@@ -417,10 +662,41 @@ namespace Project.Gameplay.Units
             }
             _waypoints = plan.waypoints;
             _waypointIndex = 0;
+            SkipReachedWaypoints();
             ResetStuckTracking();
-            SendAgentTo(_waypoints[0]);
+            if (_waypoints == null || _waypoints.Count == 0 || _waypointIndex >= _waypoints.Count)
+            {
+                _followingAStarPath = false;
+                _hasAStarGoal = false;
+                SendAgentTo(_astarGoalWorld);
+            }
+            else
+                SendAgentTo(_waypoints[_waypointIndex]);
             SetMovementState(UnitMovementState.Moving);
             return true;
+        }
+
+        void SkipReachedWaypoints()
+        {
+            if (_waypoints == null || _agent == null)
+                return;
+
+            while (_waypointIndex < _waypoints.Count)
+            {
+                Vector3 w = _waypoints[_waypointIndex];
+                float dx = transform.position.x - w.x;
+                float dz = transform.position.z - w.z;
+                float distXZ = Mathf.Sqrt(dx * dx + dz * dz);
+                if (distXZ > _agent.stoppingDistance + 0.95f)
+                    break;
+                _waypointIndex++;
+            }
+
+            if (_waypointIndex >= _waypoints.Count)
+            {
+                _waypoints = null;
+                _waypointIndex = 0;
+            }
         }
 
         // ─────────────────────────────────────────────────────────────
@@ -488,6 +764,31 @@ namespace Project.Gameplay.Units
 
             Vector3 pathFrom = _agent.nextPosition;
             TryClampNavDestinationToAvoidGridWater(pathFrom, ref navDest);
+
+            // Si el waypoint A* se proyecta al mismo punto actual del agente, la unidad queda en estado "Moving"
+            // pero el NavMeshAgent nunca arranca (hasPath=false, remainingDistance=0). Saltar ese waypoint evita
+            // el bucle visto en play donde CurrentDestination cambia pero el aldeano no se mueve.
+            Vector3 flatFrom = pathFrom; flatFrom.y = 0f;
+            Vector3 flatNavDest = navDest; flatNavDest.y = 0f;
+            Vector3 flatRequested = worldPos; flatRequested.y = 0f;
+            float sampledProgress = (flatNavDest - flatFrom).sqrMagnitude;
+            float requestedDistance = (flatRequested - flatFrom).sqrMagnitude;
+            if (sampledProgress <= 0.04f && requestedDistance > 1.0f)
+            {
+                List<Vector3> currentWaypoints = _waypoints;
+                if (_followingAStarPath && currentWaypoints != null && _waypointIndex + 1 < currentWaypoints.Count)
+                {
+                    _waypointIndex++;
+                    SendAgentTo(currentWaypoints[_waypointIndex]);
+                    return;
+                }
+
+                if (_hasAStarGoal)
+                {
+                    SetAgentDestinationDirect(_astarGoalWorld);
+                    return;
+                }
+            }
 
             _locomotion.SetDestination(navDest);
         }

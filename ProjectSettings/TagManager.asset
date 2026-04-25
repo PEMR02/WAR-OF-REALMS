@@ -15,7 +15,7 @@ TagManager:
   - Building
   - GroundTerrain
   - Obstacle
-  - EntitySelection
+  - Units
   - BaseTerrain
   - GridVisual
   - Border
