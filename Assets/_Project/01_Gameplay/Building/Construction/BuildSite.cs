@@ -1564,6 +1564,8 @@ namespace Project.Gameplay.Buildings
                 ConfigureBuiltBuildingRuntime(built, buildingSO);
                 WireProductionBuildingFromOwner(built);
                 ApplyOwnerFactionToBuilding(built);
+                ApplyOwnerToBuilding(built);
+                EnsureBuildingAttackCapability(built, buildingSO);
 
                 var buildingCtrl = built.GetComponent<BuildingController>();
                 if (buildingCtrl != null) buildingCtrl.RefreshObstacleAndCollider();
@@ -2134,6 +2136,32 @@ namespace Project.Gameplay.Buildings
             fm.faction = src.faction;
         }
 
+        void ApplyOwnerToBuilding(GameObject built)
+        {
+            if (built == null || owner == null) return;
+            var marker = built.GetComponent<BuildingOwnership>();
+            if (marker == null) marker = built.AddComponent<BuildingOwnership>();
+            marker.owner = owner;
+        }
+
+        static void EnsureBuildingAttackCapability(GameObject built, BuildingSO so)
+        {
+            if (built == null || so == null) return;
+            bool canAttack = so.canAttack && so.attackDamage > 0 && so.attackRange > 0f && so.attackCooldown > 0f;
+            var attacker = built.GetComponent<Project.Gameplay.Combat.BuildingAttacker>();
+            if (!canAttack)
+            {
+                if (attacker != null)
+                    attacker.enabled = false;
+                return;
+            }
+
+            if (attacker == null)
+                attacker = built.AddComponent<Project.Gameplay.Combat.BuildingAttacker>();
+            attacker.source = so;
+            attacker.enabled = true;
+        }
+
         static void SetLayerRecursive(Transform root, int layer)
         {
             if (root == null) return;
@@ -2306,27 +2334,18 @@ namespace Project.Gameplay.Buildings
         {
             if (built == null) return;
 
-            Transform anchor = built.transform.Find("BarAnchor");
-            if (anchor == null)
-            {
-                var go = new GameObject("BarAnchor");
-                anchor = go.transform;
-                anchor.SetParent(built.transform, false);
-                anchor.localPosition = new Vector3(0f, 2.5f, 0f);
-            }
+            WorldBarRuntimeUtility.EnsureWorldBarAnchor(built, 2.5f);
 
-            var health = built.GetComponent<Health>();
-            if (health == null) health = built.GetComponentInChildren<Health>(true);
-            if (health != null)
-                health.SetBarAnchor(anchor);
-
-            var settings = built.GetComponent<WorldBarSettings>();
-            if (settings != null)
+            // Estabilización: desactivar barra legacy world-space en edificios para evitar costo por-cada-edificio
+            // y visuales desfasadas. La barra moderna se maneja por HealthBarManager cuando corresponda.
+            var legacyBars = built.GetComponentsInChildren<HealthBarWorld>(true);
+            for (int i = 0; i < legacyBars.Length; i++)
             {
-                settings.barAnchor = anchor;
-                settings.autoAnchorName = "BarAnchor";
-                settings.useLocalOffsetOverride = true;
-                settings.localOffset = Vector3.zero;
+                var lb = legacyBars[i];
+                if (lb == null) continue;
+                lb.enabled = false;
+                if (lb.gameObject != null && lb.gameObject.activeSelf)
+                    lb.gameObject.SetActive(false);
             }
 
             var prod = built.GetComponent<ProductionBuilding>();

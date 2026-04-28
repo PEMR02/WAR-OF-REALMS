@@ -29,6 +29,7 @@ namespace Project.Gameplay.Map
     [DefaultExecutionOrder(-200)] // Ejecutar antes que las unidades para desactivar NavMeshAgent y evitar "Failed to create agent"
     public class RTSMapGenerator : MonoBehaviour
     {
+        static bool s_loggedMissingAiVillagerRef;
         MatchConfig _matchUsedForLastGenerate;
 
         [Header("Map Preset (Estilo AoE2)")]
@@ -1095,7 +1096,10 @@ namespace Project.Gameplay.Map
             if (camCtrl != null) camCtrl.RefreshBoundsFromMap();
 
             if (!rebuildNavMeshOnGenerate)
+            {
+                ValidateAiRuntimeReferences();
                 AIPlayerBootstrap.SpawnForMatch(_matchUsedForLastGenerate, this);
+            }
 
             StartCoroutine(RebuildNavMeshCoroutine());
             Log("=== Generación Definitiva completada ===");
@@ -1679,7 +1683,7 @@ namespace Project.Gameplay.Map
                     GameObject tc = Instantiate(prefab, world, Quaternion.identity);
                     NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(tc);
                     AlignTownCenterToTerrain(tc);
-                    EnsureWorldBarAnchor(tc);
+                    WorldBarRuntimeUtility.EnsureWorldBarAnchor(tc, 3.5f);
                     SetLayerRecursive(tc.transform, tc.layer);
                     if (tc.GetComponent<BuildingSelectable>() == null)
                         tc.AddComponent<BuildingSelectable>();
@@ -1748,6 +1752,18 @@ namespace Project.Gameplay.Map
                             if (townCenterSO != null)
                                 pmAi.SetInitialStateForAiTownCenter(townCenterSO.populationProvided, 0);
                         }
+
+                        var ownership = tc.GetComponent<BuildingOwnership>();
+                        if (ownership == null) ownership = tc.AddComponent<BuildingOwnership>();
+                        ownership.owner = prod.owner;
+                        EnsureRuntimeBuildingAttacker(tc, townCenterSO);
+                    }
+                    else
+                    {
+                        bool humanSlotElse = IsLobbySlotHuman(match, i);
+                        var ownershipElse = tc.GetComponent<BuildingOwnership>();
+                        if (ownershipElse == null) ownershipElse = tc.AddComponent<BuildingOwnership>();
+                        ownershipElse.owner = ResolveGathererOwnerResources(i, humanSlotElse);
                     }
 
                     // Limpiar alrededor del TC
@@ -1820,34 +1836,6 @@ namespace Project.Gameplay.Map
             Vector3 pos = townCenter.transform.position;
             pos.y += delta + townCenterSpawnYOffset;
             townCenter.transform.position = pos;
-        }
-
-        void EnsureWorldBarAnchor(GameObject go)
-        {
-            if (go == null) return;
-
-            Transform anchor = go.transform.Find("BarAnchor");
-            if (anchor == null)
-            {
-                var created = new GameObject("BarAnchor");
-                anchor = created.transform;
-                anchor.SetParent(go.transform, false);
-                anchor.localPosition = new Vector3(0f, 2f, 0f);
-            }
-
-            var health = go.GetComponent<Health>();
-            if (health == null) health = go.GetComponentInChildren<Health>(true);
-            if (health != null)
-                health.SetBarAnchor(anchor);
-
-            var settings = go.GetComponent<WorldBarSettings>();
-            if (settings != null)
-            {
-                settings.barAnchor = anchor;
-                settings.autoAnchorName = "BarAnchor";
-                settings.useLocalOffsetOverride = true;
-                settings.localOffset = Vector3.zero;
-            }
         }
 
         static void SetLayerRecursive(Transform t, int layer)
@@ -1959,6 +1947,8 @@ namespace Project.Gameplay.Map
                     var gatherer = u.GetComponent<VillagerGatherer>();
                     if (gatherer != null)
                         gatherer.owner = ResolveGathererOwnerResources(tcIndex, humanSlot);
+                    EnsureRuntimeAttackerOnUnit(u, startingVillagerUnitSO, $"spawn inicial TC {tcIndex + 1}");
+                    WorldBarRuntimeUtility.EnsureWorldBarAnchor(u, 2f);
                     if (!u.activeSelf) u.SetActive(true);
                     spawned++;
                 }
@@ -2457,7 +2447,106 @@ namespace Project.Gameplay.Map
                 Log($"✅ Unidades recolocadas: {fixedCount} exitosas.");
 
             if (_matchUsedForLastGenerate != null)
+            {
+                ValidateAiRuntimeReferences();
                 AIPlayerBootstrap.SpawnForMatch(_matchUsedForLastGenerate, this);
+            }
+        }
+
+        void ValidateAiRuntimeReferences()
+        {
+            if (aiVillagerUnitSO == null && aiProductionCatalog != null)
+                aiVillagerUnitSO = aiProductionCatalog.Get("town_center", 1);
+            if (aiVillagerUnitSO == null)
+                aiVillagerUnitSO = FindVillagerUnitSoFallback();
+            if (aiHouseSO == null)
+                aiHouseSO = FindBuildingSoById("House");
+            if (aiBarracksSO == null)
+                aiBarracksSO = FindBuildingSoById("Barracks");
+
+            if (aiVillagerUnitSO == null)
+            {
+                if (!s_loggedMissingAiVillagerRef)
+                {
+                    s_loggedMissingAiVillagerRef = true;
+                    Debug.LogError("[AI] Falta referencia crítica: aiVillagerUnitSO.");
+                }
+            }
+            if (aiHouseSO == null)
+                Debug.LogError("[AI] Falta referencia crítica: aiHouseSO.");
+            if (aiBarracksSO == null)
+                Debug.LogWarning("[AI] Falta referencia militar: aiBarracksSO.");
+        }
+
+        static BuildingSO FindBuildingSoById(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            var all = UnityEngine.Resources.FindObjectsOfTypeAll<BuildingSO>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                var so = all[i];
+                if (so == null || string.IsNullOrWhiteSpace(so.id)) continue;
+                if (string.Equals(so.id, id, StringComparison.OrdinalIgnoreCase))
+                    return so;
+            }
+            return null;
+        }
+
+        static UnitSO FindVillagerUnitSoFallback()
+        {
+            var all = UnityEngine.Resources.FindObjectsOfTypeAll<UnitSO>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                var so = all[i];
+                if (so == null) continue;
+                if (so.role == UnitRole.Economy) return so;
+                string id = so.id ?? string.Empty;
+                string dn = so.displayName ?? string.Empty;
+                if (id.Equals("Villager", StringComparison.OrdinalIgnoreCase)
+                    || id.Equals("Aldeano", StringComparison.OrdinalIgnoreCase)
+                    || id.Equals("Worker", StringComparison.OrdinalIgnoreCase)
+                    || dn.Equals("Villager", StringComparison.OrdinalIgnoreCase)
+                    || dn.Equals("Aldeano", StringComparison.OrdinalIgnoreCase)
+                    || dn.Equals("Worker", StringComparison.OrdinalIgnoreCase))
+                    return so;
+            }
+            return null;
+        }
+
+        static void EnsureRuntimeAttackerOnUnit(GameObject unitObj, UnitSO unitSo, string source)
+        {
+            if (unitObj == null || unitSo == null) return;
+            bool canAttack = unitSo.attack > 0 && unitSo.attackRange > 0f && unitSo.attackIntervalSec > 0f;
+            var attacker = unitObj.GetComponent<UnitAttacker>();
+            if (!canAttack)
+            {
+                if (attacker != null) attacker.enabled = false;
+                return;
+            }
+
+            if (attacker == null)
+            {
+                attacker = unitObj.AddComponent<UnitAttacker>();
+                Debug.Log($"[Combat] UnitAttacker agregado runtime a {unitObj.name} ({source}).");
+            }
+            attacker.enabled = true;
+        }
+
+        static void EnsureRuntimeBuildingAttacker(GameObject buildingObj, BuildingSO so)
+        {
+            if (buildingObj == null || so == null) return;
+            bool canAttack = so.canAttack && so.attackDamage > 0 && so.attackRange > 0f && so.attackCooldown > 0f;
+            var attacker = buildingObj.GetComponent<BuildingAttacker>();
+            if (!canAttack)
+            {
+                if (attacker != null) attacker.enabled = false;
+                return;
+            }
+
+            if (attacker == null)
+                attacker = buildingObj.AddComponent<BuildingAttacker>();
+            attacker.source = so;
+            attacker.enabled = true;
         }
 
         [ContextMenu("Debug: Estado del Generador")]

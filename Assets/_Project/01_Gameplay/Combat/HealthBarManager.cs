@@ -21,15 +21,21 @@ namespace Project.Gameplay.Combat
         [SerializeField] private float maxBarDistance = 0f;
         [Tooltip("Margen extra en coordenadas de viewport (0–1) al decidir si la barra está en pantalla. La barra se dibuja por encima de la unidad; sin margen suele quedar fuera del rango Y y nunca verse.")]
         [SerializeField] private float viewportVisibilityMargin = 0.35f;
+        [Tooltip("Si false, la barra se oculta cuando la vida esta al maximo.")]
+        [SerializeField] private bool showWhenFull = false;
+        [Tooltip("Logs [WorldHealthBar] al mostrar/ocultar barra moderna o desactivar legacy (sin spam; solo al cambiar visibilidad / una vez por Register).")]
+        [SerializeField] private bool debugLogs;
 
         /// <summary>Una barra por entidad (GameObject), para que doble clic muestre barra en cada unidad aunque compartan Health (ej. mismo prefab con dos UnitSelectable).</summary>
         private readonly Dictionary<GameObject, (Health health, HealthBarUI bar)> _barsByEntity = new();
+        private readonly Dictionary<GameObject, bool> _debugLastBarVisible = new();
         private readonly List<GameObject> _toRemove = new List<GameObject>(32);
         private bool _createdCanvasRuntime;
         private static bool _warnedMissingPrefab;
         private static bool _warnedMissingCamera;
         private static bool _warnedNoInstanceWhenShowingBar;
         private static bool _warnedCanvasDelayed;
+        private static bool _warnedAutoBootstrapFailed;
         private bool _bootstrapFailed;
 
         private void Awake()
@@ -143,6 +149,60 @@ namespace Project.Gameplay.Combat
                 if (Instance != null)
                     return;
             }
+            TryAutoBootstrapInstance();
+        }
+
+        static void TryAutoBootstrapInstance()
+        {
+            if (Instance != null)
+                return;
+
+            var go = new GameObject("HealthBarManager_Auto");
+            var mgr = go.AddComponent<HealthBarManager>();
+
+            // Resolver Canvas HUD (screen-space) para ubicar barras en pantalla.
+            var canvases = FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < canvases.Length; i++)
+            {
+                var c = canvases[i];
+                if (c == null || c.renderMode == RenderMode.WorldSpace) continue;
+                mgr.canvas = c;
+                mgr.canvasRect = c.GetComponent<RectTransform>();
+                break;
+            }
+
+            // Resolver prefab de barra (si no existe en escena, buscar asset cargado en memoria).
+            if (mgr.healthBarPrefab == null)
+            {
+                var sceneBars = FindObjectsByType<HealthBarUI>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                for (int i = 0; i < sceneBars.Length; i++)
+                {
+                    if (sceneBars[i] == null) continue;
+                    mgr.healthBarPrefab = sceneBars[i];
+                    break;
+                }
+            }
+            if (mgr.healthBarPrefab == null)
+            {
+                // Fallback compatible entre versiones: buscar en objetos cargados en memoria.
+                var allBars = FindObjectsByType<HealthBarUI>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                for (int i = 0; i < allBars.Length; i++)
+                {
+                    var b = allBars[i];
+                    if (b == null) continue;
+                    mgr.healthBarPrefab = b;
+                    break;
+                }
+            }
+
+            mgr.TryResolveCanvasAndRect();
+            mgr.TryCommitSingleton();
+
+            if (Instance == null && !_warnedAutoBootstrapFailed)
+            {
+                _warnedAutoBootstrapFailed = true;
+                Debug.LogWarning("[HealthBarManager] No se pudo auto-bootstrappear instancia/prefab para barras de mundo.");
+            }
         }
 
         private void OnDestroy()
@@ -164,6 +224,10 @@ namespace Project.Gameplay.Combat
         }
 
         /// <summary>Registra una barra para esta entidad. Una barra por GameObject; si dos entidades comparten Health, cada una tiene su barra.</summary>
+        /// <remarks>
+        /// Una vez registrada, <see cref="HealthBarUI"/> está suscrito a <see cref="Health.OnHealthChanged"/>:
+        /// daño o curación actualiza el fill y la visibilidad vía <see cref="NotifyBarVisibilityRefresh"/> sin alterar la política global <c>showWhenFull</c>.
+        /// </remarks>
         public void Register(GameObject entity)
         {
             if (Instance != this || entity == null)
@@ -176,12 +240,68 @@ namespace Project.Gameplay.Combat
             if (healthBarPrefab == null || canvas == null || canvasRect == null)
                 return;
 
+            DisableLegacyWorldBars(entity, health);
+
             HealthBarUI bar = Instantiate(healthBarPrefab, canvas.transform);
             bar.Bind(health);
             bar.gameObject.SetActive(true);
             bar.transform.SetAsLastSibling();
             bar.Refresh();
             _barsByEntity[entity] = (health, bar);
+            UpdateSingleBar(entity, health, bar);
+        }
+
+        /// <summary>Apaga barras world-space legacy bajo la entidad, el Health y sus raíces (evita duplicado visual con PF_HealthBarUI).</summary>
+        void DisableLegacyWorldBars(GameObject entity, Health health)
+        {
+            var seen = new HashSet<int>();
+            var roots = new List<Transform>(6);
+            if (entity != null)
+            {
+                roots.Add(entity.transform);
+                roots.Add(entity.transform.root);
+            }
+            if (health != null)
+            {
+                roots.Add(health.transform);
+                roots.Add(health.transform.root);
+            }
+
+            bool anyDisabled = false;
+            for (int r = 0; r < roots.Count; r++)
+            {
+                Transform rt = roots[r];
+                if (rt == null) continue;
+                var legacyBars = rt.GetComponentsInChildren<HealthBarWorld>(true);
+                for (int i = 0; i < legacyBars.Length; i++)
+                {
+                    var lb = legacyBars[i];
+                    if (lb == null) continue;
+                    int id = lb.GetInstanceID();
+                    if (seen.Contains(id)) continue;
+                    seen.Add(id);
+
+                    lb.enabled = false;
+                    Transform tr = lb.transform;
+                    Transform deactivateRoot = tr;
+                    for (Transform p = tr; p != null; p = p.parent)
+                    {
+                        if (string.Equals(p.name, "HealthBar", System.StringComparison.OrdinalIgnoreCase))
+                        {
+                            deactivateRoot = p;
+                            break;
+                        }
+                    }
+                    if (deactivateRoot.gameObject.activeSelf)
+                    {
+                        deactivateRoot.gameObject.SetActive(false);
+                        anyDisabled = true;
+                    }
+                }
+            }
+
+            if (anyDisabled && debugLogs && entity != null)
+                Debug.Log($"[WorldHealthBar] Legacy disabled on {entity.name}", entity);
         }
 
         public void Unregister(GameObject entity)
@@ -194,6 +314,7 @@ namespace Project.Gameplay.Combat
                     Destroy(entry.bar.gameObject);
                 _barsByEntity.Remove(entity);
             }
+            _debugLastBarVisible.Remove(entity);
         }
 
         /// <summary>Quita todas las barras asociadas a este Health (p. ej. al destruir la unidad).</summary>
@@ -215,7 +336,25 @@ namespace Project.Gameplay.Combat
                     if (entry.bar != null && entry.bar.gameObject != null)
                         Destroy(entry.bar.gameObject);
                     _barsByEntity.Remove(key);
+                    _debugLastBarVisible.Remove(key);
                 }
+            }
+        }
+
+        /// <summary>Llama desde HealthBarUI cuando cambia la vida para reaplicar visibilidad sin esperar solo a LateUpdate.</summary>
+        public static void NotifyBarVisibilityRefresh(HealthBarUI bar)
+        {
+            if (Instance == null || bar == null) return;
+            Instance.ApplyVisibilityForBar(bar);
+        }
+
+        void ApplyVisibilityForBar(HealthBarUI bar)
+        {
+            foreach (var kv in _barsByEntity)
+            {
+                if (kv.Value.bar != bar) continue;
+                UpdateSingleBar(kv.Key, kv.Value.health, bar);
+                return;
             }
         }
 
@@ -233,9 +372,9 @@ namespace Project.Gameplay.Combat
             if (entity == null) return null;
             var h = entity.GetComponent<Health>();
             if (h != null) return h;
-            h = entity.GetComponentInChildren<Health>(true);
-            if (h != null) return h;
             h = entity.GetComponentInParent<Health>();
+            if (h != null) return h;
+            h = entity.GetComponentInChildren<Health>(true);
             return h;
         }
 
@@ -290,36 +429,7 @@ namespace Project.Gameplay.Combat
                     continue;
                 }
 
-                Vector3 worldPos = GetBarWorldPositionForEntity(entity, health);
-                float maxDistSq = maxBarDistance * maxBarDistance;
-                if (maxDistSq > 0f && (worldPos - worldCamera.transform.position).sqrMagnitude > maxDistSq)
-                {
-                    bar.gameObject.SetActive(false);
-                    continue;
-                }
-
-                Vector3 visibilitySample = entity.transform.position + Vector3.up * 0.75f;
-                Vector3 viewport = worldCamera.WorldToViewportPoint(visibilitySample);
-                float m = Mathf.Max(0f, viewportVisibilityMargin);
-                bool visible = viewport.z > 0f &&
-                    viewport.x >= -m && viewport.x <= 1f + m &&
-                    viewport.y >= -m && viewport.y <= 1f + m;
-                bar.gameObject.SetActive(visible);
-
-                if (!visible)
-                    continue;
-
-                Vector3 screenPoint = worldCamera.WorldToScreenPoint(worldPos);
-
-                RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                    canvasRect,
-                    screenPoint,
-                    canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : worldCamera,
-                    out Vector2 localPoint
-                );
-
-                bar.RectTransform.localPosition = localPoint;
-                bar.Refresh();
+                UpdateSingleBar(entity, health, bar);
             }
 
             for (int i = 0; i < _toRemove.Count; i++)
@@ -330,8 +440,80 @@ namespace Project.Gameplay.Combat
                     if (entry.bar != null && entry.bar.gameObject != null)
                         Destroy(entry.bar.gameObject);
                     _barsByEntity.Remove(key);
+                    _debugLastBarVisible.Remove(key);
                 }
             }
+        }
+
+        void UpdateSingleBar(GameObject entity, Health health, HealthBarUI bar)
+        {
+            if (worldCamera == null)
+                worldCamera = Camera.main;
+            if (worldCamera == null || canvas == null || canvasRect == null)
+                return;
+
+            Vector3 worldPos = GetBarWorldPositionForEntity(entity, health);
+            float maxDistSq = maxBarDistance * maxBarDistance;
+            string hideReason = null;
+            if (maxDistSq > 0f && (worldPos - worldCamera.transform.position).sqrMagnitude > maxDistSq)
+            {
+                hideReason = "distance";
+                bar.gameObject.SetActive(false);
+                LogVisibilityDebug(entity, health, false, hideReason);
+                return;
+            }
+
+            Vector3 visibilitySample = entity.transform.position + Vector3.up * 0.75f;
+            Vector3 viewport = worldCamera.WorldToViewportPoint(visibilitySample);
+            float m = Mathf.Max(0f, viewportVisibilityMargin);
+            bool inViewport = viewport.z > 0f &&
+                viewport.x >= -m && viewport.x <= 1f + m &&
+                viewport.y >= -m && viewport.y <= 1f + m;
+
+            bool showByHealth = health.IsAlive && (showWhenFull || health.CurrentHP < health.MaxHP);
+            bool visible = inViewport && showByHealth;
+
+            if (!health.IsAlive)
+                hideReason = "dead";
+            else if (!showByHealth)
+                hideReason = "full";
+            else if (!inViewport)
+                hideReason = "offscreen";
+
+            bar.gameObject.SetActive(visible);
+            LogVisibilityDebug(entity, health, visible, hideReason);
+
+            if (!visible)
+                return;
+
+            Vector3 screenPoint = worldCamera.WorldToScreenPoint(worldPos);
+
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                canvasRect,
+                screenPoint,
+                canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : worldCamera,
+                out Vector2 localPoint
+            );
+
+            bar.RectTransform.localPosition = localPoint;
+            bar.Refresh();
+        }
+
+        void LogVisibilityDebug(GameObject entity, Health health, bool visible, string hideReason)
+        {
+            if (entity == null || health == null)
+                return;
+
+            bool unchanged = _debugLastBarVisible.TryGetValue(entity, out bool prevVis) && prevVis == visible;
+            _debugLastBarVisible[entity] = visible;
+            if (unchanged || !debugLogs)
+                return;
+
+            float fill = health.MaxHP > 0 ? health.CurrentHP / (float)health.MaxHP : 0f;
+            if (visible)
+                Debug.Log($"[WorldHealthBar] Show modern {entity.name} {health.CurrentHP}/{health.MaxHP} fill={fill:F3} active=True", entity);
+            else
+                Debug.Log($"[WorldHealthBar] Hide modern {entity.name} reason={hideReason ?? "unknown"}", entity);
         }
 
         /// <summary>Posición mundial de la barra: sobre la entidad. Si Health está en la entidad usa BarAnchor; si está en el padre usa posición de la entidad.</summary>

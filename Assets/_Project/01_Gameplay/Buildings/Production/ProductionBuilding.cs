@@ -189,6 +189,8 @@ namespace Project.Gameplay.Buildings
             var stats = unitObj.GetComponent<UnitStatsRuntime>();
             if (stats == null) stats = unitObj.AddComponent<UnitStatsRuntime>();
             stats.InitFromUnitSO(unit);
+            EnsureUnitAttackCapability(unitObj, unit);
+            WorldBarRuntimeUtility.EnsureWorldBarAnchor(unitObj, 2f);
 
             // Si hay rally point, dar orden de ir hasta ahí (a pie, no teletransporte)
             if (useRallyPoint)
@@ -200,6 +202,26 @@ namespace Project.Gameplay.Buildings
             
             OnUnitCompleted?.Invoke(unit);
             Project.UI.GameplayNotifications.Show($"Unidad creada: {unit.displayName}");
+        }
+
+        static void EnsureUnitAttackCapability(GameObject unitObj, UnitSO unit)
+        {
+            if (unitObj == null || unit == null) return;
+            bool canAttack = unit.attack > 0 && unit.attackRange > 0f && unit.attackIntervalSec > 0f;
+            var attacker = unitObj.GetComponent<UnitAttacker>();
+            if (!canAttack)
+            {
+                if (attacker != null)
+                    attacker.enabled = false;
+                return;
+            }
+
+            if (attacker == null)
+            {
+                attacker = unitObj.AddComponent<UnitAttacker>();
+                Debug.Log($"[Combat] UnitAttacker agregado runtime a {unitObj.name} desde {nameof(ProductionBuilding)}.");
+            }
+            attacker.enabled = true;
         }
 
         Vector3 ResolveSpawnPosition()
