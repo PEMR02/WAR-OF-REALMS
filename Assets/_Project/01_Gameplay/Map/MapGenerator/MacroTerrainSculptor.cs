@@ -36,7 +36,8 @@ namespace Project.Gameplay.Map.Generator
                     int rad = rng.NextInt(rMin, rMax + 1);
                     float add = config.macroMountainHeight01Min +
                                 (config.macroMountainHeight01Max - config.macroMountainHeight01Min) * rng.NextFloat();
-                    add *= 2f;
+                    // Amplificación respecto al delta radial base (lobby + alpha); sube relieve percibido sin tocar el resto del pipeline.
+                    add *= 2.75f;
                     ApplyRadialDelta(grid, cx, cz, rad, add, onlyLand: true);
                     ref var after = ref grid.GetCell(cx, cz);
                     record?.mountains.Add(new MountainFeature
@@ -78,7 +79,8 @@ namespace Project.Gameplay.Map.Generator
                     int dx = x - cx;
                     int dz = z - cz;
                     float t = 1f - Mathf.Clamp01(Mathf.Sqrt(dx * dx + dz * dz) / Mathf.Max(1f, radius));
-                    float falloff = t * t;
+                    // Perfil más abrupto: meseta/pico más marcado y caída más rápida.
+                    float falloff = Mathf.Pow(t, 0.68f);
                     cell.height01 = Mathf.Clamp01(cell.height01 + delta01 * falloff);
                 }
             }

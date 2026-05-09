@@ -39,7 +39,20 @@ namespace Project.Gameplay.Map.Generation.Alpha
                     float slope = cell.slopeDeg;
                     TerrainRegionType t = TerrainRegionType.Plain;
 
-                    if (height >= rules.mountainHeightThreshold01 && slope >= rules.mountainSlopeThresholdDeg)
+                    // Robusto a picos con cima más suave: clasificamos montaña por:
+                    // - regla estricta (altura+slope), o
+                    // - altura muy alta, o
+                    // - altura alta con pendiente moderada.
+                    bool mountainByStrictRule =
+                        height >= rules.mountainHeightThreshold01 &&
+                        slope >= rules.mountainSlopeThresholdDeg;
+                    bool mountainByVeryHighAltitude =
+                        height >= Mathf.Min(0.88f, rules.mountainHeightThreshold01 + 0.10f);
+                    bool mountainByHighAltitudeAndModerateSlope =
+                        height >= Mathf.Max(0.50f, rules.mountainHeightThreshold01 - 0.08f) &&
+                        slope >= Mathf.Max(12f, rules.mountainSlopeThresholdDeg - 10f);
+
+                    if (mountainByStrictRule || mountainByVeryHighAltitude || mountainByHighAltitudeAndModerateSlope)
                         t = TerrainRegionType.Mountain;
                     else if (slope >= rules.rockyZoneSlopeThresholdDeg && height >= rules.hillHeightThreshold01 * 0.95f)
                         t = TerrainRegionType.RockyZone;

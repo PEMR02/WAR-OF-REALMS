@@ -9,6 +9,22 @@ namespace Project.Gameplay.Map.Generator
     public static class WaterMeshBuilder
     {
         private static Transform _waterRoot;
+        // Solo para la fase actual de BuildWaterMeshes: centros de spawn (en celdas) para validación de conectividad.
+        static List<Vector2Int> s_spawnCellsForConnectivity;
+        public static List<Vector3> DebugRibbonPathPointsWorld { get; } = new List<Vector3>();
+        public static List<Vector3> DebugRibbonAcceptedSegmentsAWorld { get; } = new List<Vector3>();
+        public static List<Vector3> DebugRibbonAcceptedSegmentsBWorld { get; } = new List<Vector3>();
+        public static List<Vector3> DebugRibbonDiscardedSegmentsAWorld { get; } = new List<Vector3>();
+        public static List<Vector3> DebugRibbonDiscardedSegmentsBWorld { get; } = new List<Vector3>();
+        public static List<Vector3> DebugWaterCrossingPositionsWorld { get; } = new List<Vector3>();
+        /// <summary>Centros mundo de huellas de debug de vado (solo OnDrawGizmos; no crear meshes).</summary>
+        public static readonly List<Vector3> DebugRiverFordFootprintCentersWorld = new List<Vector3>();
+        /// <summary>Tamaño completo del wire cube de huella (ancho, alto fino, fondo).</summary>
+        public static readonly List<Vector3> DebugRiverFordFootprintSizesWorld = new List<Vector3>();
+        /// <summary>Centros de candidatos a vado rechazados (gizmos).</summary>
+        public static readonly List<Vector3> DebugRiverFordFailedCenterPositionsWorld = new List<Vector3>();
+        public static int[,] DebugLastWaterInteriorDistanceGrid;
+        public static int DebugLastWaterInteriorDistanceMax;
 
         static int _riverVisualHalfSamples;
         static double _riverVisualHalfSum;
@@ -16,9 +32,21 @@ namespace Project.Gameplay.Map.Generator
         static float _riverVisualHalfMax;
 
         /// <summary>Parámetros: config.waterChunkSize, config.waterHeight01, config.waterSurfaceOffset. material puede ser null (fallback).</summary>
-        public static GameObject BuildWaterMeshes(GridSystem grid, MapGenConfig config, Material waterMaterial)
+        public static GameObject BuildWaterMeshes(
+            GridSystem grid,
+            MapGenConfig config,
+            Material waterMaterial,
+            List<Vector2Int> spawnCells = null,
+            List<CityNode> strategicCities = null,
+            List<Road> strategicRoads = null)
         {
             if (grid == null || config == null) return null;
+            s_spawnCellsForConnectivity = spawnCells;
+            DebugWaterCrossingPositionsWorld.Clear();
+            DebugRiverFordFootprintCentersWorld.Clear();
+            DebugRiverFordFootprintSizesWorld.Clear();
+            DebugRiverFordFailedCenterPositionsWorld.Clear();
+            DebugLastWaterInteriorDistanceGrid = null;
 
             if (_waterRoot != null)
             {
@@ -29,9 +57,8 @@ namespace Project.Gameplay.Map.Generator
 
             int chunkSize = Mathf.Max(1, config.waterChunkSize);
             float terrainY = config.terrainHeightWorld > 0f ? config.terrainHeightWorld : 50f;
-            // Offset Y mínimo >= 0.2f para evitar z-fighting con el terreno.
-            // (Si config.waterSurfaceOffset es mayor, se respeta.)
-            float y = grid.Origin.y + config.waterHeight01 * terrainY + Mathf.Max(config.waterSurfaceOffset, 0.2f);
+            // Offset Y pequeño para evitar z-fighting sin dejar el río visiblemente "suspendido".
+            float y = grid.Origin.y + config.waterHeight01 * terrainY + Mathf.Max(config.waterSurfaceOffset, 0.02f);
             float cellSize = grid.CellSizeWorld;
             int w = grid.Width;
             int h = grid.Height;
@@ -54,13 +81,20 @@ namespace Project.Gameplay.Map.Generator
             _waterRoot.localScale = Vector3.one;
             _waterRoot.gameObject.layer = waterLayer;
             _waterRoot.gameObject.SetActive(true);
-            // Marching squares: solo lagos si el río va por ribbon; luego mallas de río continuas.
+            bool renderRibbonMesh = config.debugRenderRiverRibbonMesh && config.riverVisualUseContinuousMesh;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (config.debugLogs)
+                Debug.Log($"[WaterMesh] mode={(renderRibbonMesh ? "MarchingSquaresPlusRibbonDebug" : "MarchingSquaresOnly")}");
+#endif
+            // Marching squares: render principal del agua (ríos + lagos). Solo deja lagos cuando ribbon debug está explícitamente activo.
             bool marchingSquaresOk = false;
             if (config.waterRoundedEdges)
-                marchingSquaresOk = BuildRoundedWaterMarchingSquares(_waterRoot, grid, config, sharedWaterMat, y, cellSize, waterLayer, config.riverVisualUseContinuousMesh);
+                marchingSquaresOk = BuildRoundedWaterMarchingSquares(
+                    _waterRoot, grid, config, sharedWaterMat, y, cellSize, waterLayer, renderRibbonMesh,
+                    strategicCities, strategicRoads);
 
             bool riverRibbonsOk = false;
-            if (config.riverVisualUseContinuousMesh)
+            if (renderRibbonMesh)
             {
                 float riverY = y + Mathf.Max(0f, config.riverRibbonVerticalLiftWorld);
                 riverRibbonsOk = BuildRiverRibbonMeshes(_waterRoot, grid, config, sharedWaterMat, riverY, cellSize, waterLayer);
@@ -72,7 +106,7 @@ namespace Project.Gameplay.Map.Generator
             // Post-proceso de máscara (rápido): suaviza Water/River -> bool mask para reducir dientes sin MS.
             bool[,] smoothMask = null;
             if (config.waterMaskPostProcess && config.waterMaskSmoothIterations > 0)
-                smoothMask = BuildSmoothedWaterMask(grid, config);
+                smoothMask = BuildSmoothedWaterMask(grid, config, !renderRibbonMesh);
 
             int chunkCount = 0;
             int totalVerts = 0;
@@ -119,7 +153,7 @@ namespace Project.Gameplay.Map.Generator
                         for (int gx = cx; gx < cxe; gx++)
                         {
                             ref var cell = ref grid.GetCell(gx, gz);
-                            bool countRiver = !config.riverVisualUseContinuousMesh;
+                            bool countRiver = !renderRibbonMesh;
                             bool isWater = smoothMask != null
                                 ? smoothMask[gx, gz]
                                 : (cell.type == CellType.Water || (countRiver && cell.type == CellType.River));
@@ -194,13 +228,13 @@ namespace Project.Gameplay.Map.Generator
             return _waterRoot != null ? _waterRoot.gameObject : null;
         }
 
-        private static bool[,] BuildSmoothedWaterMask(GridSystem grid, MapGenConfig config)
+        private static bool[,] BuildSmoothedWaterMask(GridSystem grid, MapGenConfig config, bool includeRiverCells)
         {
             int w = grid.Width;
             int h = grid.Height;
             var a = new bool[w, h];
             var b = new bool[w, h];
-            bool countRiver = config == null || !config.riverVisualUseContinuousMesh;
+            bool countRiver = includeRiverCells;
 
             for (int z = 0; z < h; z++)
                 for (int x = 0; x < w; x++)
@@ -258,6 +292,12 @@ namespace Project.Gameplay.Map.Generator
                 return false;
             if (config == null)
                 return false;
+
+            DebugRibbonPathPointsWorld.Clear();
+            DebugRibbonAcceptedSegmentsAWorld.Clear();
+            DebugRibbonAcceptedSegmentsBWorld.Clear();
+            DebugRibbonDiscardedSegmentsAWorld.Clear();
+            DebugRibbonDiscardedSegmentsBWorld.Clear();
 
             LogRiverRibbonGeometryPassBanner(config, grid);
 
@@ -371,17 +411,40 @@ namespace Project.Gameplay.Map.Generator
                                     continue;
 
                                 float len = PolylineLengthXZ(ribbonPath);
+                                // Evita "charcos-cinta" y micro-segmentos en confluencias/lago.
+                                if (len < Mathf.Max(cellSize * 6f, 6f))
+                                {
+                                    sub++;
+                                    continue;
+                                }
+
+                                // Decimación ligera para bajar triángulos sin deformar la forma general del cauce.
+                                float ribbonStep = Mathf.Max(catmullStepWorld * 2f, cellSize * 0.85f);
+                                var ribbonForMesh = ResamplePolylineUniformXZ(ribbonPath, ribbonStep, waterY);
+                                if (ribbonForMesh == null || ribbonForMesh.Count < 2)
+                                {
+                                    sub++;
+                                    continue;
+                                }
+
+                                float lenForMesh = PolylineLengthXZ(ribbonForMesh);
+                                if (lenForMesh < Mathf.Max(cellSize * 6f, 6f))
+                                {
+                                    sub++;
+                                    continue;
+                                }
+
                                 float maxD = MaxConsecutiveHorizontalSegment(ribbonPath);
                                 ComputeBoundsXZ(ribbonPath, out Vector3 bMin, out Vector3 bMax);
                                 LogRiverRibbonSegmentDetail(config, riverIndex, sub, ribbonPath.Count, len, maxD, bMin, bMax);
 
-                                ApplyRibbonCenterlineLateralJitter(ribbonPath, waterY, config, riverIndex, sub);
+                                ApplyRibbonCenterlineLateralJitter(ribbonForMesh, waterY, config, riverIndex, sub);
 
-                                if (TryBuildRiverRibbonStripMesh(parent, ribbonPath, halfW, waterY, mat, waterLayer, cellSize, riverIndex, sub, config, catmullStepWorld, $"Water_River_{riverIndex}_{sub}"))
+                                if (TryBuildRiverRibbonStripMesh(parent, ribbonForMesh, halfW, waterY, mat, waterLayer, cellSize, riverIndex, sub, config, catmullStepWorld, $"Water_River_{riverIndex}_{sub}"))
                                 {
                                     any = true;
                                     segmentCount++;
-                                    totalSegPoints += ribbonPath.Count;
+                                    totalSegPoints += ribbonForMesh.Count;
                                 }
 
                                 sub++;
@@ -978,6 +1041,14 @@ namespace Project.Gameplay.Map.Generator
             var work = new List<Vector3>(pts.Count);
             for (int i = 0; i < pts.Count; i++)
                 work.Add(new Vector3(pts[i].x, waterY, pts[i].z));
+            if (config != null && config.debugDrawRiverRibbonGizmos)
+                DebugRibbonPathPointsWorld.AddRange(work);
+
+            // Umbral robusto: adapta el máximo permitido al paso real del path para no marcar como "abnormal"
+            // un ribbon ya decimado (caso seed 33069), pero mantiene corte para saltos verdaderamente largos.
+            float avgStep = (work.Count > 1) ? (PolylineLengthXZ(work) / (work.Count - 1)) : 0f;
+            if (avgStep > 1e-4f)
+                maxEdge = Mathf.Max(maxEdge, avgStep * 1.8f);
 
             float varAmt = config != null ? Mathf.Clamp01(config.riverRibbonWidthVariation) : 0f;
             float freq = config != null ? Mathf.Max(0.001f, config.riverRibbonWidthNoiseFreq) : 0.1f;
@@ -1071,8 +1142,19 @@ namespace Project.Gameplay.Map.Generator
                 if (sl > maxEdge)
                 {
                     if (config != null && config.debugRiverRibbonGeometry)
-                        Debug.LogWarning($"[RiverRibbonDebug] WARNING abnormal jump | river={riverIndex} segment={segmentIndex} idx={i + 1} dist={sl:F3} maxAllowed={maxEdge:F3} (pre-triangulation)");
-                    return false;
+                        Debug.LogWarning($"[RiverRibbonDebug] WARNING abnormal jump | seed={config.seed} river={riverIndex} segment={segmentIndex} idx={i + 1} dist={sl:F3} maxAllowed={maxEdge:F3} (pre-triangulation)");
+                    if (config != null && config.debugDrawRiverRibbonGizmos)
+                    {
+                        DebugRibbonDiscardedSegmentsAWorld.Add(a);
+                        DebugRibbonDiscardedSegmentsBWorld.Add(b);
+                    }
+                    // Corte quirúrgico: no triangulamos este salto; el strip continúa como sub-tramo.
+                    continue;
+                }
+                if (config != null && config.debugDrawRiverRibbonGizmos)
+                {
+                    DebugRibbonAcceptedSegmentsAWorld.Add(a);
+                    DebugRibbonAcceptedSegmentsBWorld.Add(b);
                 }
 
                 Vector3 ta = TangentAt(i);
@@ -1157,8 +1239,2596 @@ namespace Project.Gameplay.Map.Generator
             return true;
         }
 
-        private static bool BuildRoundedWaterMarchingSquares(Transform parent, GridSystem grid, MapGenConfig config, Material mat, float y, float cellSize, int waterLayer, bool marchingSquaresLakesOnly)
+        private static int[,] BuildWaterInteriorDistanceToShoreGrid(GridSystem grid, out int maxDist)
         {
+            maxDist = 1;
+            int w = grid.Width;
+            int h = grid.Height;
+            var d = new int[w, h];
+            for (int z = 0; z < h; z++)
+                for (int x = 0; x < w; x++)
+                    d[x, z] = -1;
+
+            var q = new Queue<Vector2Int>();
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    var t = grid.GetCell(x, z).type;
+                    if (t != CellType.Water && t != CellType.River)
+                        continue;
+                    bool boundary = false;
+                    foreach (var n in grid.Neighbors4(x, z))
+                    {
+                        var nt = grid.GetCell(n.x, n.y).type;
+                        if (nt != CellType.Water && nt != CellType.River)
+                        {
+                            boundary = true;
+                            break;
+                        }
+                    }
+                    if (boundary)
+                    {
+                        d[x, z] = 0;
+                        q.Enqueue(new Vector2Int(x, z));
+                    }
+                }
+            }
+
+            if (q.Count == 0)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        var t = grid.GetCell(x, z).type;
+                        if (t == CellType.Water || t == CellType.River)
+                            d[x, z] = 0;
+                    }
+                }
+                return d;
+            }
+
+            while (q.Count > 0)
+            {
+                var p = q.Dequeue();
+                int baseD = d[p.x, p.y];
+                foreach (var n in grid.Neighbors4(p.x, p.y))
+                {
+                    var nt = grid.GetCell(n.x, n.y).type;
+                    if (nt != CellType.Water && nt != CellType.River)
+                        continue;
+                    int nd = baseD + 1;
+                    if (d[n.x, n.y] >= 0)
+                        continue;
+                    d[n.x, n.y] = nd;
+                    if (nd > maxDist)
+                        maxDist = nd;
+                    q.Enqueue(n);
+                }
+            }
+
+            return d;
+        }
+
+        private static float SampleInteriorDistance01(Vector3 world, int[,] distGrid, GridSystem grid, float cellSize, float normCells)
+        {
+            if (distGrid == null) return 0.5f;
+            float fx = (world.x - grid.Origin.x) / cellSize;
+            float fz = (world.z - grid.Origin.z) / cellSize;
+            int x0 = Mathf.FloorToInt(fx);
+            int z0 = Mathf.FloorToInt(fz);
+            float tx = fx - x0;
+            float tz = fz - z0;
+            int gw = grid.Width;
+            int gh = grid.Height;
+
+            float Sample(int cx, int cz)
+            {
+                if (cx < 0 || cz < 0 || cx >= gw || cz >= gh)
+                    return 0f;
+                int v = distGrid[cx, cz];
+                if (v < 0)
+                    return 0f;
+                return Mathf.Clamp01(v / Mathf.Max(1f, normCells));
+            }
+
+            float c00 = Sample(x0, z0);
+            float c10 = Sample(x0 + 1, z0);
+            float c01 = Sample(x0, z0 + 1);
+            float c11 = Sample(x0 + 1, z0 + 1);
+            float a = Mathf.Lerp(c00, c10, tx);
+            float b = Mathf.Lerp(c01, c11, tx);
+            return Mathf.Lerp(a, b, tz);
+        }
+
+        private static float ComputeRiverVisualWidthMultiplierRaw(GridSystem grid, int gx, int gz, float cellX, float cellZ, MapGenConfig config)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
+            float downT = (gx + gz) / Mathf.Max(1f, (float)(w + h - 2));
+            float mul = Mathf.Lerp(1f, Mathf.Max(0.5f, config.riverWidthDownstreamFactor), downT);
+            int rc = 0;
+            for (int dz = -2; dz <= 2; dz++)
+            {
+                for (int dx = -2; dx <= 2; dx++)
+                {
+                    int xx = gx + dx;
+                    int zz = gz + dz;
+                    if (!grid.InBoundsCell(xx, zz)) continue;
+                    if (grid.GetCell(xx, zz).type == CellType.River)
+                        rc++;
+                }
+            }
+            float conf = Mathf.Clamp01((rc - 4) / 18f);
+            mul *= 1f + config.riverWidthConfluenceBoost * conf;
+            float amp = Mathf.Clamp(config.riverWidthNoiseScale, 0f, 0.45f);
+            if (amp > 1e-5f)
+            {
+                float ns = Mathf.Max(0.06f, config.waterEdgeNoiseScale * 0.55f + 0.06f);
+                float n = Mathf.PerlinNoise(config.seed * 0.00117f + cellX * ns * 4.1f, config.seed * 0.00191f + cellZ * ns * 4.1f);
+                mul *= 1f + (n - 0.5f) * 2f * amp;
+            }
+            return Mathf.Clamp(mul, 0.45f, 1.85f);
+        }
+
+        private static float ComputeRiverVisualWidthMultiplier(GridSystem grid, int gx, int gz, float cellX, float cellZ, MapGenConfig config)
+        {
+            // Suavizado espacial para evitar cambios serruchados de celda a celda.
+            float center = ComputeRiverVisualWidthMultiplierRaw(grid, gx, gz, cellX, cellZ, config);
+            float acc = center * 0.5f;
+            float wAcc = 0.5f;
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dz == 0) continue;
+                    int nx = gx + dx;
+                    int nz = gz + dz;
+                    if (!grid.InBoundsCell(nx, nz)) continue;
+                    if (grid.GetCell(nx, nz).type != CellType.River) continue;
+                    float nMul = ComputeRiverVisualWidthMultiplierRaw(grid, nx, nz, nx, nz, config);
+                    float ww = (Mathf.Abs(dx) + Mathf.Abs(dz) == 1) ? 0.125f : 0.0625f;
+                    acc += nMul * ww;
+                    wAcc += ww;
+                }
+            }
+            return Mathf.Clamp(acc / Mathf.Max(1e-4f, wAcc), 0.45f, 1.85f);
+        }
+
+        private static void ApplyRiverLakeVisualBlendField(float[,] field, int sw, int sh, int sampleX0, int sampleZ0, int effectiveSubdiv, GridSystem grid, MapGenConfig config)
+        {
+            if (config == null || config.riverLakeVisualBlend <= 1e-5f) return;
+            float blend = Mathf.Clamp01(config.riverLakeVisualBlend) * 0.5f;
+            for (int z = 0; z < sh; z++)
+            {
+                int iz = sampleZ0 + z;
+                int gz = Mathf.Clamp(iz / effectiveSubdiv, 0, grid.Height - 1);
+                for (int x = 0; x < sw; x++)
+                {
+                    int ix = sampleX0 + x;
+                    int gx = Mathf.Clamp(ix / effectiveSubdiv, 0, grid.Width - 1);
+                    if (grid.GetCell(gx, gz).type != CellType.River) continue;
+                    bool touchLake = false;
+                    foreach (var n in grid.Neighbors4(gx, gz))
+                    {
+                        if (grid.GetCell(n.x, n.y).type == CellType.Water)
+                        {
+                            touchLake = true;
+                            break;
+                        }
+                    }
+                    if (touchLake)
+                        field[x, z] = Mathf.Lerp(field[x, z], 1f, blend);
+                    else
+                    {
+                        // Segunda corona para suavizar transición y evitar borde doble en uniones río-lago.
+                        bool nearLake = false;
+                        for (int dz = -1; dz <= 1 && !nearLake; dz++)
+                        {
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                if (dx == 0 && dz == 0) continue;
+                                int nx = gx + dx;
+                                int nz = gz + dz;
+                                if (!grid.InBoundsCell(nx, nz)) continue;
+                                if (grid.GetCell(nx, nz).type == CellType.Water) { nearLake = true; break; }
+                            }
+                        }
+                        if (nearLake)
+                            field[x, z] = Mathf.Lerp(field[x, z], 1f, blend * 0.45f);
+                    }
+                }
+            }
+        }
+
+        private static void ApplyMarchingSquaresDepthUv(List<Vector2> uvs, List<Vector3> verts, GridSystem grid, MapGenConfig config, int[,] distGrid, float yWater)
+        {
+            if (config == null || distGrid == null || Mathf.Abs(config.waterDepthColorStrength) < 1e-5f)
+                return;
+            float norm = Mathf.Max(1f, config.shoreVisualWidth);
+            float powK = Mathf.Max(0.35f, config.shoreVisualBlend);
+            float str = Mathf.Clamp01(config.waterDepthColorStrength);
+            for (int i = 0; i < uvs.Count && i < verts.Count; i++)
+            {
+                float depth01 = SampleInteriorDistance01(verts[i], distGrid, grid, grid.CellSizeWorld, norm);
+                depth01 = Mathf.Pow(Mathf.Clamp01(depth01), 1f / powK);
+                depth01 = depth01 * depth01 * (3f - 2f * depth01); // smoothstep
+                float targetV = Mathf.Lerp(0.06f, 0.5f, depth01);
+                var uv = uvs[i];
+                uv.y = Mathf.Lerp(uv.y, targetV, str);
+                uvs[i] = uv;
+            }
+        }
+
+        private static float HashNoise01(float x, float z, int seed)
+        {
+            unchecked
+            {
+                int xi = Mathf.FloorToInt(x * 11.37f);
+                int zi = Mathf.FloorToInt(z * 13.91f);
+                uint h = (uint)(seed * 374761393);
+                h ^= (uint)xi * 668265263u;
+                h ^= (uint)zi * 2246822519u;
+                h ^= h >> 13;
+                h *= 1274126177u;
+                h ^= h >> 16;
+                return (h & 0x00FFFFFF) / 16777215f;
+            }
+        }
+
+        private static void NudgeEdgeVertexAtIso(ref Vector3 p, float v0, float v1, float iso, float amplitudeWorld, float noiseScale, int seed, Vector3 p0, Vector3 p1)
+        {
+            if (amplitudeWorld <= 1e-6f) return;
+            float mid = (v0 + v1) * 0.5f;
+            if (Mathf.Abs(mid - iso) > 0.14f) return;
+            Vector3 e = p1 - p0;
+            e.y = 0f;
+            float el = e.magnitude;
+            if (el < 1e-5f) return;
+            Vector3 perp = new Vector3(-e.z, 0f, e.x) / el;
+            float n = HashNoise01(p.x * noiseScale, p.z * noiseScale, seed) - 0.5f;
+            p += perp * (n * 2f) * amplitudeWorld;
+        }
+
+        private static int EstimateRiverThicknessCells(GridSystem grid, int gx, int gz)
+        {
+            if (!grid.InBoundsCell(gx, gz) || grid.GetCell(gx, gz).type != CellType.River)
+                return 999;
+            int l = 0;
+            for (int x = gx - 1; x >= 0 && grid.GetCell(x, gz).type == CellType.River; x--) l++;
+            int r = 0;
+            for (int x = gx + 1; x < grid.Width && grid.GetCell(x, gz).type == CellType.River; x++) r++;
+            int u = 0;
+            for (int z = gz - 1; z >= 0 && grid.GetCell(gx, z).type == CellType.River; z--) u++;
+            int d = 0;
+            for (int z = gz + 1; z < grid.Height && grid.GetCell(gx, z).type == CellType.River; z++) d++;
+            return Mathf.Min(l + r + 1, u + d + 1);
+        }
+
+        /// <summary>Ejes unitarios para buscar orillas opuestas (cada uno incluye también -eje).</summary>
+        static readonly Vector2Int[] CrossingBankSearchAxes =
+        {
+            new Vector2Int(1, 0),
+            new Vector2Int(0, 1),
+            new Vector2Int(1, 1),
+            new Vector2Int(1, -1),
+        };
+
+        struct RiverSegment
+        {
+            public int segmentId;
+            public List<Vector2Int> cells;
+            public bool touchesLake;
+            public bool touchesEdge;
+            public bool hasJunction;
+        }
+
+        static long PackEdge(Vector2Int a, Vector2Int b)
+        {
+            long pa = ((long)(uint)a.x << 32) | (uint)a.y;
+            long pb = ((long)(uint)b.x << 32) | (uint)b.y;
+            if (pa > pb) { long t = pa; pa = pb; pb = t; }
+            return (pa * 73856093L) ^ (pb * 19349663L);
+        }
+
+        static bool IsRiverAt(GridSystem grid, int x, int z)
+        {
+            return grid != null && grid.InBoundsCell(x, z) && grid.GetCell(x, z).type == CellType.River;
+        }
+
+        static bool TouchesWaterNeighbor(GridSystem grid, Vector2Int c)
+        {
+            foreach (var n in grid.Neighbors4(c))
+                if (grid.GetCell(n.x, n.y).type == CellType.Water)
+                    return true;
+            return false;
+        }
+
+        static bool IsEdgeCell(GridSystem grid, Vector2Int c)
+        {
+            return c.x <= 0 || c.y <= 0 || c.x >= grid.Width - 1 || c.y >= grid.Height - 1;
+        }
+
+        static int CountRiverConnectedComponents(GridSystem grid)
+        {
+            if (grid == null) return 0;
+            int w = grid.Width;
+            int h = grid.Height;
+            var seen = new bool[w, h];
+            var q = new Queue<Vector2Int>();
+            int comps = 0;
+
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (seen[x, z] || !IsRiverAt(grid, x, z))
+                        continue;
+                    comps++;
+                    seen[x, z] = true;
+                    q.Clear();
+                    q.Enqueue(new Vector2Int(x, z));
+                    while (q.Count > 0)
+                    {
+                        var p = q.Dequeue();
+                        foreach (var n in grid.Neighbors4(p))
+                        {
+                            if (seen[n.x, n.y] || !IsRiverAt(grid, n.x, n.y))
+                                continue;
+                            seen[n.x, n.y] = true;
+                            q.Enqueue(n);
+                        }
+                    }
+                }
+            }
+
+            return comps;
+        }
+
+        static List<RiverSegment> BuildRiverSegments(
+            GridSystem grid,
+            MapGenConfig config,
+            out HashSet<Vector2Int> junctionNodes,
+            out HashSet<Vector2Int> endpointNodes)
+        {
+            junctionNodes = new HashSet<Vector2Int>();
+            endpointNodes = new HashSet<Vector2Int>();
+            var segments = new List<RiverSegment>(32);
+            if (grid == null)
+                return segments;
+
+            var lines = grid.RiverCenterlinesCellSpace;
+            if (lines == null || lines.Count == 0)
+            {
+                // Fallback: sin centerlines, degradar a un segmento por componente conectado.
+                int w = grid.Width;
+                int h = grid.Height;
+                var seen = new bool[w, h];
+                var q = new Queue<Vector2Int>();
+                for (int z = 0; z < h; z++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        if (seen[x, z] || !IsRiverAt(grid, x, z))
+                            continue;
+                        var path = new List<Vector2Int>();
+                        bool touchesLake = false;
+                        bool touchesEdge = false;
+                        q.Clear();
+                        q.Enqueue(new Vector2Int(x, z));
+                        seen[x, z] = true;
+                        while (q.Count > 0)
+                        {
+                            var c = q.Dequeue();
+                            path.Add(c);
+                            touchesLake |= TouchesWaterNeighbor(grid, c);
+                            touchesEdge |= IsEdgeCell(grid, c);
+                            foreach (var n in grid.Neighbors4(c))
+                            {
+                                if (seen[n.x, n.y] || !IsRiverAt(grid, n.x, n.y))
+                                    continue;
+                                seen[n.x, n.y] = true;
+                                q.Enqueue(n);
+                            }
+                        }
+                        if (path.Count >= 2)
+                        {
+                            segments.Add(new RiverSegment
+                            {
+                                segmentId = segments.Count,
+                                cells = path,
+                                touchesLake = touchesLake,
+                                touchesEdge = touchesEdge,
+                                hasJunction = false
+                            });
+                        }
+                    }
+                }
+                return segments;
+            }
+
+            var cellOwners = new Dictionary<Vector2Int, List<int>>(256);
+            for (int li = 0; li < lines.Count; li++)
+            {
+                var line = lines[li];
+                if (line == null || line.Count == 0)
+                    continue;
+                for (int i = 0; i < line.Count; i++)
+                {
+                    Vector2 p = line[i];
+                    var c = new Vector2Int(Mathf.FloorToInt(p.x), Mathf.FloorToInt(p.y));
+                    if (!grid.InBoundsCell(c))
+                        continue;
+                    if (!cellOwners.TryGetValue(c, out var list))
+                    {
+                        list = new List<int>(4);
+                        cellOwners[c] = list;
+                    }
+                    if (!list.Contains(li))
+                        list.Add(li);
+                }
+            }
+
+            foreach (var kv in cellOwners)
+            {
+                if (kv.Value != null && kv.Value.Count >= 2)
+                    junctionNodes.Add(kv.Key);
+            }
+
+            int maxSegLen = config != null ? Mathf.Clamp(config.riverFordMaxSegmentLengthCells, 8, 512) : 80;
+            int minSubLen = config != null ? Mathf.Clamp(config.riverFordMinSubSegmentLengthCells, 2, 256) : 20;
+            // Corte por lago solo si el contacto es persistente en la centerline (evita 1 celda aislada).
+            const int LakeCutMinRun = 3;
+
+            for (int li = 0; li < lines.Count; li++)
+            {
+                var line = lines[li];
+                if (line == null || line.Count < 2)
+                    continue;
+
+                var cells = new List<Vector2Int>(line.Count);
+                Vector2Int last = new Vector2Int(int.MinValue, int.MinValue);
+                for (int i = 0; i < line.Count; i++)
+                {
+                    Vector2 p = line[i];
+                    var c = new Vector2Int(Mathf.FloorToInt(p.x), Mathf.FloorToInt(p.y));
+                    if (!grid.InBoundsCell(c))
+                        continue;
+                    if (c == last)
+                        continue;
+                    cells.Add(c);
+                    last = c;
+                }
+
+                if (cells.Count < 2)
+                    continue;
+
+                // Subsegmentación: cortes por junction/lago/borde, cambio de dirección fuerte, y longitud máxima.
+                // IMPORTANTE: NO cortamos por ángulo local (zigzag de grilla crea falsos cortes).
+
+                var cut = new bool[cells.Count];
+                // Cortes en extremos siempre.
+                cut[0] = true;
+                cut[cells.Count - 1] = true;
+
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    if (junctionNodes.Contains(cells[i]))
+                        cut[i] = true;
+                }
+
+                // Corte por borde de mapa (además del edgePad de candidatos).
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    if (IsEdgeCell(grid, cells[i]))
+                        cut[i] = true;
+                }
+
+                // Corte por lago persistente: si hay un run de >=LakeCutMinRun celdas tocando Water,
+                // cortamos al inicio del run y al final (para aislar la zona cercana al lago).
+                int runStart = -1;
+                int runLen = 0;
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    bool t = TouchesWaterNeighbor(grid, cells[i]);
+                    if (t)
+                    {
+                        if (runLen == 0) runStart = i;
+                        runLen++;
+                    }
+                    else
+                    {
+                        if (runLen >= LakeCutMinRun && runStart >= 0)
+                        {
+                            cut[runStart] = true;
+                            cut[i - 1] = true;
+                        }
+                        runStart = -1;
+                        runLen = 0;
+                    }
+                }
+                if (runLen >= LakeCutMinRun && runStart >= 0)
+                {
+                    cut[runStart] = true;
+                    cut[cells.Count - 1] = true;
+                }
+
+                int currentLen = 1;
+                for (int i = 1; i < cells.Count; i++)
+                {
+                    currentLen++;
+                    if (currentLen >= maxSegLen)
+                    {
+                        cut[i] = true;
+                        currentLen = 1;
+                    }
+                }
+
+                int start = 0;
+                for (int i = 1; i < cells.Count; i++)
+                {
+                    if (!cut[i])
+                        continue;
+                    int end = i;
+                    int len = end - start + 1;
+                    if (len >= minSubLen)
+                    {
+                        var sub = new List<Vector2Int>(len);
+                        bool touchesLake = false;
+                        bool touchesEdge = false;
+                        bool hasJunction = false;
+                        for (int k = start; k <= end; k++)
+                        {
+                            var c = cells[k];
+                            sub.Add(c);
+                            touchesLake |= TouchesWaterNeighbor(grid, c);
+                            touchesEdge |= IsEdgeCell(grid, c);
+                            if (junctionNodes.Contains(c))
+                                hasJunction = true;
+                        }
+
+                        endpointNodes.Add(sub[0]);
+                        endpointNodes.Add(sub[sub.Count - 1]);
+                        segments.Add(new RiverSegment
+                        {
+                            segmentId = segments.Count,
+                            cells = sub,
+                            touchesLake = touchesLake,
+                            touchesEdge = touchesEdge,
+                            hasJunction = hasJunction
+                        });
+                    }
+                    start = i;
+                }
+            }
+
+            return segments;
+        }
+
+        /// <summary>
+        /// Intenta marcar un corredor <c>riverFord</c> continuo entre dos orillas Land walkables.
+        /// Prueba varios ejes (cardinales y diagonales); restringe a la componente 4-vecinos que contiene el centro
+        /// y exige contacto con tierra a ambos lados del eje transversal.
+        /// </summary>
+        public static bool TryApplyBankToBankFordCorridor(
+            GridSystem grid,
+            MapGenConfig config,
+            Vector2Int center,
+            HashSet<Vector2Int> globalMarked,
+            Vector2Int? preferredTransverseDirPos,
+            out string rejectReason)
+        {
+            return TryApplyBankToBankFordCorridor(
+                grid,
+                config,
+                center,
+                globalMarked,
+                preferredTransverseDirPos,
+                out rejectReason,
+                out _,
+                out _,
+                true);
+        }
+
+        public static bool TryApplyBankToBankFordCorridor(
+            GridSystem grid,
+            MapGenConfig config,
+            Vector2Int center,
+            HashSet<Vector2Int> globalMarked,
+            Vector2Int? preferredTransverseDirPos,
+            out string rejectReason,
+            out Vector2Int rejectAxis,
+            bool applyChanges)
+        {
+            return TryApplyBankToBankFordCorridor(
+                grid,
+                config,
+                center,
+                globalMarked,
+                preferredTransverseDirPos,
+                out rejectReason,
+                out rejectAxis,
+                out _,
+                applyChanges);
+        }
+
+        public static bool TryApplyBankToBankFordCorridor(
+            GridSystem grid,
+            MapGenConfig config,
+            Vector2Int center,
+            HashSet<Vector2Int> globalMarked,
+            Vector2Int? preferredTransverseDirPos,
+            out string rejectReason,
+            out Vector2Int rejectAxis,
+            out int corridorLength,
+            bool applyChanges)
+        {
+            rejectReason = null;
+            rejectAxis = Vector2Int.zero;
+            corridorLength = 0;
+            if (grid == null || config == null)
+            {
+                rejectReason = "null_grid_config";
+                return false;
+            }
+
+            if (!grid.InBoundsCell(center.x, center.y))
+            {
+                rejectReason = "oob_center";
+                return false;
+            }
+
+            if (grid.GetCell(center.x, center.y).type != CellType.River)
+            {
+                rejectReason = "not_river";
+                return false;
+            }
+
+            int bankSearch = Mathf.Clamp(config.riverCrossingBankSearchCells, 4, 20);
+            int halfWidth = Mathf.Max(1, config.riverCrossingFunctionalHalfWidthCells);
+            bool dbg = config.riverCrossingCorridorDebugLogs;
+
+            bool IsRiverCell(int x, int z) => grid.InBoundsCell(x, z) && grid.GetCell(x, z).type == CellType.River;
+            bool IsValidBank(int x, int z)
+            {
+                if (!grid.InBoundsCell(x, z))
+                    return false;
+                var c = grid.GetCell(x, z);
+                if (c.type == CellType.Water || c.type == CellType.River || c.riverFord)
+                    return false;
+                return c.walkable;
+            }
+
+            var axisTryOrder = new List<Vector2Int>(8);
+            void AddAxisUnique(Vector2Int ax)
+            {
+                if (ax.x == 0 && ax.y == 0)
+                    return;
+                for (int i = 0; i < axisTryOrder.Count; i++)
+                {
+                    if (axisTryOrder[i].x == ax.x && axisTryOrder[i].y == ax.y)
+                        return;
+                }
+
+                axisTryOrder.Add(ax);
+            }
+
+            if (preferredTransverseDirPos.HasValue)
+                AddAxisUnique(preferredTransverseDirPos.Value);
+            for (int i = 0; i < CrossingBankSearchAxes.Length; i++)
+                AddAxisUnique(CrossingBankSearchAxes[i]);
+
+            bool TryPaintForAxis(Vector2Int dirPos, out string axisRej, out int paintedCount, out bool hasLandA, out bool hasLandB)
+            {
+                axisRej = null;
+                paintedCount = 0;
+                hasLandA = false;
+                hasLandB = false;
+                var dirNeg = new Vector2Int(-dirPos.x, -dirPos.y);
+
+                var lineCells = new List<Vector2Int> { center };
+                bool posBankFound = false;
+                bool negBankFound = false;
+
+                for (int s = 1; s <= bankSearch; s++)
+                {
+                    int x = center.x + dirPos.x * s;
+                    int z = center.y + dirPos.y * s;
+                    if (!grid.InBoundsCell(x, z))
+                        break;
+                    if (IsRiverCell(x, z))
+                    {
+                        lineCells.Add(new Vector2Int(x, z));
+                        continue;
+                    }
+
+                    posBankFound = IsValidBank(x, z);
+                    break;
+                }
+
+                for (int s = 1; s <= bankSearch; s++)
+                {
+                    int x = center.x + dirNeg.x * s;
+                    int z = center.y + dirNeg.y * s;
+                    if (!grid.InBoundsCell(x, z))
+                        break;
+                    if (IsRiverCell(x, z))
+                    {
+                        lineCells.Add(new Vector2Int(x, z));
+                        continue;
+                    }
+
+                    negBankFound = IsValidBank(x, z);
+                    break;
+                }
+
+                if (!posBankFound || !negBankFound)
+                {
+                    axisRej = "no_opposite_banks";
+                    return false;
+                }
+
+                var dirTan = new Vector2Int(-dirPos.y, dirPos.x);
+                var toPaint = new HashSet<Vector2Int>();
+                var spineUnique = new HashSet<Vector2Int>();
+                for (int i = 0; i < lineCells.Count; i++)
+                {
+                    spineUnique.Add(lineCells[i]);
+                }
+
+                foreach (var lc in spineUnique)
+                {
+                    for (int o = -halfWidth; o <= halfWidth; o++)
+                    {
+                        int x = lc.x + dirTan.x * o;
+                        int z = lc.y + dirTan.y * o;
+                        if (!IsRiverCell(x, z))
+                            continue;
+                        toPaint.Add(new Vector2Int(x, z));
+                    }
+                }
+
+                if (toPaint.Count == 0)
+                {
+                    axisRej = "empty_corridor";
+                    return false;
+                }
+
+                var reached = new HashSet<Vector2Int>();
+                var qq = new Queue<Vector2Int>();
+                if (!toPaint.Contains(center))
+                {
+                    axisRej = "center_not_in_slab";
+                    return false;
+                }
+
+                qq.Enqueue(center);
+                reached.Add(center);
+                while (qq.Count > 0)
+                {
+                    var p = qq.Dequeue();
+                    foreach (var n in grid.Neighbors4(p.x, p.y))
+                    {
+                        if (!toPaint.Contains(n) || reached.Contains(n))
+                            continue;
+                        reached.Add(n);
+                        qq.Enqueue(n);
+                    }
+                }
+
+                if (reached.Count < toPaint.Count)
+                    toPaint = reached;
+
+                int minFordCells = Mathf.Clamp(config.riverFordMinWalkableBlobCells, 2, 48);
+                if (toPaint.Count < minFordCells)
+                {
+                    axisRej = "corridor_too_few_cells";
+                    return false;
+                }
+
+                foreach (var fc in toPaint)
+                {
+                    foreach (var n in grid.Neighbors4(fc.x, fc.y))
+                    {
+                        if (toPaint.Contains(n))
+                            continue;
+                        if (!IsValidBank(n.x, n.y))
+                            continue;
+                        int vx = n.x - center.x;
+                        int vy = n.y - center.y;
+                        int dot = vx * dirPos.x + vy * dirPos.y;
+                        if (dot > 0)
+                            hasLandA = true;
+                        else if (dot < 0)
+                            hasLandB = true;
+                        else
+                        {
+                            int dotT = vx * dirTan.x + vy * dirTan.y;
+                            if (dotT >= 0)
+                                hasLandA = true;
+                            else
+                                hasLandB = true;
+                        }
+                    }
+                }
+
+                if (!hasLandA || !hasLandB)
+                {
+                    axisRej = "land_not_both_sides";
+                    return false;
+                }
+
+                if (applyChanges)
+                {
+                    foreach (var cc in toPaint)
+                    {
+                        ref var cell = ref grid.GetCell(cc.x, cc.y);
+                        cell.riverFord = true;
+                        cell.walkable = true;
+                        cell.buildable = false;
+                        cell.waterTraverse = WaterTraverseMode.FordShallow;
+                        globalMarked?.Add(cc);
+                    }
+                }
+
+                paintedCount = toPaint.Count;
+                return true;
+            }
+
+            for (int ai = 0; ai < axisTryOrder.Count; ai++)
+            {
+                Vector2Int dirPos = axisTryOrder[ai];
+                rejectAxis = dirPos;
+                if (TryPaintForAxis(dirPos, out string axisRej, out int len, out bool ha, out bool hb))
+                {
+                    corridorLength = len;
+                    if (dbg)
+                        Debug.Log(
+                            $"[RiverFordCorridor] center={center} axis={dirPos} len={len} hasLandA={ha} hasLandB={hb}");
+                    return true;
+                }
+
+                rejectReason = axisRej ?? "axis_failed";
+            }
+
+            if (string.IsNullOrEmpty(rejectReason))
+                rejectReason = "all_axes_failed";
+            if (dbg)
+                Debug.Log($"[RiverFordCorridor] REJECT center={center} reason={rejectReason}");
+            return false;
+        }
+
+        private static void ApplyFunctionalFordsFromCrossingCells(
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2Int> pickedCells,
+            Transform parent,
+            float waterY,
+            float cellSize)
+        {
+            if (grid == null || config == null || pickedCells == null || pickedCells.Count == 0)
+                return;
+            if (!config.enableFunctionalRiverFords || !config.useCrossingAssetFords)
+                return;
+
+            int halfWidth = Mathf.Max(1, config.riverCrossingFunctionalHalfWidthCells);
+            int bankSearch = Mathf.Clamp(config.riverCrossingBankSearchCells, 4, 20);
+            var marked = new HashSet<Vector2Int>();
+            var failedCenters = new List<Vector2Int>(pickedCells.Count);
+            int createdCorridors = 0;
+
+            bool IsRiverCell(int x, int z) => grid.InBoundsCell(x, z) && grid.GetCell(x, z).type == CellType.River;
+
+            for (int i = 0; i < pickedCells.Count; i++)
+            {
+                var p = pickedCells[i];
+                int thX = 1;
+                for (int x = p.x - 1; x >= 0 && IsRiverCell(x, p.y); x--) thX++;
+                for (int x = p.x + 1; x < grid.Width && IsRiverCell(x, p.y); x++) thX++;
+                int thZ = 1;
+                for (int z = p.y - 1; z >= 0 && IsRiverCell(p.x, z); z--) thZ++;
+                for (int z = p.y + 1; z < grid.Height && IsRiverCell(p.x, z); z++) thZ++;
+
+                Vector2Int preferred = thX <= thZ ? Vector2Int.right : Vector2Int.up;
+                if (TryApplyBankToBankFordCorridor(grid, config, p, marked, preferred, out _))
+                    createdCorridors++;
+                else
+                    failedCenters.Add(p);
+            }
+
+            if (config.riverCrossingDebugVisuals)
+                BuildCrossingDebugCubes(parent, marked, failedCenters, grid, waterY, cellSize);
+
+            if (marked.Count > 0)
+                Debug.Log($"[RiverFord] source=crossing-assets created={createdCorridors} cells={marked.Count} radius={halfWidth}");
+            Debug.Log($"[RiverFordCorridor] created={createdCorridors} cells={marked.Count} failed={failedCenters.Count} width={halfWidth} bankSearch={bankSearch}");
+        }
+
+        private static void BuildCrossingDebugCubes(
+            Transform parent,
+            HashSet<Vector2Int> markedFordCells,
+            List<Vector2Int> failedCenters,
+            GridSystem grid,
+            float waterY,
+            float cellSize)
+        {
+            DebugRiverFordFootprintCentersWorld.Clear();
+            DebugRiverFordFootprintSizesWorld.Clear();
+            DebugRiverFordFailedCenterPositionsWorld.Clear();
+
+            if (grid == null)
+                return;
+
+            // Limpia meshes legacy de builds anteriores (sin crear geometría nueva).
+            if (parent != null)
+            {
+                for (int i = parent.childCount - 1; i >= 0; i--)
+                {
+                    var ch = parent.GetChild(i);
+                    if (ch != null && ch.name.StartsWith("DEBUG_RiverFord"))
+                    {
+                        if (Application.isPlaying) Object.Destroy(ch.gameObject);
+                        else Object.DestroyImmediate(ch.gameObject);
+                    }
+                }
+            }
+
+            if (markedFordCells == null || markedFordCells.Count == 0)
+            {
+                if (failedCenters != null)
+                {
+                    for (int fi = 0; fi < failedCenters.Count; fi++)
+                    {
+                        var fc = failedCenters[fi];
+                        Vector3 w = grid.CellToWorldCenter(fc);
+                        DebugRiverFordFailedCenterPositionsWorld.Add(new Vector3(w.x, waterY, w.z));
+                    }
+                }
+
+                return;
+            }
+
+            float thinY = Mathf.Max(0.08f, cellSize * 0.14f);
+            var remaining = new HashSet<Vector2Int>(markedFordCells);
+            var q = new Queue<Vector2Int>();
+
+            while (remaining.Count > 0)
+            {
+                Vector2Int start = default;
+                foreach (var p in remaining)
+                {
+                    start = p;
+                    break;
+                }
+
+                var blob = new HashSet<Vector2Int>();
+                q.Clear();
+                q.Enqueue(start);
+                while (q.Count > 0)
+                {
+                    var c = q.Dequeue();
+                    if (!remaining.Contains(c))
+                        continue;
+                    remaining.Remove(c);
+                    blob.Add(c);
+                    foreach (var n in grid.Neighbors4(c))
+                    {
+                        if (remaining.Contains(n))
+                            q.Enqueue(n);
+                    }
+                }
+
+                int minX = int.MaxValue, maxX = int.MinValue, minZ = int.MaxValue, maxZ = int.MinValue;
+                foreach (var c in blob)
+                {
+                    minX = Mathf.Min(minX, c.x);
+                    maxX = Mathf.Max(maxX, c.x);
+                    minZ = Mathf.Min(minZ, c.y);
+                    maxZ = Mathf.Max(maxZ, c.y);
+                }
+
+                float width = (maxX - minX + 1) * cellSize * 0.96f;
+                float depth = (maxZ - minZ + 1) * cellSize * 0.96f;
+                float cx = grid.Origin.x + (minX + maxX + 1) * 0.5f * cellSize;
+                float cz = grid.Origin.z + (minZ + maxZ + 1) * 0.5f * cellSize;
+
+                DebugRiverFordFootprintCentersWorld.Add(new Vector3(cx, waterY + 0.55f, cz));
+                DebugRiverFordFootprintSizesWorld.Add(new Vector3(width, thinY, depth));
+            }
+
+            if (failedCenters != null)
+            {
+                for (int fi = 0; fi < failedCenters.Count; fi++)
+                {
+                    var fc = failedCenters[fi];
+                    Vector3 w = grid.CellToWorldCenter(fc);
+                    DebugRiverFordFailedCenterPositionsWorld.Add(new Vector3(w.x, waterY, w.z));
+                }
+            }
+        }
+
+        private static List<GameObject> CollectCrossingDecorationPrefabs(MapGenConfig config)
+        {
+            var list = new List<GameObject>(8);
+            if (config == null)
+                return list;
+
+            if (config.waterCrossingDecorationPrefabs != null)
+            {
+                for (int i = 0; i < config.waterCrossingDecorationPrefabs.Length; i++)
+                {
+                    var p = config.waterCrossingDecorationPrefabs[i];
+                    if (p != null) list.Add(p);
+                }
+            }
+
+            if (list.Count == 0 && config.waterCrossingDecorationPrefab != null)
+                list.Add(config.waterCrossingDecorationPrefab);
+
+            return list;
+        }
+
+        /// <summary>
+        /// Revoca riverFord en componentes conexos demasiado pequeños (fantasmas de 1–2 celdas que permitían cruzar).
+        /// </summary>
+        private static void StripRiverFordBlobsSmallerThan(GridSystem grid, MapGenConfig config)
+        {
+            if (grid == null || config == null)
+                return;
+            int minCells = Mathf.Clamp(config.riverFordMinWalkableBlobCells, 2, 48);
+
+            var unassigned = new HashSet<Vector2Int>();
+            for (int z = 0; z < grid.Height; z++)
+            {
+                for (int x = 0; x < grid.Width; x++)
+                {
+                    ref var cd = ref grid.GetCell(x, z);
+                    if (cd.type == CellType.River && cd.riverFord)
+                        unassigned.Add(new Vector2Int(x, z));
+                }
+            }
+
+            if (unassigned.Count == 0)
+                return;
+
+            var q = new Queue<Vector2Int>();
+            var blob = new List<Vector2Int>(32);
+
+            while (unassigned.Count > 0)
+            {
+                Vector2Int seedCell = default;
+                foreach (var p in unassigned)
+                {
+                    seedCell = p;
+                    break;
+                }
+
+                blob.Clear();
+                q.Clear();
+                q.Enqueue(seedCell);
+                unassigned.Remove(seedCell);
+
+                while (q.Count > 0)
+                {
+                    var c = q.Dequeue();
+                    blob.Add(c);
+                    foreach (var n in grid.Neighbors4(c))
+                    {
+                        if (!unassigned.Contains(n))
+                            continue;
+                        ref var cd = ref grid.GetCell(n.x, n.y);
+                        if (cd.type != CellType.River || !cd.riverFord)
+                            continue;
+                        unassigned.Remove(n);
+                        q.Enqueue(n);
+                    }
+                }
+
+                if (blob.Count >= minCells)
+                    continue;
+
+                for (int i = 0; i < blob.Count; i++)
+                {
+                    var c = blob[i];
+                    ref var cell = ref grid.GetCell(c.x, c.y);
+                    cell.riverFord = false;
+                    cell.walkable = false;
+                    cell.buildable = false;
+                    cell.waterTraverse = WaterTraverseMode.SwimNavigable;
+                }
+            }
+        }
+
+        /// <summary>Hash determinista para dispersión de props de vado (sin System.Random).</summary>
+        private static uint FordDecorHash(int seed, int blobKey, int index)
+        {
+            unchecked
+            {
+                uint x = (uint)seed;
+                x ^= (uint)blobKey * 2246822519u;
+                x ^= (uint)index * 3266489917u;
+                x ^= x >> 16;
+                x *= 2654435761u;
+                x ^= x >> 13;
+                return x;
+            }
+        }
+
+        /// <summary>
+        /// Rellena matrices de decoración por cada mancha conexa de celdas River+riverFord en el grid.
+        /// Varias piedras por vado, aleatorias pero deterministas por seed, dentro del rectángulo que envuelve la mancha.
+        /// </summary>
+        private static void ScatterRiverFordDecorationFromGrid(
+            GridSystem grid,
+            MapGenConfig config,
+            float waterY,
+            float cellSize,
+            List<GameObject> crossingPrefabs,
+            Dictionary<GameObject, List<Matrix4x4>> crossingMatsByPrefab)
+        {
+            if (grid == null || config == null)
+                return;
+
+            bool hasPrefabs = crossingPrefabs != null && crossingPrefabs.Count > 0;
+
+            var unassigned = new HashSet<Vector2Int>();
+            for (int z = 0; z < grid.Height; z++)
+            {
+                for (int x = 0; x < grid.Width; x++)
+                {
+                    ref var cd = ref grid.GetCell(x, z);
+                    if (cd.type == CellType.River && cd.riverFord)
+                        unassigned.Add(new Vector2Int(x, z));
+                }
+            }
+
+            if (unassigned.Count == 0)
+                return;
+
+            float yOff = Mathf.Max(0f, config.riverCrossingDecorYOffset);
+            var q = new Queue<Vector2Int>();
+            var blob = new List<Vector2Int>(64);
+
+            while (unassigned.Count > 0)
+            {
+                Vector2Int seedCell = default;
+                foreach (var p in unassigned)
+                {
+                    seedCell = p;
+                    break;
+                }
+
+                blob.Clear();
+                q.Clear();
+                q.Enqueue(seedCell);
+                unassigned.Remove(seedCell);
+
+                while (q.Count > 0)
+                {
+                    var c = q.Dequeue();
+                    blob.Add(c);
+                    foreach (var n in grid.Neighbors4(c))
+                    {
+                        if (!unassigned.Contains(n))
+                            continue;
+                        ref var cd = ref grid.GetCell(n.x, n.y);
+                        if (cd.type != CellType.River || !cd.riverFord)
+                            continue;
+                        unassigned.Remove(n);
+                        q.Enqueue(n);
+                    }
+                }
+
+                int minX = int.MaxValue, maxX = int.MinValue, minZ = int.MaxValue, maxZ = int.MinValue;
+                float cxSum = 0f, czSum = 0f;
+                foreach (var c in blob)
+                {
+                    minX = Mathf.Min(minX, c.x);
+                    maxX = Mathf.Max(maxX, c.x);
+                    minZ = Mathf.Min(minZ, c.y);
+                    maxZ = Mathf.Max(maxZ, c.y);
+                    cxSum += c.x + 0.5f;
+                    czSum += c.y + 0.5f;
+                }
+
+                int gw = maxX - minX + 1;
+                int gh = maxZ - minZ + 1;
+                int bboxAreaCells = gw * gh;
+
+                int stoneCount;
+                if (blob.Count <= 1)
+                    stoneCount = 1;
+                else if (blob.Count <= 3)
+                    stoneCount = 2;
+                else
+                {
+                    // Mezcla blob + caja envolvente: reparte mejor en vados anchos/largos (un solo tipo de prefab también se ve lleno).
+                    float est = blob.Count * 0.38f + bboxAreaCells * 0.17f;
+                    stoneCount = Mathf.RoundToInt(est);
+                    stoneCount = Mathf.Clamp(stoneCount, 4, 56);
+                    stoneCount = Mathf.Max(stoneCount, Mathf.Min(blob.Count, 8));
+                }
+
+                Vector3 centroid = new Vector3(
+                    grid.Origin.x + (cxSum / blob.Count) * cellSize,
+                    waterY + yOff,
+                    grid.Origin.z + (czSum / blob.Count) * cellSize);
+                DebugWaterCrossingPositionsWorld.Add(centroid);
+
+                if (!hasPrefabs)
+                    continue;
+
+                float margin = cellSize * 0.06f;
+                float wx0 = grid.Origin.x + minX * cellSize + margin;
+                float wx1 = grid.Origin.x + (maxX + 1) * cellSize - margin;
+                float wz0 = grid.Origin.z + minZ * cellSize + margin;
+                float wz1 = grid.Origin.z + (maxZ + 1) * cellSize - margin;
+                if (wx1 <= wx0)
+                {
+                    float mid = (wx0 + wx1) * 0.5f;
+                    wx0 = mid - cellSize * 0.25f;
+                    wx1 = mid + cellSize * 0.25f;
+                }
+
+                if (wz1 <= wz0)
+                {
+                    float mid = (wz0 + wz1) * 0.5f;
+                    wz0 = mid - cellSize * 0.25f;
+                    wz1 = mid + cellSize * 0.25f;
+                }
+
+                int blobKey = blob[0].x ^ (blob[0].y << 16) ^ (config.seed * 31);
+
+                // Rejilla estratificada + jitter: cubre todo el rect sin amontonar en el centro.
+                int slots = stoneCount;
+                int cols = Mathf.Max(1, Mathf.RoundToInt(Mathf.Sqrt(slots * (float)gw / Mathf.Max(1, gh))));
+                int rows = Mathf.Max(1, Mathf.CeilToInt(slots / (float)cols));
+                while (cols * rows < slots)
+                    cols++;
+
+                int prefabCount = Mathf.Max(1, crossingPrefabs.Count);
+                for (int i = 0; i < slots; i++)
+                {
+                    int ix = i % cols;
+                    int iz = i / cols;
+                    float u0 = ix / (float)cols;
+                    float u1 = (ix + 1f) / cols;
+                    float v0 = iz / (float)rows;
+                    float v1 = (iz + 1f) / rows;
+
+                    uint h = FordDecorHash(config.seed, blobKey, i ^ (ix * 31337) ^ (iz * 7919));
+                    float ju = ((h & 1023) / 1024f) * 0.88f + 0.06f;
+                    float jv = (((h >> 10) & 1023) / 1024f) * 0.88f + 0.06f;
+                    float u = Mathf.Lerp(u0, u1, ju);
+                    float v = Mathf.Lerp(v0, v1, jv);
+                    float px = Mathf.Lerp(wx0, wx1, u);
+                    float pz = Mathf.Lerp(wz0, wz1, v);
+                    float yaw = ((h >> 8) & 255) / 255f * 360f;
+                    float sc = 0.82f + ((h >> 24) & 63) / 63f * 0.35f;
+                    int prefabIndex = (int)(h % (uint)prefabCount);
+                    var prefab = crossingPrefabs[prefabIndex];
+                    if (prefab == null)
+                        continue;
+                    Vector3 pos = new Vector3(px, waterY + yOff, pz);
+                    if (!crossingMatsByPrefab.TryGetValue(prefab, out var mats))
+                    {
+                        mats = new List<Matrix4x4>();
+                        crossingMatsByPrefab[prefab] = mats;
+                    }
+
+                    mats.Add(Matrix4x4.TRS(pos, Quaternion.Euler(0f, yaw, 0f), Vector3.one * sc));
+                }
+            }
+        }
+
+        private static bool IsValidCrossingBankCell(GridSystem grid, int x, int z)
+        {
+            if (!grid.InBoundsCell(x, z))
+                return false;
+            var c = grid.GetCell(x, z);
+            if (c.type == CellType.Water || c.type == CellType.River || c.riverFord)
+                return false;
+            return c.walkable;
+        }
+
+        private static bool HasOppositeBanksAlongAxis(GridSystem grid, Vector2Int center, Vector2Int axis, int bankSearch)
+        {
+            bool posBank = false;
+            bool negBank = false;
+            int posRiverLen = 0;
+            int negRiverLen = 0;
+
+            for (int s = 1; s <= bankSearch; s++)
+            {
+                int x = center.x + axis.x * s;
+                int z = center.y + axis.y * s;
+                if (!grid.InBoundsCell(x, z))
+                    break;
+                if (grid.GetCell(x, z).type == CellType.River)
+                {
+                    posRiverLen++;
+                    continue;
+                }
+                posBank = IsValidCrossingBankCell(grid, x, z);
+                break;
+            }
+
+            for (int s = 1; s <= bankSearch; s++)
+            {
+                int x = center.x - axis.x * s;
+                int z = center.y - axis.y * s;
+                if (!grid.InBoundsCell(x, z))
+                    break;
+                if (grid.GetCell(x, z).type == CellType.River)
+                {
+                    negRiverLen++;
+                    continue;
+                }
+                negBank = IsValidCrossingBankCell(grid, x, z);
+                break;
+            }
+
+            // Exigir que exista cauce a ambos lados y banco válido en ambos extremos.
+            return posBank && negBank && posRiverLen > 0 && negRiverLen > 0;
+        }
+
+        /// <summary>True si la celda River puede alojar un cruce (orillas opuestas en algún eje cardinal o diagonal).</summary>
+        public static bool IsCrossingCandidatePlacementValid(GridSystem grid, Vector2Int c, int bankSearch)
+        {
+            if (!grid.InBoundsCell(c.x, c.y) || grid.GetCell(c.x, c.y).type != CellType.River)
+                return false;
+
+            // Evita instalar cruces pegados al borde del mapa.
+            int edgePad = Mathf.Max(2, bankSearch / 2);
+            if (c.x < edgePad || c.y < edgePad || c.x >= grid.Width - edgePad || c.y >= grid.Height - edgePad)
+                return false;
+
+            for (int i = 0; i < CrossingBankSearchAxes.Length; i++)
+            {
+                if (HasOppositeBanksAlongAxis(grid, c, CrossingBankSearchAxes[i], bankSearch))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Vados donde rutas lógicas atraviesan <see cref="CellType.River"/>. La verdad final es <see cref="TryApplyBankToBankFordCorridor"/>.</summary>
+        private static void BuildStrategicFordCandidatesFromPaths(
+            GridSystem grid,
+            MapGenConfig config,
+            IReadOnlyList<List<Vector2Int>> strategicPaths,
+            HashSet<Vector2Int> marked,
+            List<Vector2Int> createdCenters,
+            List<Vector2Int> failedCenters,
+            int spacing,
+            int bankSearchForSelection,
+            int maxThicknessCells,
+            int minDistConfluence,
+            ICollection<Vector2Int> junctionNodes,
+            int maxStrategic,
+            bool dbgFord,
+            ref int strategicCreated,
+            ref int roadFordRejected,
+            ref int riverCrossingRunsAccumulated,
+            ref int retrySaved)
+        {
+            if (strategicPaths == null || strategicPaths.Count == 0 || maxStrategic <= 0)
+                return;
+
+            bool FarEnough(Vector2Int c)
+            {
+                foreach (var p in createdCenters)
+                {
+                    if (Mathf.Max(Mathf.Abs(p.x - c.x), Mathf.Abs(p.y - c.y)) < spacing)
+                        return false;
+                }
+
+                return true;
+            }
+
+            int DistanceToNearestJunction(Vector2Int c)
+            {
+                if (junctionNodes == null || junctionNodes.Count == 0)
+                    return int.MaxValue;
+                int best = int.MaxValue;
+                foreach (var j in junctionNodes)
+                {
+                    int d = Mathf.Max(Mathf.Abs(c.x - j.x), Mathf.Abs(c.y - j.y));
+                    if (d < best) best = d;
+                }
+                return best;
+            }
+
+            bool TouchesLake8(Vector2Int c)
+            {
+                foreach (var n in grid.Neighbors8(c))
+                {
+                    if (grid.GetCell(n).type == CellType.Water)
+                        return true;
+                }
+                return false;
+            }
+
+            int pathId = 0;
+            foreach (var path in strategicPaths)
+            {
+                if (strategicCreated >= maxStrategic)
+                    break;
+                if (path == null || path.Count == 0)
+                {
+                    pathId++;
+                    continue;
+                }
+
+                for (int pi = 0; pi < path.Count; pi++)
+                {
+                    if (strategicCreated >= maxStrategic)
+                        break;
+                    var pc = path[pi];
+                    if (!grid.InBoundsCell(pc) || grid.GetCell(pc).type != CellType.River)
+                        continue;
+
+                    int pj = pi;
+                    while (pj < path.Count)
+                    {
+                        var pc2 = path[pj];
+                        if (!grid.InBoundsCell(pc2) || grid.GetCell(pc2).type != CellType.River)
+                            break;
+                        pj++;
+                    }
+
+                    riverCrossingRunsAccumulated++;
+                    int runLen = pj - pi;
+                    int mid = pi + runLen / 2;
+                    int crossingId = riverCrossingRunsAccumulated;
+                    pi = pj - 1;
+
+                    // En vez de probar SOLO el centro, evaluar una ventana de candidatos del mismo tramo River.
+                    // Esto mejora casos donde el centro cae en confluencia/curva/ancho y hay un punto cercano viable.
+                    var candidates = new List<Vector2Int>(10);
+
+                    // indices absolutos en path dentro del run [runStart, runEnd)
+                    int runStart = pj - runLen;
+                    int runEnd = pj;
+                    void AddIdx(int idx)
+                    {
+                        if (idx < runStart || idx >= runEnd) return;
+                        var c = path[idx];
+                        for (int k = 0; k < candidates.Count; k++)
+                            if (candidates[k] == c) return;
+                        candidates.Add(c);
+                    }
+
+                    AddIdx(mid);
+                    AddIdx(mid - 2);
+                    AddIdx(mid + 2);
+                    AddIdx(mid - 4);
+                    AddIdx(mid + 4);
+                    if (runLen >= 12)
+                    {
+                        AddIdx(runStart + runLen / 4);
+                        AddIdx(runStart + (3 * runLen) / 4);
+                    }
+
+                    // Scoring (mejor primero):
+                    // - no pegado a lago
+                    // - más lejos de confluencia
+                    // - río más delgado (menos grosor)
+                    // - spacing OK
+                    candidates.Sort((a, b) =>
+                    {
+                        bool al = TouchesLake8(a);
+                        bool bl = TouchesLake8(b);
+                        int cmp = al.CompareTo(bl); // false(0) antes que true(1)
+                        if (cmp != 0) return cmp;
+                        int ad = DistanceToNearestJunction(a);
+                        int bd = DistanceToNearestJunction(b);
+                        cmp = bd.CompareTo(ad); // más lejos primero
+                        if (cmp != 0) return cmp;
+                        int ath = EstimateRiverThicknessCells(grid, a.x, a.y);
+                        int bth = EstimateRiverThicknessCells(grid, b.x, b.y);
+                        cmp = ath.CompareTo(bth); // más delgado primero
+                        if (cmp != 0) return cmp;
+                        bool af = FarEnough(a);
+                        bool bf = FarEnough(b);
+                        cmp = bf.CompareTo(af); // true primero
+                        if (cmp != 0) return cmp;
+                        // desempate determinista
+                        cmp = a.x.CompareTo(b.x);
+                        if (cmp != 0) return cmp;
+                        return a.y.CompareTo(b.y);
+                    });
+
+                    int attempts = 0;
+                    bool success = false;
+                    string bestReason = null;
+                    Vector2Int bestCenter = default;
+                    Vector2Int bestAxis = Vector2Int.zero;
+                    int bestLen = 0;
+
+                    for (int ci = 0; ci < candidates.Count && strategicCreated < maxStrategic; ci++)
+                    {
+                        var center = candidates[ci];
+                        attempts++;
+
+                        if (!grid.InBoundsCell(center))
+                        {
+                            bestReason ??= "oob_center";
+                            continue;
+                        }
+
+                        ref var cd = ref grid.GetCell(center);
+                        if (cd.type == CellType.Water)
+                        {
+                            bestReason ??= "water_cell";
+                            continue;
+                        }
+                        if (cd.type != CellType.River)
+                        {
+                            bestReason ??= "not_river";
+                            continue;
+                        }
+
+                        // filtros rápidos (evita spam de TryApply)
+                        if (DistanceToNearestJunction(center) < minDistConfluence)
+                        {
+                            bestReason ??= "near_confluence";
+                            if (dbgFord)
+                                Debug.Log($"[RoadFordReject] pathId={pathId} crossingId={crossingId} attempt={attempts} center=({center.x},{center.y}) reason=near_confluence");
+                            continue;
+                        }
+                        int th = EstimateRiverThicknessCells(grid, center.x, center.y);
+                        if (th > maxThicknessCells)
+                        {
+                            bestReason ??= "too_thick";
+                            if (dbgFord)
+                                Debug.Log($"[RoadFordReject] pathId={pathId} crossingId={crossingId} attempt={attempts} center=({center.x},{center.y}) reason=too_thick thickness={th}");
+                            continue;
+                        }
+                        if (!IsCrossingCandidatePlacementValid(grid, center, bankSearchForSelection))
+                        {
+                            bestReason ??= "no_opposite_banks";
+                            if (dbgFord)
+                                Debug.Log($"[RoadFordReject] pathId={pathId} crossingId={crossingId} attempt={attempts} center=({center.x},{center.y}) reason=no_opposite_banks");
+                            continue;
+                        }
+
+                        if (!FarEnough(center))
+                        {
+                            bestReason ??= "too_close_spacing";
+                            if (dbgFord)
+                                Debug.Log($"[RoadFordReject] pathId={pathId} crossingId={crossingId} attempt={attempts} center=({center.x},{center.y}) reason=too_close_spacing");
+                            continue;
+                        }
+
+                        if (!TryApplyBankToBankFordCorridor(grid, config, center, null, null, out string preReason, out Vector2Int preAxis, out int preLen, false))
+                        {
+                            bestReason ??= preReason;
+                            failedCenters.Add(center);
+                            if (dbgFord)
+                                Debug.Log($"[RoadFordReject] pathId={pathId} crossingId={crossingId} attempt={attempts} center=({center.x},{center.y}) reason={preReason}");
+                            continue;
+                        }
+
+                        if (preLen > 0 && preLen < 6)
+                        {
+                            bestReason ??= "corridor_too_short";
+                            failedCenters.Add(center);
+                            if (dbgFord)
+                                Debug.Log($"[RoadFordReject] pathId={pathId} crossingId={crossingId} attempt={attempts} center=({center.x},{center.y}) reason=corridor_too_short");
+                            continue;
+                        }
+
+                        if (!TryApplyBankToBankFordCorridor(grid, config, center, marked, null, out string applyReason, out Vector2Int applyAxis, out int applyLen, true))
+                        {
+                            bestReason ??= applyReason;
+                            failedCenters.Add(center);
+                            if (dbgFord)
+                                Debug.Log($"[RoadFordReject] pathId={pathId} crossingId={crossingId} attempt={attempts} center=({center.x},{center.y}) reason={applyReason}");
+                            continue;
+                        }
+
+                        // éxito
+                        strategicCreated++;
+                        createdCenters.Add(center);
+                        success = true;
+                        bestCenter = center;
+                        bestAxis = applyAxis;
+                        bestLen = applyLen;
+                        if (attempts > 1) retrySaved++;
+                        if (dbgFord)
+                            Debug.Log($"[RoadFordCreated] pathId={pathId} crossingId={crossingId} center=({center.x},{center.y}) len={applyLen} axis=({applyAxis.x},{applyAxis.y})");
+                        break;
+                    }
+
+                    if (!success)
+                    {
+                        roadFordRejected++;
+                        if (dbgFord)
+                            Debug.Log($"[RoadFordRetry] pathId={pathId} crossingId={crossingId} attempts={attempts} success=False bestReason={bestReason}");
+                    }
+                    else
+                    {
+                        if (dbgFord)
+                            Debug.Log($"[RoadFordRetry] pathId={pathId} crossingId={crossingId} attempts={attempts} success=True bestReason=ok center=({bestCenter.x},{bestCenter.y}) axis=({bestAxis.x},{bestAxis.y}) len={bestLen}");
+                    }
+                }
+
+                pathId++;
+            }
+        }
+
+        /// <summary>
+        /// MandatoryRiverFordsByCenterline: regla principal.
+        /// Cada centerline apta debe intentar crear ≥1 vado funcional (bank-to-bank vía <see cref="TryApplyBankToBankFordCorridor"/>).
+        /// </summary>
+        private static void MandatoryRiverFordsByCenterline(
+            GridSystem grid,
+            MapGenConfig config,
+            HashSet<Vector2Int> marked,
+            List<Vector2Int> createdCenters,
+            int bankSearchForSelection,
+            bool dbgFord,
+            ref int mandatoryCreated,
+            out int aptMandatoryRiverCount)
+        {
+            aptMandatoryRiverCount = 0;
+            if (grid == null || config == null)
+                return;
+            var lines = grid.RiverCenterlinesCellSpace;
+            if (lines == null || lines.Count == 0)
+                return;
+
+            int maxPerRiver = Mathf.Clamp(config.riverCrossingMaxMandatoryPerRiver, 0, 2);
+            if (maxPerRiver <= 0)
+                return;
+
+            int centerlines = lines.Count;
+            int mandatorySpacing = Mathf.Clamp(config.mandatoryRiverFordMinSpacing, 0, 24);
+
+            if (dbgFord)
+                Debug.Log($"[RiverCoverageStart] centerlines={centerlines} maxPerRiver={maxPerRiver} mandatorySpacing={mandatorySpacing}");
+
+            bool TrySnapRiverCell(Vector2Int approx, out Vector2Int snapped)
+            {
+                // Buscar River cercano en radio 0..3 (anillos), orden determinista.
+                if (grid.InBoundsCell(approx) && grid.GetCell(approx).type == CellType.River)
+                {
+                    snapped = approx;
+                    return true;
+                }
+                for (int r = 1; r <= 3; r++)
+                {
+                    for (int dx = -r; dx <= r; dx++)
+                    for (int dz = -r; dz <= r; dz++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) != r)
+                            continue;
+                        var c = new Vector2Int(approx.x + dx, approx.y + dz);
+                        if (!grid.InBoundsCell(c))
+                            continue;
+                        if (grid.GetCell(c).type == CellType.River)
+                        {
+                            snapped = c;
+                            return true;
+                        }
+                    }
+                }
+                snapped = default;
+                return false;
+            }
+
+            // Crea un orden pseudoaleatorio determinista para índices (barrido) sin RNG global.
+            int HashIndex(int seed, int riverId, int idx)
+            {
+                unchecked
+                {
+                    int h = seed;
+                    h = h * 486187739 + riverId * 16777619;
+                    h = h * 486187739 + idx * 73856093;
+                    return h;
+                }
+            }
+
+            for (int riverId = 0; riverId < centerlines; riverId++)
+            {
+                var line = lines[riverId];
+                int rawPoints = line != null ? line.Count : 0;
+                if (line == null || line.Count < 2)
+                {
+                    if (dbgFord)
+                        Debug.Log($"[RiverCoverageMissing] riverId={riverId} reason=centerline_empty attempts=0 bestReason=centerline_empty");
+                    continue;
+                }
+
+                // Snap Vector2 → Vector2Int aproximado + buscar River cercano (0..3).
+                var snappedRiverCells = new List<Vector2Int>(line.Count);
+                var seen = new HashSet<Vector2Int>();
+                for (int i = 0; i < line.Count; i++)
+                {
+                    int ax = Mathf.Clamp(Mathf.RoundToInt(line[i].x), 0, grid.Width - 1);
+                    int az = Mathf.Clamp(Mathf.RoundToInt(line[i].y), 0, grid.Height - 1);
+                    var approx = new Vector2Int(ax, az);
+                    if (!TrySnapRiverCell(approx, out var snap))
+                        continue;
+                    if (seen.Contains(snap))
+                        continue;
+                    seen.Add(snap);
+                    snappedRiverCells.Add(snap);
+                }
+
+                bool apt = snappedRiverCells.Count >= 6;
+                if (apt)
+                    aptMandatoryRiverCount++;
+                bool coveredBefore = false;
+                if (apt)
+                {
+                    // Cobertura: si cualquier createdCenter está a <=3 de cualquier celda snap.
+                    for (int i = 0; i < createdCenters.Count && !coveredBefore; i++)
+                    {
+                        var cc = createdCenters[i];
+                        for (int j = 0; j < snappedRiverCells.Count; j++)
+                        {
+                            var rc = snappedRiverCells[j];
+                            if (Mathf.Max(Mathf.Abs(cc.x - rc.x), Mathf.Abs(cc.y - rc.y)) <= 3)
+                            {
+                                coveredBefore = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (dbgFord)
+                    Debug.Log($"[RiverCoverageLine] riverId={riverId} rawPoints={rawPoints} snappedRiverCells={snappedRiverCells.Count} coveredBefore={coveredBefore}");
+
+                if (!apt)
+                {
+                    if (dbgFord)
+                        Debug.Log($"[RiverCoverageMissing] riverId={riverId} reason=no_enough_river_cells attempts=0 bestReason=no_enough_river_cells");
+                    continue;
+                }
+                if (coveredBefore)
+                    continue;
+
+                int createdForThisRiver = 0;
+                // Candidatos: 50/33/66/25/75 + barrido cada 5 con orden pseudoaleatorio determinista.
+                var idxs = new List<int>(64);
+                void AddIdx(int idx)
+                {
+                    idx = Mathf.Clamp(idx, 0, snappedRiverCells.Count - 1);
+                    for (int k = 0; k < idxs.Count; k++) if (idxs[k] == idx) return;
+                    idxs.Add(idx);
+                }
+                AddIdx(snappedRiverCells.Count / 2);
+                AddIdx((snappedRiverCells.Count * 1) / 3);
+                AddIdx((snappedRiverCells.Count * 2) / 3);
+                AddIdx(snappedRiverCells.Count / 4);
+                AddIdx((snappedRiverCells.Count * 3) / 4);
+
+                int edgeSkip = 3;
+                for (int i = edgeSkip; i < snappedRiverCells.Count - edgeSkip; i += 5)
+                    AddIdx(i);
+
+                // Dejar los “fijos” primero; pseudoaleatorio solo para el barrido (los que no son top 5).
+                if (idxs.Count > 5)
+                {
+                    var sweep = new List<int>(idxs.Count - 5);
+                    for (int i = 5; i < idxs.Count; i++) sweep.Add(idxs[i]);
+                    sweep.Sort((a, b) => HashIndex(config.seed, riverId, a).CompareTo(HashIndex(config.seed, riverId, b)));
+                    for (int i = 0; i < sweep.Count; i++) idxs[5 + i] = sweep[i];
+                }
+
+                int attempts = 0;
+                string bestReason = null;
+                bool createdThisRiver = false;
+
+                bool SpacingOk(Vector2Int c, int spacing)
+                {
+                    if (spacing <= 0) return true;
+                    for (int i = 0; i < createdCenters.Count; i++)
+                    {
+                        var p = createdCenters[i];
+                        if (Mathf.Max(Mathf.Abs(p.x - c.x), Mathf.Abs(p.y - c.y)) < spacing)
+                            return false;
+                    }
+                    return true;
+                }
+
+                // Si todo falla por spacing, último intento ignora spacing.
+                bool spacingWasTheOnlyBlock = false;
+
+                for (int ii = 0; ii < idxs.Count; ii++)
+                {
+                    if (createdForThisRiver >= maxPerRiver)
+                        break;
+                    var center = snappedRiverCells[idxs[ii]];
+                    attempts++;
+
+                    if (!grid.InBoundsCell(center))
+                    {
+                        bestReason ??= "oob_center";
+                        continue;
+                    }
+                    var t = grid.GetCell(center).type;
+                    if (t == CellType.Water)
+                    {
+                        bestReason ??= "water_cell";
+                        continue;
+                    }
+                    if (t != CellType.River)
+                    {
+                        bestReason ??= "not_river";
+                        continue;
+                    }
+
+                    if (!SpacingOk(center, mandatorySpacing))
+                    {
+                        bestReason ??= "too_close_spacing";
+                        spacingWasTheOnlyBlock = true;
+                        continue;
+                    }
+
+                    if (!TryApplyBankToBankFordCorridor(grid, config, center, marked, null, out string applyReason, out Vector2Int applyAxis, out int applyLen, true))
+                    {
+                        bestReason ??= applyReason;
+                        continue;
+                    }
+
+                    mandatoryCreated++;
+                    createdCenters.Add(center);
+                    createdThisRiver = true;
+                    createdForThisRiver++;
+                    if (dbgFord)
+                        Debug.Log($"[RiverCoverageFordCreated] riverId={riverId} center=({center.x},{center.y}) len={applyLen} axis=({applyAxis.x},{applyAxis.y})");
+                    break;
+                }
+
+                if (!createdThisRiver && spacingWasTheOnlyBlock && idxs.Count > 0)
+                {
+                    var center = snappedRiverCells[idxs[0]];
+                    attempts++;
+                    if (grid.InBoundsCell(center) && grid.GetCell(center).type == CellType.River)
+                    {
+                        if (TryApplyBankToBankFordCorridor(grid, config, center, marked, null, out string applyReason, out Vector2Int applyAxis, out int applyLen, true))
+                        {
+                            mandatoryCreated++;
+                            createdCenters.Add(center);
+                            createdThisRiver = true;
+                            createdForThisRiver++;
+                            if (dbgFord)
+                                Debug.Log($"[RiverCoverageFordCreated] riverId={riverId} center=({center.x},{center.y}) len={applyLen} axis=({applyAxis.x},{applyAxis.y})");
+                        }
+                        else
+                        {
+                            bestReason ??= applyReason;
+                        }
+                    }
+                }
+
+                if (!createdThisRiver)
+                {
+                    if (dbgFord)
+                        Debug.Log($"[RiverCoverageMissing] riverId={riverId} reason=unable_to_create_ford attempts={attempts} bestReason={bestReason}");
+                }
+            }
+        }
+
+        /// <summary>Invariantes sobre <see cref="CellType.River"/> tras cruces funcionales (solo log).</summary>
+        static void ValidateRiverFordConsistency(GridSystem grid, bool log)
+        {
+            if (!log || grid == null) return;
+            int invalid = 0;
+            for (int z = 0; z < grid.Height; z++)
+            {
+                for (int x = 0; x < grid.Width; x++)
+                {
+                    ref var cell = ref grid.GetCell(x, z);
+                    if (cell.type != CellType.River)
+                        continue;
+                    bool bad =
+                        (cell.walkable && !cell.riverFord)
+                        || (cell.riverFord && !cell.walkable)
+                        || (cell.riverFord && cell.waterTraverse != WaterTraverseMode.FordShallow);
+                    if (!bad)
+                        continue;
+                    invalid++;
+                    Debug.Log(
+                        $"[RiverCellInvalid] x={x} y={z} walkable={cell.walkable} riverFord={cell.riverFord} waterTraverse={cell.waterTraverse} source=CellData");
+                }
+            }
+
+            if (invalid > 0)
+                Debug.LogWarning($"[RiverCellInvalid] total={invalid}");
+        }
+
+        private static void TryBuildCrossingAndShoreDecorations(
+            Transform parent,
+            GridSystem grid,
+            MapGenConfig config,
+            float waterY,
+            float cellSize,
+            int waterLayer,
+            int[,] interiorDistGrid,
+            List<CityNode> strategicCities = null,
+            List<Road> strategicRoads = null)
+        {
+            DebugWaterCrossingPositionsWorld.Clear();
+            DebugRiverFordFootprintCentersWorld.Clear();
+            DebugRiverFordFootprintSizesWorld.Clear();
+            DebugRiverFordFailedCenterPositionsWorld.Clear();
+            if (grid == null || config == null) return;
+
+            var crossingMatsByPrefab = new Dictionary<GameObject, List<Matrix4x4>>();
+            if (config.enableRiverCrossings)
+            {
+                // Umbral coherente con riverWidthRadiusCells: el ancho en grid suele ser ~2*radio+1 en el eje del cauce.
+                int maxThicknessCells = Mathf.Clamp(
+                    Mathf.Max(
+                        Mathf.Max(1, config.riverCrossingMaxThicknessCells),
+                        2 * Mathf.Clamp(config.riverWidthRadiusCells, 0, 6) + 1),
+                    1, 12);
+                int bankSearchForSelection = Mathf.Clamp(config.riverCrossingBankSearchCells, 4, 20);
+                int spacing = Mathf.Max(2, config.riverCrossingMinSpacing);
+                int maxPick = Mathf.Clamp(Mathf.Max(0, config.riverCrossingMaxPerMap), 0, 32);
+                int minSegmentLen = Mathf.Max(2, config.riverFordMinSegmentLengthCells);
+                int minDistConfluence = Mathf.Max(0, config.riverFordMinDistanceFromConfluenceCells);
+                int maxPerSegment = Mathf.Clamp(config.riverFordMaxPerSegment, 1, 3);
+                bool dbgFord = config.riverCrossingCorridorDebugLogs;
+
+                int connectedComponents = CountRiverConnectedComponents(grid);
+                var segments = BuildRiverSegments(grid, config, out var junctionNodes, out var endpointNodes);
+                int segmentCount = segments.Count;
+
+                if (dbgFord)
+                    Debug.Log($"[RiverSegmentSummary] segments={segmentCount} junctions={junctionNodes.Count} endpoints={endpointNodes.Count}");
+
+                int DistanceToNearestJunction(Vector2Int c)
+                {
+                    if (junctionNodes == null || junctionNodes.Count == 0)
+                        return int.MaxValue;
+                    int best = int.MaxValue;
+                    foreach (var j in junctionNodes)
+                    {
+                        int d = Mathf.Max(Mathf.Abs(c.x - j.x), Mathf.Abs(c.y - j.y));
+                        if (d < best) best = d;
+                    }
+                    return best;
+                }
+
+                var candidateEntries = new List<(Vector2Int c, int th)>(256);
+                var segmentCandidates = new Dictionary<int, List<(Vector2Int c, int th, int distJ, int centerBias)>>(segmentCount);
+                for (int si = 0; si < segments.Count; si++)
+                {
+                    var seg = segments[si];
+                    var list = new List<(Vector2Int c, int th, int distJ, int centerBias)>();
+                    if (seg.cells != null && seg.cells.Count >= minSegmentLen)
+                    {
+                        int mid = seg.cells.Count / 2;
+                        for (int i = 0; i < seg.cells.Count; i++)
+                        {
+                            var c = seg.cells[i];
+                            int distJ = DistanceToNearestJunction(c);
+                            if (distJ < minDistConfluence)
+                                continue;
+                            int th = EstimateRiverThicknessCells(grid, c.x, c.y);
+                            if (th > maxThicknessCells)
+                                continue;
+                            if (!IsCrossingCandidatePlacementValid(grid, c, bankSearchForSelection))
+                                continue;
+                            int centerBias = Mathf.Abs(i - mid);
+                            list.Add((c, th, distJ, centerBias));
+                            candidateEntries.Add((c, th));
+                        }
+                    }
+
+                    list.Sort((a, b) =>
+                    {
+                        int cmp = b.th.CompareTo(a.th); // mayor grosor primero
+                        if (cmp != 0) return cmp;
+                        cmp = a.centerBias.CompareTo(b.centerBias);
+                        if (cmp != 0) return cmp;
+                        return a.distJ.CompareTo(b.distJ);
+                    });
+                    segmentCandidates[seg.segmentId] = list;
+                }
+
+                var orderedSegments = new List<RiverSegment>(segments);
+                orderedSegments.Sort((a, b) =>
+                {
+                    int ac = segmentCandidates.TryGetValue(a.segmentId, out var al) ? al.Count : 0;
+                    int bc = segmentCandidates.TryGetValue(b.segmentId, out var bl) ? bl.Count : 0;
+                    // Preferir segmentos lejos de lago si hay opciones.
+                    int cmp = a.touchesLake.CompareTo(b.touchesLake); // false(0) antes que true(1)
+                    if (cmp != 0) return cmp;
+                    cmp = bc.CompareTo(ac); // más candidatos primero
+                    if (cmp != 0) return cmp;
+                    cmp = b.cells.Count.CompareTo(a.cells.Count); // luego longitud
+                    if (cmp != 0) return cmp;
+                    return a.segmentId.CompareTo(b.segmentId);
+                });
+
+                int maxStrategic = (config.enableFunctionalRiverFords && config.riverCrossingEnableStrategicRoadFords)
+                    ? Mathf.Clamp(config.riverCrossingMaxStrategicRoadFords, 0, 32)
+                    : 0;
+                var createdCenters = new List<Vector2Int>(maxPick + maxStrategic + 8);
+                var marked = new HashSet<Vector2Int>();
+                var failedCenters = new List<Vector2Int>(64);
+                int createdCorridors = 0;
+                int strategicRoadFords = 0;
+                int connectivityCorridors = 0;
+                int mandatoryCorridors = 0;
+                int rejectedCount = 0;
+                int roadFordRejected = 0;
+
+                bool IsFarEnoughFromPicked(Vector2Int c)
+                {
+                    foreach (var p in createdCenters)
+                    {
+                        int ch = Mathf.Max(Mathf.Abs(p.x - c.x), Mathf.Abs(p.y - c.y));
+                        if (ch < spacing)
+                            return false;
+                    }
+                    return true;
+                }
+
+                var crossingPrefabs = CollectCrossingDecorationPrefabs(config);
+                if (crossingPrefabs.Count == 0 && (maxPick > 0 || maxStrategic > 0))
+                {
+                    Debug.LogWarning(
+                        "[WaterCrossing] No hay prefabs en waterCrossingDecorationPrefabs ni waterCrossingDecorationPrefab: " +
+                        "no se generará malla decorativa de vado (los vados lógicos pueden existir igual). Asigna al menos un prefab en MapGenConfig.");
+                }
+
+                // 1) Mandatory coverage por centerline (regla principal).
+                MandatoryRiverFordsByCenterline(
+                    grid,
+                    config,
+                    marked,
+                    createdCenters,
+                    bankSearchForSelection,
+                    dbgFord,
+                    ref mandatoryCorridors,
+                    out int aptMandatoryRiverCount);
+
+                bool mandatoryMetAptQuota =
+                    aptMandatoryRiverCount > 0 && mandatoryCorridors >= aptMandatoryRiverCount;
+
+                // Recorte de RoadFords si mandatory ya cubrió todos los ríos aptos (0 = no recortar).
+                int afterM = Mathf.Clamp(config.riverCrossingMaxStrategicRoadFordsAfterMandatory, 0, 16);
+                int effectiveMaxStrategic = maxStrategic;
+                if (mandatoryMetAptQuota && afterM > 0)
+                    effectiveMaxStrategic = Mathf.Min(maxStrategic, afterM);
+
+                // ─────────────────────────────────────────────────────────────
+                // Seguridad gameplay: conectividad de spawns por tierra + vados
+                // ─────────────────────────────────────────────────────────────
+                if (config.riverCrossingExtraForSpawnConnectivity
+                    && s_spawnCellsForConnectivity != null
+                    && s_spawnCellsForConnectivity.Count > 0
+                    && config.riverCrossingMaxExtraConnectivityFords > 0)
+                {
+                    bool IsWalkableCell(Vector2Int c)
+                    {
+                        if (!grid.InBoundsCell(c)) return false;
+                        ref var cd = ref grid.GetCell(c);
+                        if (cd.type == CellType.Water) return false;
+                        if (cd.type == CellType.River) return cd.riverFord && cd.walkable;
+                        return cd.walkable;
+                    }
+
+                    Vector2Int FindNearestWalkable(Vector2Int start, int maxR)
+                    {
+                        if (IsWalkableCell(start)) return start;
+                        for (int r = 1; r <= maxR; r++)
+                        {
+                            for (int dx = -r; dx <= r; dx++)
+                            for (int dz = -r; dz <= r; dz++)
+                            {
+                                if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) != r) continue;
+                                var c = new Vector2Int(start.x + dx, start.y + dz);
+                                if (!grid.InBoundsCell(c)) continue;
+                                if (IsWalkableCell(c)) return c;
+                            }
+                        }
+                        return start;
+                    }
+
+                    int[,] BuildWalkableComponents(out int compCount)
+                    {
+                        int ww = grid.Width;
+                        int hh = grid.Height;
+                        var comp = new int[ww, hh];
+                        for (int z = 0; z < hh; z++)
+                            for (int x = 0; x < ww; x++)
+                                comp[x, z] = -1;
+                        compCount = 0;
+                        var q2 = new Queue<Vector2Int>();
+                        for (int z = 0; z < hh; z++)
+                        {
+                            for (int x = 0; x < ww; x++)
+                            {
+                                var c = new Vector2Int(x, z);
+                                if (comp[x, z] >= 0 || !IsWalkableCell(c))
+                                    continue;
+                                int id = compCount++;
+                                comp[x, z] = id;
+                                q2.Clear();
+                                q2.Enqueue(c);
+                                while (q2.Count > 0)
+                                {
+                                    var p = q2.Dequeue();
+                                    foreach (var n in grid.Neighbors4(p))
+                                    {
+                                        if (comp[n.x, n.y] >= 0 || !IsWalkableCell(n))
+                                            continue;
+                                        comp[n.x, n.y] = id;
+                                        q2.Enqueue(n);
+                                    }
+                                }
+                            }
+                        }
+                        return comp;
+                    }
+
+                    // Normalizar spawns a celdas caminables cercanas
+                    var spawns = new List<Vector2Int>(s_spawnCellsForConnectivity.Count);
+                    for (int i = 0; i < s_spawnCellsForConnectivity.Count; i++)
+                        spawns.Add(FindNearestWalkable(s_spawnCellsForConnectivity[i], 14));
+
+                    int walkCompCount;
+                    var compGrid = BuildWalkableComponents(out walkCompCount);
+                    // Contar tamaños de componentes caminables y detectar el componente principal (más grande).
+                    var compSizes = new int[Mathf.Max(0, walkCompCount)];
+                    for (int z = 0; z < grid.Height; z++)
+                        for (int x = 0; x < grid.Width; x++)
+                        {
+                            int id = compGrid[x, z];
+                            if (id >= 0 && id < compSizes.Length)
+                                compSizes[id]++;
+                        }
+
+                    int mainWalkComp = -1;
+                    int mainWalkCells = 0;
+                    for (int i = 0; i < compSizes.Length; i++)
+                    {
+                        if (compSizes[i] > mainWalkCells)
+                        {
+                            mainWalkCells = compSizes[i];
+                            mainWalkComp = i;
+                        }
+                    }
+
+                    int minCells = Mathf.Max(0, config.minSpawnWalkableComponentCells);
+                    float minRatio = Mathf.Clamp01(config.minSpawnWalkableComponentRatio);
+
+                    bool SpawnNeedsFix(int spawnComp, int spawnCells)
+                    {
+                        if (mainWalkComp < 0) return false;
+                        if (spawnComp != mainWalkComp) return true;
+                        if (minCells > 0 && spawnCells < minCells) return true;
+                        if (minRatio > 0f && mainWalkCells > 0 && (spawnCells / (float)mainWalkCells) < minRatio) return true;
+                        return false;
+                    }
+
+                    bool allConnectedToMain = true;
+                    if (dbgFord)
+                        Debug.Log($"[SpawnConnectivity] spawns={spawns.Count} components={walkCompCount} mainComponentCells={mainWalkCells} allConnectedToMain={(mainWalkComp >= 0)}");
+
+                    Vector2Int FindBankLand(Vector2Int center, Vector2Int axis)
+                    {
+                        // Busca el primer no-River en esa dirección (igual que el corredor).
+                        for (int s = 1; s <= bankSearchForSelection; s++)
+                        {
+                            int x = center.x + axis.x * s;
+                            int z = center.y + axis.y * s;
+                            var c = new Vector2Int(x, z);
+                            if (!grid.InBoundsCell(c))
+                                break;
+                            if (grid.GetCell(x, z).type == CellType.River)
+                                continue;
+                            if (IsWalkableCell(c))
+                                return c;
+                            break;
+                        }
+                        return new Vector2Int(int.MinValue, int.MinValue);
+                    }
+
+                    int extraBudget = Mathf.Clamp(config.riverCrossingMaxExtraConnectivityFords, 0, 8);
+                    for (int spawnIndex = 0; spawnIndex < spawns.Count && extraBudget > 0; spawnIndex++)
+                    {
+                        if (mainWalkComp < 0)
+                            break;
+                        var spawnCell = spawns[spawnIndex];
+                        int spawnComp = grid.InBoundsCell(spawnCell) ? compGrid[spawnCell.x, spawnCell.y] : -1;
+                        int spawnCells = (spawnComp >= 0 && spawnComp < compSizes.Length) ? compSizes[spawnComp] : 0;
+                        bool needs = SpawnNeedsFix(spawnComp, spawnCells);
+                        if (dbgFord)
+                            Debug.Log($"[SpawnConnectivity] spawnIndex={spawnIndex} component={spawnComp} componentCells={spawnCells} main={(spawnComp == mainWalkComp)} isolated={needs}");
+                        if (!needs)
+                            continue;
+
+                        Vector2Int bestCenter = default;
+                        Vector2Int bestAxis = Vector2Int.zero;
+                        int bestScore = int.MaxValue;
+                        int bestLen = 0;
+
+                        foreach (var seg in orderedSegments)
+                        {
+                            if (!segmentCandidates.TryGetValue(seg.segmentId, out var perSeg) || perSeg == null) continue;
+                            for (int i = 0; i < perSeg.Count; i++)
+                            {
+                                var e = perSeg[i];
+                                var c = e.c;
+                                if (!IsFarEnoughFromPicked(c)) continue;
+                                if (!TryApplyBankToBankFordCorridor(grid, config, c, null, null, out _, out Vector2Int ax, out int len, false))
+                                    continue;
+                                if (len > 0 && len < 6) continue;
+
+                                var a = FindBankLand(c, ax);
+                                var b = FindBankLand(c, new Vector2Int(-ax.x, -ax.y));
+                                if (a.x == int.MinValue || b.x == int.MinValue)
+                                    continue;
+
+                                int ca = compGrid[a.x, a.y];
+                                int cb = compGrid[b.x, b.y];
+                                bool connects = (ca == mainWalkComp && cb == spawnComp) || (ca == spawnComp && cb == mainWalkComp);
+                                if (!connects)
+                                    continue;
+
+                                int score = Mathf.Max(Mathf.Abs(c.x - spawnCell.x), Mathf.Abs(c.y - spawnCell.y));
+                                if (seg.touchesLake) score += 20;
+                                if (score < bestScore)
+                                {
+                                    bestScore = score;
+                                    bestCenter = c;
+                                    bestAxis = ax;
+                                    bestLen = len;
+                                }
+                            }
+                        }
+
+                        if (bestScore == int.MaxValue)
+                        {
+                            if (dbgFord)
+                                Debug.Log($"[SpawnConnectivityFix] spawnIndex={spawnIndex} fromComponent={spawnComp} toComponent={mainWalkComp} fordCenter=(none) success=False reason=no_bridge_candidate");
+                            allConnectedToMain = false;
+                            continue;
+                        }
+
+                        bool ok = TryApplyBankToBankFordCorridor(grid, config, bestCenter, marked, null, out string applyR, out Vector2Int applyAx, out int applyLen, true);
+                        if (!ok)
+                        {
+                            if (dbgFord)
+                                Debug.Log($"[SpawnConnectivityFix] spawnIndex={spawnIndex} fromComponent={spawnComp} toComponent={mainWalkComp} fordCenter=({bestCenter.x},{bestCenter.y}) success=False reason={applyR}");
+                            allConnectedToMain = false;
+                            continue;
+                        }
+
+                        connectivityCorridors++;
+                        createdCenters.Add(bestCenter);
+                        extraBudget--;
+
+                        compGrid = BuildWalkableComponents(out walkCompCount);
+                        if (dbgFord)
+                            Debug.Log($"[SpawnConnectivityFix] spawnIndex={spawnIndex} fromComponent={spawnComp} toComponent={mainWalkComp} fordCenter=({bestCenter.x},{bestCenter.y}) success=True reason=ok axis=({applyAx.x},{applyAx.y}) len={applyLen}");
+                    }
+
+                    if (dbgFord)
+                        Debug.Log($"[SpawnConnectivity] spawns={spawns.Count} components={walkCompCount} mainComponentCells={mainWalkCells} allConnectedToMain={allConnectedToMain}");
+                }
+
+                // 3) Strategic road fords (mejora, no condición principal). Evita duplicar cerca de vados existentes.
+                if (effectiveMaxStrategic > 0 && config.enableFunctionalRiverFords)
+                {
+                    // Evitar que RoadFords dupliquen vados ya creados por mandatory/conectividad.
+                    int roadSpacing = Mathf.Max(spacing, Mathf.Clamp(config.mandatoryRiverFordMinSpacing, 0, 24));
+
+                    // Nota: si quieres aislar mandatory, desactiva riverCrossingEnableStrategicRoadFords en MapGenConfig.
+                    int riverCrossingRuns = 0;
+                    int retrySavedRoad = 0;
+                    double planningMs = 0d;
+                    StrategicPathBuildStats st2 = default;
+
+                    var pathsPrimary = RoadNetworkGenerator.BuildStrategicFordPlanningPaths(
+                        grid,
+                        strategicCities,
+                        strategicRoads,
+                        config,
+                        StrategicFordPathBuildParts.MstAndRoadsOnly,
+                        out var st1);
+                    planningMs += st1.ElapsedMs;
+                    BuildStrategicFordCandidatesFromPaths(
+                        grid,
+                        config,
+                        pathsPrimary,
+                        marked,
+                        createdCenters,
+                        failedCenters,
+                        roadSpacing,
+                        bankSearchForSelection,
+                        maxThicknessCells,
+                        minDistConfluence,
+                        junctionNodes,
+                        effectiveMaxStrategic,
+                        dbgFord,
+                        ref strategicRoadFords,
+                        ref roadFordRejected,
+                        ref riverCrossingRuns,
+                        ref retrySavedRoad);
+
+                    if (strategicRoadFords < effectiveMaxStrategic)
+                    {
+                        var synthParts = StrategicFordPathBuildParts.SyntheticToMainLand;
+                        if (Mathf.Clamp(config.riverCrossingStrategicAnchorCount, 0, 4) > 0)
+                            synthParts |= StrategicFordPathBuildParts.SyntheticAnchors;
+                        var pathsSynth = RoadNetworkGenerator.BuildStrategicFordPlanningPaths(
+                            grid,
+                            strategicCities,
+                            strategicRoads,
+                            config,
+                            synthParts,
+                            out st2);
+                        planningMs += st2.ElapsedMs;
+                        BuildStrategicFordCandidatesFromPaths(
+                            grid,
+                            config,
+                            pathsSynth,
+                            marked,
+                            createdCenters,
+                            failedCenters,
+                            roadSpacing,
+                            bankSearchForSelection,
+                            maxThicknessCells,
+                            minDistConfluence,
+                            junctionNodes,
+                            effectiveMaxStrategic,
+                            dbgFord,
+                            ref strategicRoadFords,
+                            ref roadFordRejected,
+                            ref riverCrossingRuns,
+                            ref retrySavedRoad);
+                    }
+
+                    if (dbgFord)
+                    {
+                        Debug.Log(
+                            $"[RoadFord] planningMs={planningMs:F2} " +
+                            $"pathsTotal={st1.TotalPaths + st2.TotalPaths} " +
+                            $"mstLax={st1.PathsMstLax + st2.PathsMstLax} phase6Roads={st1.PathsPhase6Roads + st2.PathsPhase6Roads} " +
+                            $"synthMain={st1.PathsSyntheticMainLand + st2.PathsSyntheticMainLand} synthAnchors={st1.PathsSyntheticAnchors + st2.PathsSyntheticAnchors} " +
+                            $"riverCrossings={riverCrossingRuns} created={strategicRoadFords} rejected={roadFordRejected} retrySaved={retrySavedRoad} " +
+                            $"maxStrategicConfig={maxStrategic} effectiveMaxStrategic={effectiveMaxStrategic} mandatoryMetQuota={mandatoryMetAptQuota} aptRivers={aptMandatoryRiverCount} " +
+                            $"anchorBudget={Mathf.Clamp(config.riverCrossingStrategicAnchorCount, 0, 4)}");
+                    }
+                }
+
+                // 4) Optional geometric fords (solo si falta variedad).
+                // Regla simple: si aún no llenamos maxPick, intentamos segmentos.
+                if (!mandatoryMetAptQuota && createdCenters.Count < maxPick)
+                foreach (var seg in orderedSegments)
+                {
+                    if (createdCorridors >= maxPick)
+                        break;
+
+                    if (!segmentCandidates.TryGetValue(seg.segmentId, out var perSeg))
+                        continue;
+
+                    int segCandidates = perSeg != null ? perSeg.Count : 0;
+                    int segRejected = 0;
+                    int segCreated = 0;
+
+                    if (seg.cells == null || seg.cells.Count < minSegmentLen || segCandidates == 0)
+                    {
+                        if (dbgFord)
+                            Debug.Log($"[RiverSegment] id={seg.segmentId} cells={(seg.cells != null ? seg.cells.Count : 0)} candidates={segCandidates} created=0 rejected=0 touchesLake={seg.touchesLake} touchesEdge={seg.touchesEdge}");
+                        continue;
+                    }
+
+                    for (int i = 0; i < perSeg.Count; i++)
+                    {
+                        if (createdCorridors >= maxPick || segCreated >= maxPerSegment)
+                            break;
+
+                        var entry = perSeg[i];
+                        var c = entry.c;
+                        if (!IsFarEnoughFromPicked(c))
+                            continue;
+
+                        if (!TryApplyBankToBankFordCorridor(grid, config, c, null, null, out string preReason, out Vector2Int preAxis, out int preLen, false))
+                        {
+                            segRejected++;
+                            rejectedCount++;
+                            failedCenters.Add(c);
+                            if (dbgFord)
+                                Debug.Log($"[RiverFordReject] segmentId={seg.segmentId} reason={preReason} center=({c.x},{c.y}) axis=({preAxis.x},{preAxis.y}) thickness={entry.th} distanceToConfluence={entry.distJ} bankSearch={bankSearchForSelection}");
+                            continue;
+                        }
+
+                        if (preLen > 0 && preLen < 6 && i + 1 < perSeg.Count)
+                        {
+                            segRejected++;
+                            rejectedCount++;
+                            failedCenters.Add(c);
+                            if (dbgFord)
+                                Debug.Log($"[RiverFordReject] segmentId={seg.segmentId} reason=corridor_too_short center=({c.x},{c.y}) axis=({preAxis.x},{preAxis.y}) thickness={entry.th} distanceToConfluence={entry.distJ} bankSearch={bankSearchForSelection}");
+                            continue;
+                        }
+
+                        if (!TryApplyBankToBankFordCorridor(grid, config, c, marked, null, out string applyReason, out Vector2Int applyAxis, out int len, true))
+                        {
+                            segRejected++;
+                            rejectedCount++;
+                            failedCenters.Add(c);
+                            if (dbgFord)
+                                Debug.Log($"[RiverFordReject] segmentId={seg.segmentId} reason={applyReason} center=({c.x},{c.y}) axis=({applyAxis.x},{applyAxis.y}) thickness={entry.th} distanceToConfluence={entry.distJ} bankSearch={bankSearchForSelection}");
+                            continue;
+                        }
+
+                        segCreated++;
+                        createdCorridors++;
+                        createdCenters.Add(c);
+                        if (dbgFord)
+                            Debug.Log($"[RiverFordCreated] segmentId={seg.segmentId} center=({c.x},{c.y}) len={len} axis=({applyAxis.x},{applyAxis.y})");
+                    }
+
+                    if (dbgFord)
+                        Debug.Log($"[RiverSegment] id={seg.segmentId} cells={seg.cells.Count} candidates={segCandidates} created={segCreated} rejected={segRejected} touchesLake={seg.touchesLake} touchesEdge={seg.touchesEdge}");
+                }
+
+                // (Mandatory ahora corre primero; aquí no se repite.)
+
+                StripRiverFordBlobsSmallerThan(grid, config);
+                if (marked != null)
+                {
+                    marked.Clear();
+                    for (int z = 0; z < grid.Height; z++)
+                    {
+                        for (int x = 0; x < grid.Width; x++)
+                        {
+                            ref var cd = ref grid.GetCell(x, z);
+                            if (cd.type == CellType.River && cd.riverFord)
+                                marked.Add(new Vector2Int(x, z));
+                        }
+                    }
+                }
+
+                // Visual: varias instancias por mancha conexa riverFord (dispersas en el rectángulo del corredor).
+                ScatterRiverFordDecorationFromGrid(
+                    grid,
+                    config,
+                    waterY,
+                    cellSize,
+                    crossingPrefabs,
+                    crossingMatsByPrefab);
+
+                if (config.debugLogs)
+                    Debug.Log($"[RiverCrossingSelect] segments={segmentCount} maxPick={maxPick} picked={createdCenters.Count}");
+
+                if (dbgFord)
+                {
+                    int totalFordsTyped = createdCorridors + strategicRoadFords + connectivityCorridors + mandatoryCorridors;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    if (createdCenters.Count != totalFordsTyped)
+                        Debug.LogWarning(
+                            $"[RiverFordSummary] Inconsistencia: createdCenters={createdCenters.Count} vs normal+road+conn+mandatory={totalFordsTyped} " +
+                            "(cada vado debería añadir un centro).");
+#endif
+                    Debug.Log(
+                        $"[RiverFordSummary] rivers={config.riverCount} components={connectedComponents} segments={segmentCount} candidates={candidateEntries.Count} " +
+                        $"normalCreated={createdCorridors} roadCreated={strategicRoadFords} connectivityCreated={connectivityCorridors} " +
+                        $"mandatoryCreated={mandatoryCorridors} totalCreated={totalFordsTyped} centers={createdCenters.Count} rejected={rejectedCount} roadRejected={roadFordRejected} " +
+                        $"maxPerMap={maxPick} maxStrategic={maxStrategic} effectiveStrategicCap={effectiveMaxStrategic} aptRivers={aptMandatoryRiverCount} mandatoryMetQuota={mandatoryMetAptQuota} " +
+                        $"skipOptionalGeometric={mandatoryMetAptQuota} minSpacing={spacing} bankSearch={bankSearchForSelection}");
+                }
+
+                ValidateRiverFordConsistency(grid, dbgFord);
+
+                // Sin fallback ThinZones (Chebyshev). La verdad final son corredores bank-to-bank.
+
+                if (config.riverCrossingDebugVisuals)
+                    BuildCrossingDebugCubes(parent, marked, failedCenters, grid, waterY, cellSize);
+            }
+            else
+            {
+                StripRiverFordBlobsSmallerThan(grid, config);
+            }
+
+            var shoreMats = new List<Matrix4x4>();
+            if (config.waterEnableShoreProps && config.waterShoreRockPrefab != null && config.waterShorePropDensity > 1e-4f)
+            {
+                int[,] dist = interiorDistGrid;
+                if (dist != null)
+                {
+                int target = Mathf.RoundToInt(config.waterShorePropDensity * Mathf.Max(32, grid.Width * grid.Height / 1000f));
+                target = Mathf.Clamp(target, 0, 220);
+                uint rnd = (uint)config.seed;
+                for (int i = 0; i < target * 8 && shoreMats.Count < target + 400; i++)
+                {
+                    rnd = rnd * 1664525u + 1013904223u;
+                    int gx = (int)(rnd % (uint)grid.Width);
+                    rnd = rnd * 1664525u + 1013904223u;
+                    int gz = (int)(rnd % (uint)grid.Height);
+                    if (!grid.InBoundsCell(gx, gz)) continue;
+                    var t = grid.GetCell(gx, gz).type;
+                    if (t != CellType.Water && t != CellType.River) continue;
+                    int ds = dist[gx, gz];
+                    if (ds != 1 && ds != 2) continue;
+                    rnd = rnd * 1664525u + 1013904223u;
+                    if ((rnd & 15u) != 0u) continue;
+                    Vector3 pos = new Vector3(
+                        grid.Origin.x + (gx + 0.5f) * cellSize,
+                        waterY,
+                        grid.Origin.z + (gz + 0.5f) * cellSize);
+                    float yaw = (rnd & 255u) / 255f * 360f;
+                    shoreMats.Add(Matrix4x4.TRS(pos, Quaternion.Euler(0f, yaw, 0f), Vector3.one * 0.85f));
+                }
+                }
+            }
+
+            foreach (var kv in crossingMatsByPrefab)
+            {
+                if (kv.Key == null || kv.Value == null || kv.Value.Count == 0) continue;
+                CombineDecorationMatrices(parent, $"Water_CrossingDecor_{kv.Key.name}", kv.Value, kv.Key, waterLayer);
+            }
+            if (crossingMatsByPrefab.Count > 0)
+            {
+                int created = 0;
+                foreach (var kv in crossingMatsByPrefab)
+                    created += kv.Value != null ? kv.Value.Count : 0;
+                Debug.Log($"[RiverCrossingDecor] created={created} prefabs={crossingMatsByPrefab.Count} yOffset={Mathf.Max(0f, config.riverCrossingDecorYOffset):F2}");
+            }
+            CombineDecorationMatrices(parent, "Water_ShoreDecor", shoreMats, config.waterShoreRockPrefab, waterLayer);
+        }
+
+        private static void CombineDecorationMatrices(Transform parent, string objectName, List<Matrix4x4> matrices, GameObject prefab, int waterLayer)
+        {
+            if (matrices == null || matrices.Count == 0 || prefab == null) return;
+            var srcMf = prefab.GetComponentInChildren<MeshFilter>();
+            if (srcMf == null || srcMf.sharedMesh == null) return;
+            Mesh srcMesh = srcMf.sharedMesh;
+            var combine = new CombineInstance[matrices.Count];
+            for (int i = 0; i < matrices.Count; i++)
+            {
+                combine[i].mesh = srcMesh;
+                combine[i].transform = matrices[i];
+            }
+            var outMesh = new Mesh();
+            outMesh.name = objectName;
+            int estVerts = srcMesh.vertexCount * matrices.Count;
+            outMesh.indexFormat = estVerts > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
+            outMesh.CombineMeshes(combine, true, true);
+            var go = new GameObject(objectName);
+            go.transform.SetParent(parent, false);
+            go.layer = waterLayer;
+            var mf = go.AddComponent<MeshFilter>();
+            mf.sharedMesh = outMesh;
+            var mr = go.AddComponent<MeshRenderer>();
+            var srcMr = prefab.GetComponentInChildren<MeshRenderer>();
+            if (srcMr != null)
+                mr.sharedMaterial = srcMr.sharedMaterial;
+            mr.shadowCastingMode = ShadowCastingMode.Off;
+            mr.receiveShadows = true;
+            var cols = go.GetComponentsInChildren<Collider>(true);
+            for (int i = 0; i < cols.Length; i++)
+                cols[i].isTrigger = true;
+        }
+
+        private static bool BuildRoundedWaterMarchingSquares(
+            Transform parent,
+            GridSystem grid,
+            MapGenConfig config,
+            Material mat,
+            float y,
+            float cellSize,
+            int waterLayer,
+            bool marchingSquaresLakesOnly,
+            List<CityNode> strategicCities = null,
+            List<Road> strategicRoads = null)
+        {
+            DebugLastWaterInteriorDistanceGrid = null;
+            DebugWaterCrossingPositionsWorld.Clear();
             int w = grid.Width;
             int h = grid.Height;
             int subdiv = Mathf.Clamp(config.waterEdgeSubdiv, 1, 8);
@@ -1282,6 +3952,8 @@ namespace Project.Gameplay.Map.Generator
             }
 
             float step = cellSize / effectiveSubdiv;
+            int _interiorMd;
+            int[,] interiorDistGrid = BuildWaterInteriorDistanceToShoreGrid(grid, out _interiorMd);
 
             // Campo escalar: lagos ~planos; ríos = perfil por submuestra (euclídeo) + refuerzo post-blur para no caer bajo iso.
             float riverSoftStart = Mathf.Clamp(config.riverMsCellSoftStart01, 0f, 0.82f);
@@ -1350,10 +4022,10 @@ namespace Project.Gameplay.Map.Generator
                 && grid.RiverCenterlinesCellSpace != null
                 && grid.RiverCenterlinesCellSpace.Count > 0)
             {
-                float halfW = Mathf.Max(0.08f, config.riverVisualHalfWidthCells);
+                float halfWBase = Mathf.Max(0.08f, config.riverVisualHalfWidthCells);
                 float soft = Mathf.Max(0.02f, config.riverVisualSoftnessCells);
                 float strength = Mathf.Clamp01(config.riverVisualFieldStrength);
-                float cullMargin = halfW + soft + 0.35f;
+                float cullMargin = halfWBase * 1.85f + soft + 0.35f;
                 for (int z = 0; z < sh; z++)
                 {
                     int iz = sampleZ0 + z;
@@ -1367,6 +4039,8 @@ namespace Project.Gameplay.Map.Generator
                         if (grid.GetCell(gx, gz).type == CellType.Water)
                             continue;
 
+                        float wMul = ComputeRiverVisualWidthMultiplier(grid, gx, gz, cellX, cellZ, config);
+                        float halfW = halfWBase * wMul;
                         float d2 = MinDistSqPointToPolylinesCellSpace(cellX, cellZ, grid.RiverCenterlinesCellSpace, cullMargin);
                         if (d2 >= 1e20f)
                             continue;
@@ -1378,9 +4052,22 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
+            ApplyRiverLakeVisualBlendField(field, sw, sh, sampleX0, sampleZ0, effectiveSubdiv, grid, config);
+
             // Blur para redondear la máscara (suaviza esquinas).
             if (blurIters > 0)
                 BoxBlur(field, sw, sh, blurRadius, blurIters);
+            if (config.waterEdgeSmoothness > 1e-4f)
+            {
+                float requestedSmooth = config.waterEdgeSmoothness;
+                float effectiveSmooth = Mathf.Clamp(requestedSmooth, 0f, 3f);
+                if (requestedSmooth > 3f && config.debugLogs)
+                    Debug.LogWarning("[WaterMesh] High blur cost avoided");
+                int extraBlur = Mathf.RoundToInt(effectiveSmooth);
+                extraBlur = Mathf.Clamp(extraBlur, 0, 3);
+                for (int k = 0; k < extraBlur; k++)
+                    BoxBlur(field, sw, sh, 1, 1);
+            }
 
             float landRiverClamp = Mathf.Clamp(iso - 0.028f, 0f, 0.92f);
             for (int z = 0; z < sh; z++)
@@ -1419,17 +4106,16 @@ namespace Project.Gameplay.Map.Generator
             var tris = new List<int>(Mathf.Max(1024, sw * sh / 2));
 
             int[,] cornerIndex = new int[sw, sh];
+            float uvScale = Mathf.Max(0.001f, config.waterUVScale);
             for (int z = 0; z < sh; z++)
             {
                 float wz = grid.Origin.z + (sampleZ0 + z) * step;
-                float v = (h * cellSize) > 0.0001f ? (wz - grid.Origin.z) / (h * cellSize) : 0f;
                 for (int x = 0; x < sw; x++)
                 {
                     float wx = grid.Origin.x + (sampleX0 + x) * step;
-                    float u = (w * cellSize) > 0.0001f ? (wx - grid.Origin.x) / (w * cellSize) : 0f;
                     cornerIndex[x, z] = verts.Count;
                     verts.Add(new Vector3(wx, y, wz));
-                    uvs.Add(new Vector2(u, v));
+                    uvs.Add(new Vector2(wx * uvScale, wz * uvScale));
                     colors.Add(Color.white);
                 }
             }
@@ -1452,12 +4138,12 @@ namespace Project.Gameplay.Map.Generator
                 Vector3 p0 = verts[cornerIndex[x, z]];
                 Vector3 p1 = verts[cornerIndex[x + 1, z]];
                 Vector3 p = Vector3.Lerp(p0, p1, t);
+                float wMul = ComputeRiverVisualWidthMultiplier(grid, Mathf.Clamp((sampleX0 + x) / effectiveSubdiv, 0, w - 1), Mathf.Clamp((sampleZ0 + z) / effectiveSubdiv, 0, h - 1), (sampleX0 + x) / (float)effectiveSubdiv, (sampleZ0 + z) / (float)effectiveSubdiv, config);
+                float ampWorld = Mathf.Min(config.waterEdgeNoiseAmplitude * cellSize, cellSize * 0.4f) * Mathf.Lerp(0.45f, 1f, Mathf.Clamp01((wMul - 0.45f) / 1.4f));
+                NudgeEdgeVertexAtIso(ref p, v0, v1, iso, ampWorld, config.waterEdgeNoiseScale, config.seed, p0, p1);
                 idx = verts.Count;
                 verts.Add(p);
-                float uu = sw > 1 ? p.x - grid.Origin.x : 0f;
-                float vv = sh > 1 ? p.z - grid.Origin.z : 0f;
-                // UVs en world-normalized para que la textura se vea continua
-                uvs.Add(new Vector2(uu / (w * cellSize), vv / (h * cellSize)));
+                uvs.Add(new Vector2(p.x * uvScale, p.z * uvScale));
                 colors.Add(Color.white);
                 hEdge[x, z] = idx;
                 return idx;
@@ -1472,11 +4158,12 @@ namespace Project.Gameplay.Map.Generator
                 Vector3 p0 = verts[cornerIndex[x, z]];
                 Vector3 p1 = verts[cornerIndex[x, z + 1]];
                 Vector3 p = Vector3.Lerp(p0, p1, t);
+                float wMul = ComputeRiverVisualWidthMultiplier(grid, Mathf.Clamp((sampleX0 + x) / effectiveSubdiv, 0, w - 1), Mathf.Clamp((sampleZ0 + z) / effectiveSubdiv, 0, h - 1), (sampleX0 + x) / (float)effectiveSubdiv, (sampleZ0 + z) / (float)effectiveSubdiv, config);
+                float ampWorld = Mathf.Min(config.waterEdgeNoiseAmplitude * cellSize, cellSize * 0.4f) * Mathf.Lerp(0.45f, 1f, Mathf.Clamp01((wMul - 0.45f) / 1.4f));
+                NudgeEdgeVertexAtIso(ref p, v0, v1, iso, ampWorld, config.waterEdgeNoiseScale, config.seed, p0, p1);
                 idx = verts.Count;
                 verts.Add(p);
-                float uu = sw > 1 ? p.x - grid.Origin.x : 0f;
-                float vv = sh > 1 ? p.z - grid.Origin.z : 0f;
-                uvs.Add(new Vector2(uu / (w * cellSize), vv / (h * cellSize)));
+                uvs.Add(new Vector2(p.x * uvScale, p.z * uvScale));
                 colors.Add(Color.white);
                 vEdge[x, z] = idx;
                 return idx;
@@ -1568,6 +4255,8 @@ namespace Project.Gameplay.Map.Generator
                 return false;
             }
 
+            ApplyMarchingSquaresDepthUv(uvs, verts, grid, config, interiorDistGrid, y);
+
             var mesh = new Mesh();
             mesh.name = "Water_MarchingSquares";
             if (verts.Count > 65535) mesh.indexFormat = IndexFormat.UInt32;
@@ -1588,6 +4277,19 @@ namespace Project.Gameplay.Map.Generator
             mr.shadowCastingMode = ShadowCastingMode.Off;
             mr.receiveShadows = false;
             mr.renderingLayerMask = 1u;
+
+            TryBuildCrossingAndShoreDecorations(
+                parent, grid, config, y, cellSize, waterLayer, interiorDistGrid, strategicCities, strategicRoads);
+
+            if (config.debugDrawWaterShoreDepthGizmos)
+            {
+                DebugLastWaterInteriorDistanceGrid = interiorDistGrid;
+                DebugLastWaterInteriorDistanceMax = _interiorMd;
+            }
+            else
+            {
+                DebugLastWaterInteriorDistanceGrid = null;
+            }
 
             if (config.debugLogs)
                 Debug.Log($"Fase9 WaterMesh (MS): rect={rectW}x{rectH} celdas (pad={padCells}), subdiv={effectiveSubdiv} (cfg={subdiv}), blurIters={blurIters}, iso={iso:F2}, verts={verts.Count}, tris={tris.Count / 3}.");
@@ -1788,7 +4490,8 @@ namespace Project.Gameplay.Map.Generator
             if (!mat.HasProperty("_ShallowColor")) return;
             mat.SetColor("_ShallowColor", config.riverWaterShallowColor);
             mat.SetColor("_DeepColor", config.riverWaterDeepColor);
-            mat.SetVector("_FlowSpeed", new Vector4(config.riverUVFlowSpeed.x, config.riverUVFlowSpeed.y, 0f, 0f));
+            float f = Mathf.Clamp(config.waterUvFlowSpeedScale, 0f, 2.5f);
+            mat.SetVector("_FlowSpeed", new Vector4(config.riverUVFlowSpeed.x * f, config.riverUVFlowSpeed.y * f, 0f, 0f));
             mat.SetFloat("_BankSoft", Mathf.Clamp(config.riverBankBlendStrength, 0.05f, 0.55f));
             mat.SetFloat("_Alpha", Mathf.Clamp01(config.waterAlpha));
         }

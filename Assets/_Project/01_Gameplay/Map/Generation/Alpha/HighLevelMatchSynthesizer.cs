@@ -47,14 +47,14 @@ namespace Project.Gameplay.Map.Generation.Alpha
             m.geography.noiseScale = Mathf.Lerp(0.028f, 0.014f, 1f - rough);
             m.geography.maxSlope = Mathf.Lerp(12f, 22f, rough);
 
-            ApplyAbundance(R.forestDensity, ref m.resources.globalTrees, 58, 240);
-            ApplyAbundance(R.stoneAbundance, ref m.resources.globalStone, 4, 28);
-            ApplyAbundance(R.goldAbundance, ref m.resources.globalGold, 6, 32);
-            ApplyAbundance(R.berryAbundance, ref m.resources.berries, 5, 18);
+            ApplyAbundanceUnlessExplicitOverride(R.forestDensity, ref m.resources.globalTrees, 58, 240, 300);
+            ApplyAbundanceUnlessExplicitOverride(R.stoneAbundance, ref m.resources.globalStone, 4, 28, 80);
+            ApplyAbundanceUnlessExplicitOverride(R.goldAbundance, ref m.resources.globalGold, 6, 32, 90);
+            ApplyAbundanceUnlessExplicitOverride(R.berryAbundance, ref m.resources.berries, 5, 18, 80);
             if (!R.animalsEnabled)
                 m.resources.globalAnimals = Vector2Int.zero;
             else
-                ApplyAbundance(R.animalDensity, ref m.resources.globalAnimals, 4, 36);
+                ApplyAbundanceUnlessExplicitOverride(R.animalDensity, ref m.resources.globalAnimals, 4, 36, 90);
 
             ApplyAbundance(R.forestDensity, ref m.resources.nearTrees, 6, 26);
             ApplyAbundance(R.forestDensity, ref m.resources.midTrees, 8, 34);
@@ -159,6 +159,19 @@ namespace Project.Gameplay.Map.Generation.Alpha
             int b = Mathf.RoundToInt(baseMax * mul);
             if (b < a) (a, b) = (b, a);
             range = new Vector2Int(Mathf.Max(0, a), Mathf.Max(a, b));
+        }
+
+        static void ApplyAbundanceUnlessExplicitOverride(
+            AbundanceTier tier,
+            ref Vector2Int range,
+            int baseMin,
+            int baseMax,
+            int explicitMaxThreshold)
+        {
+            // Respeta valores inyectados por lobby/runtime (p.ej. globalTrees por tamaño de mapa).
+            if (range.y > explicitMaxThreshold)
+                return;
+            ApplyAbundance(tier, ref range, baseMin, baseMax);
         }
     }
 }

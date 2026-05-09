@@ -106,6 +106,8 @@ namespace Project.Gameplay.Map.Generator
         [Range(0f, 2.5f)] public float riverRibbonVerticalLiftWorld = 0.34f;
         [Tooltip("Si true: logs [RiverRibbonDebug] (puntos, bounds, maxSegment, saltos anormales). Quitar o desactivar tras depurar.")]
         public bool debugRiverRibbonGeometry = false;
+        [Tooltip("Debug explícito: permite crear malla visible de River Ribbon. OFF por defecto para usar solo Marching Squares como render principal.")]
+        public bool debugRenderRiverRibbonMesh = false;
         [Tooltip("Resumen: ancho ribbon medio/min/max, tallada de terreno, variación (consola).")]
         public bool debugRiverVisualStats = false;
 
@@ -218,6 +220,10 @@ namespace Project.Gameplay.Map.Generator
         public bool debugRiverDrawMacro = true;
         [Tooltip("Centerline final suavizada y remuestreada (celdas→mundo).")]
         public bool debugRiverDrawSmoothedCenterline = true;
+        [Tooltip("Dibuja gizmos del ribbon visual: puntos de path, segmentos válidos y segmentos descartados por salto anormal.")]
+        public bool debugDrawRiverRibbonGizmos = false;
+        [Tooltip("Tamaño en mundo de los puntos de path del ribbon en Scene view.")]
+        [Range(0.02f, 1.2f)] public float debugRiverRibbonPointSize = 0.12f;
 
         [Header("Ciudades (CityNodes)")]
         public int cityCount = 4;
@@ -350,8 +356,8 @@ namespace Project.Gameplay.Map.Generator
         [Header("Agua - bordes redondeados (Marching Squares)")]
         [Tooltip("✅ ACTIVAR para bordes orgánicos (elimina esquinas cuadradas). Desactivar solo si quieres agua tipo Minecraft.")]
         public bool waterRoundedEdges = true;
-        [Tooltip("Subdivisión por celda (2-4 recomendado). Mayor = bordes más suaves pero más vértices. 3-4 es ideal para la mayoría de casos.")]
-        [Range(1, 8)] public int waterEdgeSubdiv = 4;
+        [Tooltip("Subdivisión por celda (4-5 recomendado). Mayor = bordes más suaves pero más vértices.")]
+        [Range(1, 8)] public int waterEdgeSubdiv = 5;
         [Tooltip("Iteraciones de blur (3-4 recomendado para lagos naturales). Más iteraciones = bordes más redondeados.")]
         [Range(0, 8)] public int waterEdgeBlurIterations = 4;
         [Tooltip("Radio del blur. 2 es óptimo para suavizar sin perder definición.")]
@@ -366,6 +372,113 @@ namespace Project.Gameplay.Map.Generator
         [Range(0, 8)] public int waterMaskSmoothIterations = 2;
         [Tooltip("Umbral de vecinos. 5 = mayoría (recomendado). Bajar a 4 hace lagos más grandes, subir a 6 los hace más pequeños.")]
         [Range(0, 9)] public int waterMaskSmoothThreshold = 5;
+        [Tooltip("Umbral de núcleo de río fusionado (>= bloqueado/no caminable). Mayor = cauce profundo más estrecho.")]
+        [Range(0.35f, 0.9f)] public float riverFusionCoreThreshold = 0.55f;
+        [Tooltip("Umbral de borde de río fusionado (>= candidato a orilla caminable). Debe ser menor que core.")]
+        [Range(0.05f, 0.7f)] public float riverFusionShoreThreshold = 0.25f;
+        [Tooltip("Pasadas de blur para fusión de máscara de ríos (2-4 recomendado).")]
+        [Range(1, 6)] public int riverFusionBlurPasses = 3;
+        [Tooltip("Ancho de franja caminable de orilla (en celdas) medido hacia tierra desde el borde del río.")]
+        [Range(0, 2)] public int riverShoreWalkableWidthCells = 1;
+        [Tooltip("Debug opcional en SceneView: muestra máscara final de río fusionada, núcleo no caminable y franja de orilla caminable.")]
+        public bool debugDrawWaterMaskGizmos = false;
+
+        [Header("Agua MS - calidad visual (solo malla, no gameplay)")]
+        [Tooltip("Suavizado extra del campo escalar antes del iso (0 = igual que antes). Mayor = orillas más redondeadas (más iteraciones de blur ligero).")]
+        [Range(0f, 1f)] public float waterEdgeSmoothness = 0.7f;
+        [Tooltip("Desplaza vértices del borde del iso en mundo (perpendicular a la arista). 0 = desactivar.")]
+        [Range(0f, 0.45f)] public float waterEdgeNoiseAmplitude = 0.08f;
+        [Tooltip("Escala espacial del ruido Perlin en el borde (mundo⁻¹ aprox.).")]
+        [Range(0.02f, 0.6f)] public float waterEdgeNoiseScale = 0.18f;
+        [Tooltip("Ancho relativo del cauce aguas abajo (según posición en mapa). 1 = uniforme; >1 ensancha hacia una esquina del mapa.")]
+        [Range(0.75f, 1.45f)] public float riverWidthDownstreamFactor = 1.12f;
+        [Tooltip("Boost de ancho en confluencias (vecinos River en ventana 5×5). 0 = desactivar.")]
+        [Range(0f, 0.55f)] public float riverWidthConfluenceBoost = 0.16f;
+        [Tooltip("Ruido suave de ancho del campo del río (amplitud efectiva acotada internamente). 0 = desactivar.")]
+        [Range(0f, 0.35f)] public float riverWidthNoiseScale = 0.05f;
+        [Tooltip("Mezcla extra del campo río↔lago en celdas River tocando Water (evita corte duro). 0 = desactivar.")]
+        [Range(0f, 1f)] public float riverLakeVisualBlend = 0.35f;
+        [Tooltip("Rango en celdas para mapear profundidad visual (interior → centro oscuro). Mayor = transición más ancha.")]
+        [Range(1f, 24f)] public float shoreVisualWidth = 7f;
+        [Tooltip("Contraste del gradiente orilla→profundo en UV (1 = lineal).")]
+        [Range(0.35f, 3f)] public float shoreVisualBlend = 1.25f;
+        [Tooltip("Fuerza del tinte profundo/orilla vía UV.y en Project/RTS River Water (0 = conservar mapeo UV anterior por posición).")]
+        [Range(0f, 1f)] public float waterDepthColorStrength = 0.62f;
+        [Tooltip("Multiplicador del vector _FlowSpeed del material de agua (animación UV). 1 = defecto.")]
+        [Range(0f, 2.5f)] public float waterUvFlowSpeedScale = 1f;
+        [Tooltip("Escala planar world-space de UV para la malla de agua (u=x*scale, v=z*scale).")]
+        [Range(0.001f, 0.2f)] public float waterUVScale = 0.018f;
+        [Tooltip("Genera decoración opcional en pasos de río estrechos (solo visual). Requiere prefab si quieres malla.")]
+        public bool enableRiverCrossings = true;
+        [Tooltip("Marca vados jugables (walkable) en tramos de río angostos. Independiente de la decoración visual de cruces.")]
+        public bool enableFunctionalRiverFords = true;
+        [Tooltip("Modo simplificado recomendado: los vados funcionales se derivan SOLO de los cruces visuales elegidos en WaterMeshBuilder (post-río), reduciendo lógica duplicada.")]
+        public bool useCrossingAssetFords = true;
+        [Tooltip("Máximo de puntos de cruce decorados por mapa.")]
+        [Range(0, 32)] public int riverCrossingMaxPerMap = 3;
+        [Tooltip("Separación mínima Chebyshev entre cruces (celdas).")]
+        [Range(2, 48)] public int riverCrossingMinSpacing = 13;
+        [Tooltip("Reservado (no spawnea gameplay): probabilidad 0–1 para futura extensión / mods.")]
+        [Range(0f, 1f)] public float riverCrossingResourceChance = 0f;
+        [Tooltip("Solo candidatos con ancho estimado ≤ este valor (celdas).")]
+        [Range(1, 8)] public int riverCrossingMaxThicknessCells = 2;
+        [Tooltip("Radio funcional de vado aplicado alrededor de la celda de cruce (Chebyshev). En modo crossing-assets, 0 se eleva internamente a 2.")]
+        [Range(0, 6)] public int riverCrossingFordRadiusCells = 2;
+        [Tooltip("Semiancho mínimo funcional del corredor de vado (en celdas), aplicado a lo largo del eje del río.")]
+        [Range(1, 6)] public int riverCrossingFunctionalHalfWidthCells = 2;
+        [Tooltip("Máximo de celdas para buscar cada orilla desde la celda de cruce (bank-to-bank).")]
+        [Range(4, 20)] public int riverCrossingBankSearchCells = 12;
+        [Tooltip("Offset vertical visual para decoraciones de cruce (m). Evita que queden hundidas en la malla de agua.")]
+        [Range(0f, 1f)] public float riverCrossingDecorYOffset = 0.35f;
+        [Tooltip("Debug visual temporal de cruces funcionales (rays/marcadores).")]
+        public bool riverCrossingDebugVisuals = false;
+        [Tooltip("Logs de diagnóstico para corredores de vado (candidato rechazado, longitud, conectividad, orillas Land).")]
+        public bool riverCrossingCorridorDebugLogs = false;
+        [Tooltip("Seguridad gameplay: si true, añade vados extra solo si es necesario para conectar spawns por tierra.")]
+        public bool riverCrossingExtraForSpawnConnectivity = true;
+        [Tooltip("Máximo de vados extra de conectividad (no cuenta contra riverCrossingMaxPerMap).")]
+        [Range(0, 8)] public int riverCrossingMaxExtraConnectivityFords = 4;
+        [Tooltip("Vados prioritarios donde rutas lógicas (A* con río permitido, caminos Fase6, anclas) cruzan ríos. No cuentan contra riverCrossingMaxPerMap.")]
+        public bool riverCrossingEnableStrategicRoadFords = true;
+        [Tooltip("Presupuesto máximo de vados estratégicos (independiente de riverCrossingMaxPerMap).")]
+        [Range(0, 16)] public int riverCrossingMaxStrategicRoadFords = 6;
+        [Tooltip("Cuando mandatoryCreated alcanza todos los ríos aptos, tope de RoadFords (menor coste que riverCrossingMaxStrategicRoadFords). 0 = no recortar.")]
+        [Range(0, 8)] public int riverCrossingMaxStrategicRoadFordsAfterMandatory = 2;
+        [Tooltip("Anclas del mapa por ciudad para rutas sintéticas (0 = solo spawn→masa principal; 2 = recomendado para rendimiento).")]
+        [Range(0, 4)] public int riverCrossingStrategicAnchorCount = 2;
+        [Tooltip("Cobertura obligatoria: máximo de vados funcionales forzados por centerline de río (no cuenta contra riverCrossingMaxPerMap).")]
+        [Range(0, 2)] public int riverCrossingMaxMandatoryPerRiver = 1;
+        [Tooltip("Cobertura obligatoria: spacing mínimo (Chebyshev, celdas) para vados forzados si un río quedaría sin cobertura.")]
+        [Range(0, 24)] public int mandatoryRiverFordMinSpacing = 6;
+        [Tooltip("Seguridad spawn: mínimo de celdas caminables requeridas en el componente del spawn. Si es menor, se intenta forzar vado extra hacia el componente principal.")]
+        [Range(0, 200000)] public int minSpawnWalkableComponentCells = 1500;
+        [Tooltip("Seguridad spawn: ratio mínimo (0–1) del componente del spawn respecto al componente caminable más grande. Si es menor, se intenta forzar vado extra.")]
+        [Range(0f, 1f)] public float minSpawnWalkableComponentRatio = 0.20f;
+        [Tooltip("Longitud mínima de tramo (celdas) para considerar un segmento de río apto para vado.")]
+        [Range(4, 256)] public int riverFordMinSegmentLengthCells = 12;
+        [Tooltip("Distancia mínima (Chebyshev, celdas) desde una confluencia para permitir un vado.")]
+        [Range(0, 64)] public int riverFordMinDistanceFromConfluenceCells = 8;
+        [Tooltip("Máximo de vados funcionales por segmento de río.")]
+        [Range(1, 3)] public int riverFordMaxPerSegment = 1;
+        [Tooltip("Longitud máxima (celdas) de un segmento lógico derivado de centerline. Si se supera, se subdivide para repartir vados en un mismo río.")]
+        [Range(8, 512)] public int riverFordMaxSegmentLengthCells = 80;
+        [Tooltip("Longitud mínima (celdas) de un subsegmento derivado de centerline. Subsegmentos más cortos se descartan para evitar microcortes.")]
+        [Range(4, 256)] public int riverFordMinSubSegmentLengthCells = 20;
+        [Tooltip("Mínimo de celdas en un vado conexo (4-vecinos) para que sea transitable. Manzas más pequeñas se revierten a río profundo (evita cruces fantasma de 1–2 celdas).")]
+        [Range(2, 24)] public int riverFordMinWalkableBlobCells = 4;
+        [Tooltip("Prefab legacy opcional (roca/tronco). Si no hay variantes en waterCrossingDecorationPrefabs, se usa este.")]
+        public GameObject waterCrossingDecorationPrefab;
+        [Tooltip("Variantes visuales para el nuevo vado (pasto/roca/tronco). Se distribuyen de forma determinista por celda y se combinan por prefab.")]
+        public GameObject[] waterCrossingDecorationPrefabs;
+        [Tooltip("Detalles opcionales genéricos en orilla (instancias combinadas).")]
+        public bool waterEnableShoreProps = false;
+        public GameObject waterShoreRockPrefab;
+        [Tooltip("Densidad aproximada (props por 1000 celdas de borde de agua). 0 = desactivar.")]
+        [Range(0f, 40f)] public float waterShorePropDensity = 0f;
+        [Tooltip("Debug SceneView: interior-dist a orilla (muestreo grueso).")]
+        public bool debugDrawWaterShoreDepthGizmos = false;
+        [Tooltip("Debug SceneView: candidatos a cruce de río.")]
+        public bool debugDrawWaterCrossingGizmos = false;
 
         [Header("Agua MS - límites de seguridad")]
         [Tooltip("Máximo de samples (esquinas) para Marching Squares (sw*sh). Si se supera, se hace fallback a agua por chunks (más barato).")]

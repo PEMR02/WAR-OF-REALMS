@@ -180,11 +180,7 @@ namespace Project.Gameplay.Units.Movement
                 Vector2Int c = new Vector2Int(x0, y0);
                 if (!MapGrid.Instance.IsInBounds(c))
                     return false;
-                if (MapGrid.Instance.IsImpassableWater(c))
-                    return false;
-                if (!_canSwim && MapGrid.Instance.IsWater(c))
-                    return false;
-                if (!MapGrid.Instance.IsCellFree(c) && !MapGrid.Instance.IsOpenGatePassableCell(c))
+                if (!MapGrid.Instance.IsPassableForPathfinding(c, _canSwim))
                     return false;
 
                 if (x0 == x1 && y0 == y1)

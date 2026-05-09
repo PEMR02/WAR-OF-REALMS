@@ -10,6 +10,7 @@ namespace Project.Gameplay.Map.Generation
     /// </summary>
     public static class MatchConfigCompiler
     {
+        static bool s_loggedSceneTemplateDeprecation;
         /// <summary>
         /// Prioridad de plantilla técnica: (1) <see cref="MatchConfig.mapGenerationProfile"/>,
         /// (2) <paramref name="sceneLegacyDefinitiveTemplate"/> con warning,
@@ -63,9 +64,13 @@ namespace Project.Gameplay.Map.Generation
                 cfg.hideFlags = HideFlags.HideAndDontSave;
                 result.UsedSceneLegacyDefinitiveTemplate = true;
                 debugSource = sceneLegacyDefinitiveTemplate;
-                Debug.LogWarning(
-                    "[MapGen] Se usó 'definitiveMapGenConfig' en escena como plantilla técnica. " +
-                    "DEPRECATED: asigna un MapGenerationProfile en MatchConfig.mapGenerationProfile para trazabilidad.");
+                if (!s_loggedSceneTemplateDeprecation)
+                {
+                    s_loggedSceneTemplateDeprecation = true;
+                    Debug.LogWarning(
+                        "[MapGen] Se usó 'definitiveMapGenConfig' en escena como plantilla técnica. " +
+                        "DEPRECATED: asigna un MapGenerationProfile en MatchConfig.mapGenerationProfile para trazabilidad.");
+                }
             }
             else
             {
@@ -121,11 +126,19 @@ namespace Project.Gameplay.Map.Generation
             bool any = false;
             void TakePrefab(ref GameObject main, GameObject fromScene, ref GameObject[] variants, GameObject[] fromVar)
             {
-                if (main != null) return;
-                if (fromScene == null && (fromVar == null || fromVar.Length == 0)) return;
-                main = fromScene;
-                if (variants == null || variants.Length == 0) variants = fromVar;
-                any = true;
+                bool changed = false;
+                if (main == null && fromScene != null)
+                {
+                    main = fromScene;
+                    changed = true;
+                }
+                if ((variants == null || variants.Length == 0) && fromVar != null && fromVar.Length > 0)
+                {
+                    variants = fromVar;
+                    changed = true;
+                }
+                if (changed)
+                    any = true;
             }
             TakePrefab(ref res.treePrefab, scene.treePrefab, ref res.treePrefabVariants, scene.treePrefabVariants);
             TakePrefab(ref res.berryPrefab, scene.berryPrefab, ref res.berryPrefabVariants, scene.berryPrefabVariants);
@@ -174,6 +187,10 @@ namespace Project.Gameplay.Map.Generation
             target.debugTerrainGrassDry = template.debugTerrainGrassDry;
             target.debugRiverVisualStats = template.debugRiverVisualStats;
             target.debugLogs = template.debugLogs;
+            // Gizmos agua / vados: deben seguir la plantilla técnica tras compilar Match (runtime clone).
+            target.debugDrawWaterMaskGizmos = template.debugDrawWaterMaskGizmos;
+            target.debugDrawWaterShoreDepthGizmos = template.debugDrawWaterShoreDepthGizmos;
+            target.debugDrawWaterCrossingGizmos = template.debugDrawWaterCrossingGizmos;
         }
 
         public static ResourceRuntimeSettings BuildResourceRuntimeSettings(MatchConfig match)
@@ -297,6 +314,13 @@ namespace Project.Gameplay.Map.Generation
             config.riverWidthRadiusCells = Mathf.Clamp(match.water.riverWidthRadiusCells, 0, 6);
             config.riverWidthNoiseAmplitudeCells = Mathf.Clamp(match.water.riverWidthNoiseAmplitudeCells, 0, 3);
             config.lakeRiverMouthBlendCells = Mathf.Clamp(match.water.lakeRiverMouthBlendCells, 0, 8);
+
+            // Vados (gameplay): si la plantilla técnica viene con 0, aplicar defaults seguros.
+            // En Play, el Match pisa muchos valores; estos nuevos campos no existen en MatchConfig legacy.
+            if (config.riverCrossingMaxMandatoryPerRiver <= 0)
+                config.riverCrossingMaxMandatoryPerRiver = 1;
+            if (config.mandatoryRiverFordMinSpacing <= 0)
+                config.mandatoryRiverFordMinSpacing = 6;
 
             float wh01 = Mathf.Clamp01(match.water.baseHeightNormalized);
             config.waterHeight01 = wh01;

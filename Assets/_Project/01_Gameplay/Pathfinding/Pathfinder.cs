@@ -55,7 +55,7 @@ namespace Project.Gameplay.Pathfinding
             }
 
             // Si el destino está ocupado (edificio) → buscar celda libre más cercana al borde desde la dirección de start
-            if (!MapGrid.Instance.IsCellFree(goal))
+            if (!MapGrid.Instance.IsPassableForPathfinding(goal, canSwim))
             {
                 // Radio algo mayor: campamentos 2x2 + recurso en celda lindera; 6 a veces quedaba corto en mapas grandes.
                 Vector2Int nearest = FindNearestWalkableCell(goal, 12, canSwim, start);
@@ -119,9 +119,7 @@ namespace Project.Gameplay.Pathfinding
                         if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) != r) continue;
                         var c = new Vector2Int(center.x + dx, center.y + dy);
                         if (!MapGrid.Instance.IsInBounds(c)) continue;
-                        if (!MapGrid.Instance.IsCellFree(c)) continue;
-                        if (MapGrid.Instance.IsImpassableWater(c)) continue;
-                        if (!canSwim && MapGrid.Instance.IsWater(c)) continue;
+                        if (!MapGrid.Instance.IsPassableForPathfinding(c, canSwim)) continue;
 
                         float score = r;
                         if (hasDir && (dx != 0 || dy != 0))
@@ -181,12 +179,7 @@ namespace Project.Gameplay.Pathfinding
 
                     if (_closedSet.Contains(neighbor))
                         continue;
-                    if (!MapGrid.Instance.IsCellFree(neighbor))
-                        continue;
-                    if (MapGrid.Instance.IsImpassableWater(neighbor))
-                        continue;
-                    // Si no puede nadar, agua navegable es intransitable
-                    if (!canSwim && MapGrid.Instance.IsWater(neighbor))
+                    if (!MapGrid.Instance.IsPassableForPathfinding(neighbor, canSwim))
                         continue;
 
                     float moveCost = IsDiagonal(current.cell, neighbor) ? DiagonalCost : 1f;

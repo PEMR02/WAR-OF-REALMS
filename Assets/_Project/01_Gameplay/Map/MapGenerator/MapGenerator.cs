@@ -148,7 +148,13 @@ namespace Project.Gameplay.Map.Generator
                     }
 
                     LogPhaseStart("Fase9 WaterMesh");
-                    WaterMeshBuilder.BuildWaterMeshes(_grid, c, c.waterMaterial);
+                    // Conectividad de spawns: usar centros de ciudad como spawns (primeros N jugadores).
+                    var spawnCells = new List<Vector2Int>();
+                    int nSpawns = Mathf.Max(0, _cities != null ? _cities.Count : 0);
+                    nSpawns = Mathf.Min(nSpawns, Mathf.Max(1, c.cityCount));
+                    for (int i = 0; i < nSpawns; i++)
+                        spawnCells.Add(_cities[i].Center);
+                    WaterMeshBuilder.BuildWaterMeshes(_grid, c, c.waterMaterial, spawnCells, _cities, _roads);
                     LogPhaseEnd("Fase9 WaterMesh");
                 }
 
@@ -228,14 +234,157 @@ namespace Project.Gameplay.Map.Generator
             Generate(config, terrain);
         }
 
+        /// <summary>Altura mundo para gizmos: si hay Terrain, encima de la superficie muestreada (evita dibujar bajo el mesh).</summary>
+        float GizmoYAtWorldXZ(float wx, float wz, float aboveSurface = 0.35f)
+        {
+            if (terrain != null && terrain.terrainData != null)
+            {
+                Vector3 tp = terrain.transform.position;
+                float h = terrain.SampleHeight(new Vector3(wx, tp.y + 2000f, wz)) + tp.y;
+                return h + aboveSurface;
+            }
+            return _grid.Origin.y + 0.15f + aboveSurface;
+        }
+
         void OnDrawGizmos()
         {
             MapGenConfig c = config;
-            if (c == null || !c.debugDrawRiverPathInScene || _grid == null)
+            if (c == null || _grid == null)
                 return;
             float cs = _grid.CellSizeWorld;
             Vector3 o = _grid.Origin;
-            float y = o.y + 0.15f;
+            // Una muestra al centro del mapa para overlays densos (máscara): evita miles de SampleHeight por frame.
+            float cxm = o.x + _grid.Width * cs * 0.5f;
+            float czm = o.z + _grid.Height * cs * 0.5f;
+            float y = GizmoYAtWorldXZ(cxm, czm, 0.05f);
+
+            if (c.debugDrawWaterMaskGizmos)
+            {
+                var mask = WaterGenerator.DebugLastRiverFusionMask01;
+                var core = WaterGenerator.DebugLastRiverFusionCoreMask;
+                var shore = WaterGenerator.DebugLastRiverFusionShoreMask;
+                if (mask != null && core != null && shore != null)
+                {
+                    int w = _grid.Width;
+                    int h = _grid.Height;
+                    float s = Mathf.Max(0.06f, cs * 0.22f);
+                    for (int z = 0; z < h; z++)
+                    {
+                        for (int x = 0; x < w; x++)
+                        {
+                            float v = Mathf.Clamp01(mask[x, z]);
+                            if (v < 0.02f && !core[x, z] && !shore[x, z])
+                                continue;
+
+                            Vector3 p = new Vector3(o.x + (x + 0.5f) * cs, y + 0.02f, o.z + (z + 0.5f) * cs);
+                            Color col = new Color(0.1f, 0.55f, 0.95f, Mathf.Lerp(0.08f, 0.38f, v));
+                            if (core[x, z]) col = new Color(0.9f, 0.15f, 0.15f, 0.42f);
+                            else if (shore[x, z]) col = new Color(0.18f, 0.95f, 0.35f, 0.44f);
+                            Gizmos.color = col;
+                            Gizmos.DrawCube(p, new Vector3(s, 0.02f, s));
+                        }
+                    }
+                }
+            }
+
+            if (c.debugDrawWaterShoreDepthGizmos && WaterMeshBuilder.DebugLastWaterInteriorDistanceGrid != null)
+            {
+                var distG = WaterMeshBuilder.DebugLastWaterInteriorDistanceGrid;
+                int wM = _grid.Width;
+                int hM = _grid.Height;
+                int md = Mathf.Max(1, WaterMeshBuilder.DebugLastWaterInteriorDistanceMax);
+                float s = Mathf.Max(0.05f, cs * 0.18f);
+                for (int z = 0; z < hM; z++)
+                {
+                    for (int x = 0; x < wM; x++)
+                    {
+                        int d = distG[x, z];
+                        if (d < 0) continue;
+                        var ct = _grid.GetCell(x, z).type;
+                        if (ct != CellType.Water && ct != CellType.River) continue;
+                        float t = Mathf.Clamp01(d / (float)md);
+                        Vector3 p = new Vector3(o.x + (x + 0.5f) * cs, y + 0.04f, o.z + (z + 0.5f) * cs);
+                        Gizmos.color = Color.Lerp(new Color(0.2f, 0.85f, 1f, 0.32f), new Color(0.04f, 0.1f, 0.35f, 0.4f), t);
+                        Gizmos.DrawCube(p, new Vector3(s, 0.012f, s));
+                    }
+                }
+            }
+
+            if (c.riverCrossingDebugVisuals)
+            {
+                var fpC = WaterMeshBuilder.DebugRiverFordFootprintCentersWorld;
+                var fpS = WaterMeshBuilder.DebugRiverFordFootprintSizesWorld;
+                if (fpC != null && fpS != null && fpC.Count == fpS.Count)
+                {
+                    for (int i = 0; i < fpC.Count; i++)
+                    {
+                        float gy = GizmoYAtWorldXZ(fpC[i].x, fpC[i].z, 0.18f);
+                        Vector3 p = new Vector3(fpC[i].x, gy, fpC[i].z);
+                        Gizmos.color = new Color(1f, 0.92f, 0.12f, 0.95f);
+                        Gizmos.DrawWireCube(p, fpS[i]);
+                    }
+                }
+
+                var failed = WaterMeshBuilder.DebugRiverFordFailedCenterPositionsWorld;
+                if (failed != null && failed.Count > 0)
+                {
+                    float fr = Mathf.Max(0.06f, cs * 0.22f);
+                    for (int i = 0; i < failed.Count; i++)
+                    {
+                        float gy = GizmoYAtWorldXZ(failed[i].x, failed[i].z, 0.22f);
+                        Vector3 p = new Vector3(failed[i].x, gy, failed[i].z);
+                        Gizmos.color = new Color(1f, 0.28f, 0.22f, 0.92f);
+                        Gizmos.DrawWireSphere(p, fr);
+                    }
+                }
+            }
+
+            if (c.debugDrawWaterCrossingGizmos)
+            {
+                var cx = WaterMeshBuilder.DebugWaterCrossingPositionsWorld;
+                if (cx != null && cx.Count > 0)
+                {
+                    Gizmos.color = new Color(1f, 0.55f, 0.05f, 0.9f);
+                    float cr = Mathf.Max(0.1f, cs * 0.4f);
+                    for (int i = 0; i < cx.Count; i++)
+                    {
+                        float sy = GizmoYAtWorldXZ(cx[i].x, cx[i].z, 0.15f);
+                        Gizmos.DrawWireSphere(new Vector3(cx[i].x, sy, cx[i].z), cr);
+                    }
+                }
+
+                // Vados funcionales: verde = celdas River transitables (altura por celda para terreno ondulado).
+                float fs = Mathf.Max(0.12f, cs * 0.28f);
+                float fh = Mathf.Max(0.04f, cs * 0.08f);
+                Gizmos.color = new Color(0.18f, 0.95f, 0.28f, 0.85f);
+                for (int z = 0; z < _grid.Height; z++)
+                {
+                    for (int x = 0; x < _grid.Width; x++)
+                    {
+                        ref var cd = ref _grid.GetCell(x, z);
+                        if (cd.type != CellType.River || !cd.riverFord)
+                            continue;
+                        float wx = o.x + (x + 0.5f) * cs;
+                        float wz = o.z + (z + 0.5f) * cs;
+                        float gy = GizmoYAtWorldXZ(wx, wz, 0.12f);
+                        Vector3 p = new Vector3(wx, gy, wz);
+                        Gizmos.DrawCube(p, new Vector3(fs, fh, fs));
+
+                        // Marcador alto para localizar vados a distancia en Scene view.
+                        float towerHeight = 100f;
+                        float towerRadius = Mathf.Max(0.25f, cs * 0.18f);
+                        Vector3 tp = new Vector3(wx, gy + towerHeight * 0.5f, wz);
+                        Gizmos.DrawCube(tp, new Vector3(towerRadius, towerHeight, towerRadius));
+                        Gizmos.DrawWireSphere(new Vector3(wx, gy + towerHeight, wz), Mathf.Max(0.6f, cs * 0.3f));
+                    }
+                }
+            }
+
+            if (!c.debugDrawRiverPathInScene)
+            {
+                if (!c.debugDrawRiverRibbonGizmos)
+                    return;
+            }
 
             void DrawPolyCell(List<Vector2> poly, Color col)
             {
@@ -260,6 +409,29 @@ namespace Project.Gameplay.Map.Generator
             {
                 foreach (var poly in _grid.RiverPathDebugSmoothed)
                     DrawPolyCell(poly, new Color(0.2f, 0.95f, 0.35f, 0.9f));
+            }
+
+            if (c.debugDrawRiverRibbonGizmos)
+            {
+                float pSize = Mathf.Max(0.02f, c.debugRiverRibbonPointSize);
+                var pts = WaterMeshBuilder.DebugRibbonPathPointsWorld;
+                Gizmos.color = new Color(1f, 0.92f, 0.2f, 0.8f);
+                for (int i = 0; i < pts.Count; i++)
+                    Gizmos.DrawSphere(new Vector3(pts[i].x, y + 0.06f, pts[i].z), pSize);
+
+                var okA = WaterMeshBuilder.DebugRibbonAcceptedSegmentsAWorld;
+                var okB = WaterMeshBuilder.DebugRibbonAcceptedSegmentsBWorld;
+                Gizmos.color = new Color(0.15f, 1f, 0.25f, 0.92f);
+                int okCount = Mathf.Min(okA.Count, okB.Count);
+                for (int i = 0; i < okCount; i++)
+                    Gizmos.DrawLine(new Vector3(okA[i].x, y + 0.08f, okA[i].z), new Vector3(okB[i].x, y + 0.08f, okB[i].z));
+
+                var badA = WaterMeshBuilder.DebugRibbonDiscardedSegmentsAWorld;
+                var badB = WaterMeshBuilder.DebugRibbonDiscardedSegmentsBWorld;
+                Gizmos.color = new Color(1f, 0.15f, 0.15f, 0.95f);
+                int badCount = Mathf.Min(badA.Count, badB.Count);
+                for (int i = 0; i < badCount; i++)
+                    Gizmos.DrawLine(new Vector3(badA[i].x, y + 0.1f, badA[i].z), new Vector3(badB[i].x, y + 0.1f, badB[i].z));
             }
         }
     }

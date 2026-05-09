@@ -1,5 +1,6 @@
 using Project.Gameplay.Map.Generator;
 using UnityEngine;
+using UnityEngine.AI;
 
 namespace Project.Gameplay.Map
 {
@@ -21,6 +22,8 @@ namespace Project.Gameplay.Map
         float[] _terrainCosts;
         /// <summary>Celdas bajo una puerta abierta: transitables para A* aunque el muro marque ocupación.</summary>
         bool[] _openGatePassable;
+        /// <summary>Celdas de río marcadas como vado (transitables); usado para gameplay (p. ej. velocidad al cruzar).</summary>
+        bool[] _riverFord;
 
         void Awake()
         {
@@ -50,6 +53,7 @@ namespace Project.Gameplay.Map
             for (int i = 0; i < _terrainCosts.Length; i++)
                 _terrainCosts[i] = 1f;
             _openGatePassable = new bool[width * height];
+            _riverFord = new bool[width * height];
 
             MatchRuntimeState.SetGeneratedWorldBounds(_worldBounds);
         }
@@ -65,18 +69,20 @@ namespace Project.Gameplay.Map
                 {
                     Vector2Int c = new Vector2Int(x, z);
                     ref CellData cell = ref grid.GetCell(c);
-                    bool ford = cell.type == CellType.River && cell.riverFord;
+                    bool ford = cell.riverFord;
+                    SetRiverFord(c, ford);
                     bool isWater = cell.type == CellType.Water || (cell.type == CellType.River && !ford);
                     WaterTraverseMode wt = cell.waterTraverse;
                     if (isWater && wt == WaterTraverseMode.NotWater)
                         wt = WaterTraverseMode.SwimNavigable;
-                    bool swimNavWater = isWater && wt == WaterTraverseMode.SwimNavigable;
-                    bool impassWater = wt == WaterTraverseMode.Impassable;
-                    // Agua natación: no bloquea A* (IsCellFree) para unidades con canSwim; agua infranqueable bloquea a todos.
+                    bool impassWater = !ford && wt == WaterTraverseMode.Impassable;
+                    // Río sin vado: siempre bloqueado para pie (A* usa IsPassableForPathfinding). Nadadores siguen por IsWater + excepción en ese método.
                     bool blocked = cell.type == CellType.Mountain
                         || impassWater
                         || (cell.type == CellType.Land && !cell.walkable)
-                        || (cell.type == CellType.River && !ford && !swimNavWater);
+                        || (cell.type == CellType.River && !ford);
+                    if (ford)
+                        blocked = false;
                     SetWater(c, isWater);
                     SetImpassableWater(c, impassWater);
                     SetBlocked(c, blocked);
@@ -103,7 +109,8 @@ namespace Project.Gameplay.Map
         }
 
         public bool IsReady =>
-            _blocked != null && _occupied != null && _water != null && _impassableWater != null && _terrainCosts != null;
+            _blocked != null && _occupied != null && _water != null && _impassableWater != null && _terrainCosts != null
+            && _riverFord != null;
         public Bounds WorldBounds => _worldBounds;
 
         public static float GetCellSizeOrDefault()
@@ -114,9 +121,23 @@ namespace Project.Gameplay.Map
             return MatchRuntimeState.DefaultCellSize;
         }
 
+        void SetRiverFord(Vector2Int c, bool value)
+        {
+            if (_riverFord == null || !IsInBounds(c)) return;
+            _riverFord[Index(c)] = value;
+        }
+
+        /// <summary>True si la celda es un vado de río (cauce poco hondo, transitable).</summary>
+        public bool IsRiverFordCell(Vector2Int c)
+        {
+            if (_riverFord == null || !IsInBounds(c)) return false;
+            return _riverFord[Index(c)];
+        }
+
         public bool IsWater(Vector2Int c)
         {
             if (_water == null || !IsInBounds(c)) return false;
+            if (_riverFord != null && _riverFord[Index(c)]) return false;
             return _water[Index(c)];
         }
 
@@ -129,6 +150,7 @@ namespace Project.Gameplay.Map
         public bool IsImpassableWater(Vector2Int c)
         {
             if (!IsInBounds(c)) return false;
+            if (_riverFord != null && _riverFord[Index(c)]) return false;
             return _impassableWater != null && _impassableWater[Index(c)];
         }
 
@@ -222,6 +244,59 @@ namespace Project.Gameplay.Map
             if (_openGatePassable != null && _openGatePassable[Index(c)])
                 return true;
             return !_occupied[Index(c)];
+        }
+
+        /// <summary>
+        /// Transitable para A* según tipo de unidad: pie no entra en agua/río sin vado (bloqueo duro en grid).
+        /// Nadadores pueden atravesar agua navegable aunque la celda esté marcada bloqueada para pie.
+        /// </summary>
+        public bool IsPassableForPathfinding(Vector2Int c, bool canSwim)
+        {
+            if (!IsInBounds(c)) return false;
+            if (IsImpassableWater(c)) return false;
+            int idx = Index(c);
+            if (_openGatePassable != null && _openGatePassable[idx])
+                return true;
+            if (_occupied[idx]) return false;
+            if (!canSwim)
+            {
+                // Lago (Water) y río sin vado: IsWater; el grid endurece río no-ford también en _blocked.
+                if (IsWater(c)) return false;
+                return !_blocked[idx];
+            }
+
+            if (!_blocked[idx]) return true;
+            return IsWater(c);
+        }
+
+        /// <summary>
+        /// Tras hornear NavMesh: si hay muestra válida sobre río sin vado, el mesh discrepa del grid (solo diagnóstico).</summary>
+        public static void ValidateRuntimeTraversableCells(GridSystem logicalGrid, float cellSizeWorld, bool log, int maxReports = 48)
+        {
+            if (!log || logicalGrid == null) return;
+            float sampleR = Mathf.Max(0.35f, cellSizeWorld * 0.75f);
+            int reports = 0;
+            for (int z = 0; z < logicalGrid.Height; z++)
+            {
+                for (int x = 0; x < logicalGrid.Width; x++)
+                {
+                    ref var cell = ref logicalGrid.GetCell(x, z);
+                    if (cell.type != CellType.River || cell.riverFord)
+                        continue;
+                    Vector3 w = logicalGrid.CellToWorldCenter(x, z);
+                    if (NavMesh.SamplePosition(w, out NavMeshHit hit, sampleR, NavMesh.AllAreas))
+                    {
+                        Debug.Log(
+                            $"[NavMeshLeak] world={hit.position} cell=({x},{z}) riverFord=false sampleValid=true sampleRadius={sampleR:F2}");
+                        reports++;
+                        if (reports >= maxReports)
+                        {
+                            Debug.Log($"[NavMeshLeak] ... truncado tras {maxReports} casos.");
+                            return;
+                        }
+                    }
+                }
+            }
         }
 
         /// <summary>Marca celdas como paso por puerta abierta (A* puede atravesar muro en esas celdas).</summary>

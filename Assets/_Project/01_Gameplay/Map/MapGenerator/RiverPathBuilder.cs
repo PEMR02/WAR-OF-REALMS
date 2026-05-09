@@ -463,16 +463,24 @@ namespace Project.Gameplay.Map.Generator
 
             var fordList = new List<Vector2Int>();
             var fordPacked = new HashSet<long>();
-            for (int idx = 0; idx < path.Count; idx++)
+            if (fordEvery > 0 && path.Count > 8)
             {
-                var c = path[idx];
-                if (!IsInside(w, h, c.x, c.y)) continue;
-                int step = idx + 1;
-                bool isFord = fordEvery > 0 && step > 1 && (step + fordPhase) % fordEvery == 0;
-                if (!isFord) continue;
-                long k = PackCell(c);
-                if (fordPacked.Add(k))
-                    fordList.Add(c);
+                // Limitar cruces por río: ~3 puntos separados (pedido de diseño gameplay).
+                const int desiredFordsPerRiver = 3;
+                int startIdx = Mathf.Clamp(path.Count / 10, 2, Mathf.Max(2, path.Count - 4));
+                int endIdx = Mathf.Clamp(path.Count - 1 - startIdx, startIdx + 1, path.Count - 2);
+                for (int j = 1; j <= desiredFordsPerRiver; j++)
+                {
+                    float t = j / (desiredFordsPerRiver + 1f);
+                    int idx = Mathf.RoundToInt(Mathf.Lerp(startIdx, endIdx, t));
+                    int jitter = Mathf.Clamp(fordPhase % 3, 0, 2);
+                    idx = Mathf.Clamp(idx + ((j & 1) == 0 ? -jitter : jitter), startIdx, endIdx);
+                    var c = path[idx];
+                    if (!IsInside(w, h, c.x, c.y)) continue;
+                    long k = PackCell(c);
+                    if (fordPacked.Add(k))
+                        fordList.Add(c);
+                }
             }
 
             fordCells = fordList;

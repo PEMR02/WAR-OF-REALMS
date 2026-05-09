@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
+using UnityEngine.Rendering;
 using Project.Gameplay;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Buildings;
@@ -17,6 +18,59 @@ namespace Project.Gameplay.Map
     public static class MapResourcePlacer
     {
         const string ResourcePickRootName = "__ResourcePickRoot";
+        const int MaxAnimalNavMeshWarningLogs = 3;
+        static int s_AnimalNavMeshWarningCount;
+
+        /// <summary>Evita miles de <see cref="TerrainData.GetAlphamaps"/> repetidas sobre la misma celda durante bosques.</summary>
+        static Dictionary<long, bool> s_grassAlphamapCellCache;
+
+        /// <summary>Evita muestreo en anillo del borde: menos fallos y menos iteraciones al colocar bosques.</summary>
+        const int GlobalTreeRandomInnerInsetCells = 2;
+        /// <summary>Margen duro para madera: evita copas/troncos asomando fuera del mapa visible.</summary>
+        const int GlobalTreeHardEdgeInsetCells = 7;
+
+        /// <summary>Cache por celda para <see cref="IsWorldOkForGlobalTree"/> (evita miles de <c>GetAlphamaps(1,1)</c>).</summary>
+        static Dictionary<long, bool> s_grassCellAlphamapCache;
+
+        static void BeginGlobalTreeGrassCache()
+        {
+            s_grassCellAlphamapCache = new Dictionary<long, bool>(16384);
+        }
+
+        static void EndGlobalTreeGrassCache()
+        {
+            s_grassCellAlphamapCache = null;
+        }
+
+        static long PackCellKey(Vector2Int c) => ((long)(uint)c.x) | ((long)(uint)c.y << 32);
+
+        static long PackGridCellKey(Vector2Int c) => ((long)(uint)c.x << 32) | (uint)c.y;
+
+        static void BeginGrassAlphamapPlacementCache()
+        {
+            s_grassAlphamapCellCache = new Dictionary<long, bool>(16384);
+        }
+
+        static void EndGrassAlphamapPlacementCache()
+        {
+            s_grassAlphamapCellCache = null;
+        }
+
+        static bool TryPickRandomGlobalTreeCell(MapGrid grid, System.Random rng, int edgeInset, out Vector2Int cell)
+        {
+            cell = default;
+            if (grid == null || !grid.IsReady || rng == null) return false;
+            int inset = Mathf.Clamp(edgeInset, 0, Mathf.Max(0, Mathf.Min(grid.width, grid.height) / 2 - 1));
+            int minX = inset, maxX = grid.width - 1 - inset;
+            int minZ = inset, maxZ = grid.height - 1 - inset;
+            if (maxX < minX || maxZ < minZ)
+            {
+                cell = new Vector2Int(rng.Next(0, grid.width), rng.Next(0, grid.height));
+                return true;
+            }
+            cell = new Vector2Int(rng.Next(minX, maxX + 1), rng.Next(minZ, maxZ + 1));
+            return true;
+        }
 
         static GameObject InstantiateNavMeshSafe(GameObject prefab, Vector3 position, Quaternion rotation)
         {
@@ -110,6 +164,8 @@ namespace Project.Gameplay.Map
                     var placeCell = new Vector2Int(x, z);
                     if (!mapGrid.IsInBounds(placeCell) || !mapGrid.IsCellFree(placeCell)) continue;
                     if (mapGrid.IsWater(placeCell)) continue;
+                    if (cell.resourceType == ResourceType.Wood && IsCellNearGridEdge(mapGrid, placeCell, GlobalTreeHardEdgeInsetCells))
+                        continue;
 
                     if (distWater != null && x >= 0 && z >= 0 && x < distWater.GetLength(0) && z < distWater.GetLength(1))
                     {
@@ -119,6 +175,7 @@ namespace Project.Gameplay.Map
                     }
 
                     Vector3 world = definitiveGrid.CellToWorldCenter(x, z);
+                    gen.ClampWorldXZToAuthoritativeMap(ref world, 0.35f);
                     world.y = gen.terrain != null ? gen.SampleHeight(world) : world.y;
                     if (minDistanceFromTownCenters > 0.01f && IsWithinMinDistanceXZ(world, townCenterWorldPositionsExclude, minDistanceFromTownCenters))
                         continue;
@@ -132,11 +189,13 @@ namespace Project.Gameplay.Map
                     NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
                     if (!go.activeSelf) go.SetActive(true);
                     DisableResourceNavMeshSnapForProceduralPlacement(go);
-                    SnapResourceBottomToTerrain(go, gen);
+                    SnapResourceBottomToTerrain(go, gen, kind);
                     EnsureResourceCollectable(go, kind, gen, res);
 
                     Vector2Int wc = mapGrid.WorldToCell(go.transform.position);
-                    if (!mapGrid.IsInBounds(wc) || mapGrid.IsWater(wc))
+                    if (!mapGrid.IsInBounds(wc) || mapGrid.IsWater(wc) || wc != placeCell ||
+                        (kind == ResourceKind.Wood && IsCellNearGridEdge(mapGrid, wc, GlobalTreeHardEdgeInsetCells)) ||
+                        (kind == ResourceKind.Wood && !IsResourceVisualBoundsInsideTerrainXZ(go, gen, 0.06f)))
                     {
                         UnityEngine.Object.Destroy(go);
                         continue;
@@ -237,7 +296,8 @@ namespace Project.Gameplay.Map
             var rng = gen.GetRng();
             if (grid == null || rng == null) return;
 
-            Debug.Log($"PlaceResourcesPerPlayer: {spawns.Count} jugadores");
+            if (gen.debugLogs)
+                Debug.Log($"PlaceResourcesPerPlayer: {spawns.Count} jugadores");
 
             if (s.treePrefab == null)
                 Debug.LogWarning("RTS Map Generator: treePrefab no asignado.");
@@ -263,9 +323,9 @@ namespace Project.Gameplay.Map
 
                     if (ok)
                     {
-                        if (fair)
+                        if (fair && gen.debugLogs)
                             Debug.Log($"Player {i + 1} recursos: Wood={stats.WoodTrees}, Gold={stats.GoldNodes}, Stone={stats.StoneNodes}, Food={stats.FoodValue}, Total={spawned.Count}");
-                        else
+                        else if (!fair && gen.debugLogs)
                             Debug.LogWarning($"Player {i + 1}: recursos colocados pero por debajo del mínimo deseado (Wood={stats.WoodTrees}/{s.minWoodTrees}).");
                         break;
                     }
@@ -273,7 +333,7 @@ namespace Project.Gameplay.Map
                         if (spawned[si] != null) UnityEngine.Object.Destroy(spawned[si]);
                     for (int c = 0; c < occupiedCells.Count; c++)
                         grid.SetOccupied(occupiedCells[c], false);
-                    if (attempts == s.maxResourceRetries)
+                    if (attempts == s.maxResourceRetries && gen.debugLogs)
                         Debug.LogWarning($"Player {i + 1}: No se pudieron colocar recursos después de {s.maxResourceRetries} intentos.");
                 }
             }
@@ -292,6 +352,11 @@ namespace Project.Gameplay.Map
             int animalsTarget = rng.Next(s.globalAnimals.x, s.globalAnimals.y + 1);
             int treesPlaced = 0, stonePlaced = 0, goldPlaced = 0, animalsPlaced = 0;
 
+            bool grassCache = s.preferGlobalTreesOnGrassAlphamap;
+            if (grassCache)
+                BeginGlobalTreeGrassCache();
+            try
+            {
             // Árboles: con clustering se agrupan en bosques densos + resto dispersos
             if (HasAnyTreePrefab(s) && treesTarget > 0)
             {
@@ -320,10 +385,25 @@ namespace Project.Gameplay.Map
                 if (!grid.IsCellFree(cell)) continue;
                 Vector3 world = grid.CellToWorld(cell);
                 if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius)) continue;
-                if (GetRandomAnimalPrefab(s, gen) != null && TryPlaceSingleGlobal(GetRandomAnimalPrefab(s, gen), cell, ResourceKind.Food, gen, s))
+                GameObject animalPrefab = GetRandomAnimalPrefab(s, gen);
+                if (animalPrefab != null && TryPlaceSingleGlobal(animalPrefab, cell, ResourceKind.Food, gen, s))
                     animalsPlaced++;
             }
-            Debug.Log($"Recursos en el mapa: árboles={treesPlaced}, piedra={stonePlaced}, oro={goldPlaced}, animales={animalsPlaced}");
+            // Pase de refuerzo sin filtros de "grass" para no quedar muy por debajo del target en mapas con muchas celdas no-grama.
+            if (HasAnyTreePrefab(s) && treesPlaced < treesTarget)
+            {
+                int shortfall = treesTarget - treesPlaced;
+                treesPlaced += PlaceGlobalTreesEmergencyTopUp(spawns, shortfall, gen, s);
+            }
+            }
+            finally
+            {
+                if (grassCache)
+                    EndGlobalTreeGrassCache();
+            }
+
+            if (gen.debugLogs)
+                Debug.Log($"Recursos en el mapa: árboles={treesPlaced}, piedra={stonePlaced}, oro={goldPlaced}, animales={animalsPlaced}");
         }
 
         /// <summary>Piedra u oro global en vetas/filones compactos + remate disperso si hace falta.</summary>
@@ -430,7 +510,7 @@ namespace Project.Gameplay.Map
             int maxSize = Mathf.Clamp(s.clusterMaxSize, minSize, 200);
 
             int clusterBudget = inClusters;
-            int maxClusters = Mathf.Clamp(Mathf.Max(20, treesTarget / 30), 16, 56);
+            int maxClusters = Mathf.Clamp(Mathf.Max(16, treesTarget / 36), 12, 48);
             for (int c = 0; c < maxClusters && clusterBudget > 0; c++)
             {
                 int clusterSize = rng.Next(minSize, maxSize + 1);
@@ -463,6 +543,34 @@ namespace Project.Gameplay.Map
                 }
             }
 
+            // Si el filtro de grass deja pocos árboles, relajar en un segundo pase para no subgenerar bosques.
+            if (s.preferGlobalTreesOnGrassAlphamap && placed < inClusters)
+            {
+                int remainingClusterBudget = inClusters - placed;
+                int relaxPassAttempts = Mathf.Max(remainingClusterBudget * 20, 260);
+                int relaxAttempts = 0;
+                while (remainingClusterBudget > 0 && relaxAttempts < relaxPassAttempts)
+                {
+                    relaxAttempts++;
+                    if (!TryPickRandomGlobalTreeCell(grid, rng, GlobalTreeRandomInnerInsetCells, out Vector2Int cell))
+                        continue;
+                    if (!grid.IsCellFree(cell) || grid.IsWater(cell))
+                        continue;
+                    Vector3 w = grid.CellToWorld(cell);
+                    if (IsWithinExcludeRadius(w, spawns, s.globalExcludeRadius))
+                        continue;
+                    if (!IsWorldOkForGlobalTree(gen, s, w, ignoreGrassPreference: true))
+                        continue;
+
+                    GameObject prefab = GetRandomTreePrefab(s, gen);
+                    if (prefab != null && TryPlaceSingleGlobal(prefab, cell, ResourceKind.Wood, gen, s))
+                    {
+                        placed++;
+                        remainingClusterBudget--;
+                    }
+                }
+            }
+
             // Resto dispersos (hasta completar treesTarget)
             int remaining = treesTarget - placed;
             if (remaining > 0)
@@ -488,7 +596,8 @@ namespace Project.Gameplay.Map
             var rng = gen.GetRng();
             for (int i = 0; i < maxTries; i++)
             {
-                Vector2Int cell = new Vector2Int(rng.Next(0, grid.width), rng.Next(0, grid.height));
+                if (!TryPickRandomGlobalTreeCell(grid, rng, GlobalTreeRandomInnerInsetCells, out Vector2Int cell))
+                    continue;
                 Vector3 world = grid.CellToWorld(cell);
                 if (!grid.IsCellFree(cell)) continue;
                 if (grid.IsWater(cell)) continue;
@@ -504,12 +613,12 @@ namespace Project.Gameplay.Map
         /// <summary>Coloca árboles globales uno a uno en celdas aleatorias (sin clustering).</summary>
         static int PlaceGlobalTreesScattered(IList<Vector3> spawns, int treesTarget, RTSMapGenerator gen, ResourceRuntimeSettings s)
         {
-            int maxAttempts = treesTarget * (s.preferGlobalTreesOnGrassAlphamap ? 40 : 25);
+            int maxAttempts = treesTarget * (s.preferGlobalTreesOnGrassAlphamap ? 22 : 14);
             int placed = PlaceGlobalTreesScatteredInner(spawns, treesTarget, gen, s, maxAttempts, filterGrass: s.preferGlobalTreesOnGrassAlphamap);
             if (s.preferGlobalTreesOnGrassAlphamap && placed < treesTarget)
             {
                 int left = treesTarget - placed;
-                placed += PlaceGlobalTreesScatteredInner(spawns, left, gen, s, left * 35, filterGrass: false);
+                placed += PlaceGlobalTreesScatteredInner(spawns, left, gen, s, left * 20, filterGrass: false);
             }
             return placed;
         }
@@ -523,21 +632,116 @@ namespace Project.Gameplay.Map
             while (treesPlaced < treesTarget && attempts < maxAttempts)
             {
                 attempts++;
-                Vector2Int cell = new Vector2Int(rng.Next(0, grid.width), rng.Next(0, grid.height));
+                if (!TryPickRandomGlobalTreeCell(grid, rng, GlobalTreeRandomInnerInsetCells, out Vector2Int cell))
+                    continue;
                 if (!grid.IsCellFree(cell)) continue;
                 if (grid.IsWater(cell)) continue;
                 Vector3 world = grid.CellToWorld(cell);
                 if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius)) continue;
                 if (filterGrass && !IsWorldOkForGlobalTree(gen, s, world)) continue;
 
-                if (GetRandomTreePrefab(s, gen) != null && TryPlaceSingleGlobal(GetRandomTreePrefab(s, gen), cell, ResourceKind.Wood, gen, s))
+                GameObject treePrefab = GetRandomTreePrefab(s, gen);
+                if (treePrefab != null && TryPlaceSingleGlobal(treePrefab, cell, ResourceKind.Wood, gen, s))
                     treesPlaced++;
             }
             return treesPlaced;
         }
 
+        static int PlaceGlobalTreesEmergencyTopUp(IList<Vector3> spawns, int need, RTSMapGenerator gen, ResourceRuntimeSettings s)
+        {
+            if (need <= 0) return 0;
+            var grid = gen.GetGrid();
+            var rng = gen.GetRng();
+            int placed = 0;
+            int attempts = 0;
+            int maxAttempts = Mathf.Max(need * 48, 2000);
+            while (placed < need && attempts < maxAttempts)
+            {
+                attempts++;
+                if (!TryPickRandomGlobalTreeCell(grid, rng, GlobalTreeRandomInnerInsetCells, out Vector2Int cell))
+                    continue;
+                if (!grid.IsCellFree(cell) || grid.IsWater(cell))
+                    continue;
+                Vector3 world = grid.CellToWorld(cell);
+                if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius))
+                    continue;
+
+                GameObject treePrefab = GetRandomTreePrefab(s, gen);
+                if (treePrefab != null && TryPlaceSingleGlobal(treePrefab, cell, ResourceKind.Wood, gen, s))
+                    placed++;
+            }
+            // Pase determinista de cierre: recorre celdas barajadas para evitar estancamiento cuando
+            // la muestra aleatoria no alcanza a cubrir suficientes celdas válidas.
+            if (placed < need)
+                placed += PlaceGlobalTreesDeterministicSweep(spawns, need - placed, gen, s);
+            return placed;
+        }
+
+        static int PlaceGlobalTreesDeterministicSweep(IList<Vector3> spawns, int need, RTSMapGenerator gen, ResourceRuntimeSettings s)
+        {
+            if (need <= 0 || gen == null) return 0;
+            var grid = gen.GetGrid();
+            var rng = gen.GetRng();
+            if (grid == null || rng == null) return 0;
+
+            int placed = PlaceGlobalTreesDeterministicSweepOnRect(spawns, need, gen, s, GlobalTreeRandomInnerInsetCells);
+            if (placed < need)
+                placed += PlaceGlobalTreesDeterministicSweepOnRect(spawns, need - placed, gen, s, 0);
+            return placed;
+        }
+
+        static int PlaceGlobalTreesDeterministicSweepOnRect(
+            IList<Vector3> spawns, int need, RTSMapGenerator gen, ResourceRuntimeSettings s, int inset)
+        {
+            if (need <= 0) return 0;
+            var grid = gen.GetGrid();
+            var rng = gen.GetRng();
+            if (grid == null || rng == null) return 0;
+
+            int maxInset = Mathf.Max(0, Mathf.Min(grid.width, grid.height) / 2 - 1);
+            int i0 = Mathf.Clamp(inset, 0, maxInset);
+            int minX = i0;
+            int maxX = grid.width - 1 - i0;
+            int minZ = i0;
+            int maxZ = grid.height - 1 - i0;
+            if (maxX < minX || maxZ < minZ) return 0;
+
+            int spanX = maxX - minX + 1;
+            int spanZ = maxZ - minZ + 1;
+            int total = spanX * spanZ;
+            var cells = new int[total];
+            int k = 0;
+            for (int z = minZ; z <= maxZ; z++)
+            for (int x = minX; x <= maxX; x++)
+                cells[k++] = z * grid.width + x;
+
+            for (int i = total - 1; i > 0; i--)
+            {
+                int j = rng.Next(i + 1);
+                (cells[i], cells[j]) = (cells[j], cells[i]);
+            }
+
+            int placed = 0;
+            for (int i = 0; i < total && placed < need; i++)
+            {
+                int idx = cells[i];
+                int x = idx % grid.width;
+                int y = idx / grid.width;
+                var cell = new Vector2Int(x, y);
+                if (!grid.IsCellFree(cell) || grid.IsWater(cell))
+                    continue;
+                Vector3 world = grid.CellToWorld(cell);
+                if (IsWithinExcludeRadius(world, spawns, s.globalExcludeRadius))
+                    continue;
+                GameObject treePrefab = GetRandomTreePrefab(s, gen);
+                if (treePrefab != null && TryPlaceSingleGlobal(treePrefab, cell, ResourceKind.Wood, gen, s))
+                    placed++;
+            }
+            return placed;
+        }
+
         /// <summary>Capa [0] del Terrain = grass en RTSMapGenerator (orden grass, dirt, rock…).</summary>
-        static bool IsWorldOkForGlobalTree(RTSMapGenerator gen, ResourceRuntimeSettings s, Vector3 worldXZ)
+        static bool IsWorldOkForGlobalTree(RTSMapGenerator gen, ResourceRuntimeSettings s, Vector3 worldXZ, bool ignoreGrassPreference = false)
         {
             if (gen == null)
                 return true;
@@ -545,9 +749,12 @@ namespace Project.Gameplay.Map
             if (mg != null && mg.IsReady)
             {
                 Vector2Int c = mg.WorldToCell(gen.SnapToGrid(worldXZ));
-                if (mg.IsWater(c)) return false;
+                if (!mg.IsInBounds(c) || mg.IsWater(c)) return false;
+                if (IsCellNearGridEdge(mg, c, GlobalTreeHardEdgeInsetCells)) return false;
             }
-            if (!s.preferGlobalTreesOnGrassAlphamap)
+            if (gen.IsWorldConsideredUnderWater(worldXZ))
+                return false;
+            if (!s.preferGlobalTreesOnGrassAlphamap || ignoreGrassPreference)
                 return true;
             Terrain t = gen.terrain;
             if (t == null || t.terrainData == null)
@@ -555,6 +762,13 @@ namespace Project.Gameplay.Map
             TerrainData td = t.terrainData;
             if (td.alphamapWidth < 1 || td.alphamapHeight < 1 || td.alphamapLayers < 1)
                 return true;
+
+            if (mg != null && mg.IsReady && s_grassCellAlphamapCache != null)
+            {
+                long pk = PackCellKey(mg.WorldToCell(gen.SnapToGrid(worldXZ)));
+                if (s_grassCellAlphamapCache.TryGetValue(pk, out bool hit))
+                    return hit;
+            }
 
             Vector3 local = worldXZ - t.transform.position;
             float nx = local.x / td.size.x;
@@ -568,9 +782,16 @@ namespace Project.Gameplay.Map
             for (int i = 1; i < td.alphamapLayers; i++)
             {
                 if (mix[0, 0, i] > grassW + 0.02f)
+                {
+                    if (s_grassCellAlphamapCache != null && mg != null && mg.IsReady)
+                        s_grassCellAlphamapCache[PackCellKey(mg.WorldToCell(gen.SnapToGrid(worldXZ)))] = false;
                     return false;
+                }
             }
-            return grassW >= 0.22f;
+            bool okGrass = grassW >= 0.22f;
+            if (s_grassCellAlphamapCache != null && mg != null && mg.IsReady)
+                s_grassCellAlphamapCache[PackCellKey(mg.WorldToCell(gen.SnapToGrid(worldXZ)))] = okGrass;
+            return okGrass;
         }
 
         static bool PlaceResourcesForSpawn(Vector3 spawn, PlayerResourcesStats stats, List<GameObject> spawned, List<Vector2Int> occupied, RTSMapGenerator gen, ResourceRuntimeSettings s)
@@ -590,12 +811,21 @@ namespace Project.Gameplay.Map
             RTSMapGenerator generator, GameObject[] prefabVariants, ResourceRuntimeSettings res)
         {
             GameObject p = GetPrefabForPlacement(prefab, prefabVariants, generator);
-            if (p == null) { Debug.LogWarning($"PlaceCluster: prefab null para {kind}"); return; }
+            if (p == null)
+            {
+                if (generator != null && generator.debugLogs)
+                    Debug.LogWarning($"PlaceCluster: prefab null para {kind}");
+                return;
+            }
             var rng = generator.GetRng();
             var grid = generator.GetGrid();
             int count = rng.Next(countRange.x, countRange.y + 1);
             if (!TryFindPointInRing(spawn, ring, generator, out Vector3 clusterCenter))
-            { Debug.LogWarning($"PlaceCluster: No se encontró punto en anillo para {kind}"); return; }
+            {
+                if (generator != null && generator.debugLogs)
+                    Debug.LogWarning($"PlaceCluster: No se encontró punto en anillo para {kind}");
+                return;
+            }
             for (int i = 0; i < count; i++)
             {
                 GameObject pPrefab = GetPrefabForPlacement(prefab, prefabVariants, generator);
@@ -612,7 +842,11 @@ namespace Project.Gameplay.Map
             RTSMapGenerator generator, GameObject[] prefabVariants, ResourceRuntimeSettings res)
         {
             if (GetPrefabForPlacement(prefab, prefabVariants, generator) == null)
-            { Debug.LogWarning($"PlaceScatter: prefab null para {kind}"); return; }
+            {
+                if (generator != null && generator.debugLogs)
+                    Debug.LogWarning($"PlaceScatter: prefab null para {kind}");
+                return;
+            }
             var rng = generator.GetRng();
             int count = rng.Next(countRange.x, countRange.y + 1);
             for (int i = 0; i < count; i++)
@@ -633,7 +867,7 @@ namespace Project.Gameplay.Map
             if (!grid.IsCellFree(cell)) return false;
             if (grid.IsWater(cell)) return false;
             Vector3 w = grid.CellToWorld(cell);
-            ApplyRandomOffsetInCell(ref w, generator, res);
+            ApplyCellRandomOffsetClamped(ref w, cell, generator, res);
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
             Quaternion rot = GetPlacementRotation(kind, prefab, generator, res);
             rot = ApplyRandomRotation(rot, generator, kind, res);
@@ -641,7 +875,17 @@ namespace Project.Gameplay.Map
             NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
             DisableResourceNavMeshSnapForProceduralPlacement(go);
-            SnapResourceBottomToTerrain(go, generator);
+            SnapResourceBottomToTerrain(go, generator, kind);
+            if (!ValidateProceduralResourceWorldPosition(generator, grid, cell, go.transform.position, kind))
+            {
+                UnityEngine.Object.Destroy(go);
+                return false;
+            }
+            if (kind == ResourceKind.Wood && !IsResourceVisualBoundsInsideTerrainXZ(go, generator, 0.06f))
+            {
+                UnityEngine.Object.Destroy(go);
+                return false;
+            }
             EnsureResourceCollectable(go, kind, generator, res);
             go.name = $"{kind}_{spawned.Count}";
             spawned.Add(go);
@@ -651,13 +895,64 @@ namespace Project.Gameplay.Map
             return true;
         }
 
+        /// <summary>
+        /// Tras snap/clamp, la posición debe seguir en la celda esperada, dentro del grid, fuera de agua y
+        /// por encima del nivel de agua mundial (evita copas en lagos visuales / fuera del mapa lógico).
+        /// </summary>
+        static bool ValidateProceduralResourceWorldPosition(
+            RTSMapGenerator gen, MapGrid grid, Vector2Int expectedCell, Vector3 worldPos, ResourceKind kind)
+        {
+            if (gen == null || grid == null || !grid.IsReady) return false;
+            Vector2Int wc = grid.WorldToCell(gen.SnapToGrid(worldPos));
+            if (!grid.IsInBounds(wc) || grid.IsWater(wc)) return false;
+            if (wc != expectedCell) return false;
+            if (kind == ResourceKind.Wood && gen.IsWorldConsideredUnderWater(worldPos))
+                return false;
+            if (kind == ResourceKind.Wood && IsCellNearGridEdge(grid, wc, GlobalTreeHardEdgeInsetCells))
+                return false;
+            return true;
+        }
+
+        static bool IsResourceVisualBoundsInsideTerrainXZ(GameObject go, RTSMapGenerator gen, float insetMeters = 0.05f)
+        {
+            if (go == null || gen == null || gen.terrain == null || gen.terrain.terrainData == null)
+                return true;
+            var rs = go.GetComponentsInChildren<Renderer>(true);
+            if (rs == null || rs.Length == 0)
+                return true;
+            Bounds b = default;
+            bool have = false;
+            for (int i = 0; i < rs.Length; i++)
+            {
+                var r = rs[i];
+                if (r == null || !r.enabled) continue;
+                if (!have) { b = r.bounds; have = true; }
+                else b.Encapsulate(r.bounds);
+            }
+            if (!have) return true;
+            Vector3 tp = gen.terrain.transform.position;
+            Vector3 ts = gen.terrain.terrainData.size;
+            float minX = tp.x + insetMeters;
+            float maxX = tp.x + ts.x - insetMeters;
+            float minZ = tp.z + insetMeters;
+            float maxZ = tp.z + ts.z - insetMeters;
+            return b.min.x >= minX && b.max.x <= maxX && b.min.z >= minZ && b.max.z <= maxZ;
+        }
+
+        static bool IsCellNearGridEdge(MapGrid grid, Vector2Int c, int inset)
+        {
+            if (grid == null || !grid.IsReady) return false;
+            int e = Mathf.Max(0, inset);
+            return c.x < e || c.y < e || c.x >= grid.width - e || c.y >= grid.height - e;
+        }
+
         static bool TryPlaceSingleGlobal(GameObject prefab, Vector2Int cell, ResourceKind kind, RTSMapGenerator generator, ResourceRuntimeSettings res)
         {
             var grid = generator.GetGrid();
             if (!grid.IsCellFree(cell)) return false;
             if (grid.IsWater(cell)) return false;
             Vector3 w = grid.CellToWorld(cell);
-            ApplyRandomOffsetInCell(ref w, generator, res);
+            ApplyCellRandomOffsetClamped(ref w, cell, generator, res);
             w.y = generator.terrain != null ? generator.SampleHeight(w) : 0f;
             Quaternion rot = GetPlacementRotation(kind, prefab, generator, res);
             rot = ApplyRandomRotation(rot, generator, kind, res);
@@ -665,7 +960,17 @@ namespace Project.Gameplay.Map
             NavMeshSpawnSafety.DisableNavMeshAgentsOnHierarchy(go);
             if (!go.activeSelf) go.SetActive(true);
             DisableResourceNavMeshSnapForProceduralPlacement(go);
-            SnapResourceBottomToTerrain(go, generator);
+            SnapResourceBottomToTerrain(go, generator, kind);
+            if (!ValidateProceduralResourceWorldPosition(generator, grid, cell, go.transform.position, kind))
+            {
+                UnityEngine.Object.Destroy(go);
+                return false;
+            }
+            if (kind == ResourceKind.Wood && !IsResourceVisualBoundsInsideTerrainXZ(go, generator, 0.06f))
+            {
+                UnityEngine.Object.Destroy(go);
+                return false;
+            }
             EnsureResourceCollectable(go, kind, generator, res);
             go.name = $"Global_{kind}_{cell.x}_{cell.y}";
             grid.SetOccupied(cell, true);
@@ -776,7 +1081,7 @@ namespace Project.Gameplay.Map
         }
 
         /// <summary>Evita rocas/piedras flotantes: coloca la base del mesh sobre el terreno (estilo Anno).</summary>
-        static void SnapResourceBottomToTerrain(GameObject go, RTSMapGenerator generator)
+        static void SnapResourceBottomToTerrain(GameObject go, RTSMapGenerator generator, ResourceKind kind)
         {
             if (go == null || generator == null || generator.terrain == null) return;
             float bottomY = float.MaxValue;
@@ -788,10 +1093,46 @@ namespace Project.Gameplay.Map
             }
             if (bottomY == float.MaxValue) return;
             Vector3 center = go.transform.position;
-            float terrainY = generator.SampleHeight(center);
+            float terrainY = kind == ResourceKind.Wood
+                ? SampleWoodFootprintMinTerrainY(generator, renderers)
+                : generator.SampleHeight(center);
             float delta = terrainY - bottomY;
             if (Mathf.Abs(delta) < 0.001f) return;
             go.transform.position = go.transform.position + Vector3.up * delta;
+        }
+
+        /// <summary>
+        /// Madera cerca de ríos: un solo <see cref="RTSMapGenerator.SampleHeight"/> en el pivote suele quedar por encima
+        /// del cauce tallado; se toma el mínimo bajo una huella XZ acotada (no todo el AABB isométrico).
+        /// </summary>
+        static float SampleWoodFootprintMinTerrainY(RTSMapGenerator gen, Renderer[] renderers)
+        {
+            if (gen == null || renderers == null || renderers.Length == 0)
+                return 0f;
+            Bounds combined = default;
+            bool have = false;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                if (r == null || !r.enabled) continue;
+                if (!have) { combined = r.bounds; have = true; }
+                else combined.Encapsulate(r.bounds);
+            }
+            if (!have) return gen.SampleHeight(Vector3.zero);
+            float cx = combined.center.x;
+            float cz = combined.center.z;
+            float spanX = Mathf.Max(0.12f, combined.max.x - combined.min.x);
+            float spanZ = Mathf.Max(0.12f, combined.max.z - combined.min.z);
+            float rx = Mathf.Min(spanX * 0.38f, 2.4f);
+            float rz = Mathf.Min(spanZ * 0.38f, 2.4f);
+            float minH = float.MaxValue;
+            for (int ix = -1; ix <= 1; ix++)
+            for (int iz = -1; iz <= 1; iz++)
+            {
+                var p = new Vector3(cx + ix * rx, 0f, cz + iz * rz);
+                minH = Mathf.Min(minH, gen.SampleHeight(p));
+            }
+            return minH == float.MaxValue ? gen.SampleHeight(new Vector3(cx, 0f, cz)) : minH;
         }
 
         static void EnsureResourceCollectable(GameObject go, ResourceKind kind, RTSMapGenerator generator, ResourceRuntimeSettings res)
@@ -833,7 +1174,10 @@ namespace Project.Gameplay.Map
             SetLayerRecursively(go, resourceLayer);
             // Madera: evitar flags estáticos en hijos del FBX que puedan colarse al bake NavMesh (RenderMeshes + capas).
             if (kind == ResourceKind.Wood)
+            {
                 EnsureWoodHierarchyNonStaticForNavMesh(go);
+                ApplyWoodPerformanceRenderHints(go, res);
+            }
             if (kind == ResourceKind.Stone && res.stoneMaterialOverride != null)
                 ApplyMaterialToRenderers(go, res.stoneMaterialOverride);
             if (kind == ResourceKind.Wood && res.treeMaterialOverrides != null && res.treeMaterialOverrides.Length > 0)
@@ -867,7 +1211,8 @@ namespace Project.Gameplay.Map
             }
 
             if (agent == null) return;
-            if (NavMesh.SamplePosition(go.transform.position, out var hit, 10f, NavMesh.AllAreas))
+            bool found = TryFindNearbyNavMeshPosition(go.transform.position, generator, out var hit);
+            if (found)
             {
                 if (!agent.enabled) agent.enabled = true;
                 agent.Warp(hit.position);
@@ -878,8 +1223,92 @@ namespace Project.Gameplay.Map
             {
                 agent.enabled = false;
                 if (behaviour != null) behaviour.enabled = false;
-                if (generator != null && generator.debugLogs)
-                    Debug.LogWarning($"[AnimalMove] {go.name}: sin NavMesh cercano al instanciar, comportamiento desactivado temporalmente.", go);
+                AttachAnimalNavMeshRetry(go, generator, agent, behaviour);
+            }
+        }
+
+        static void AttachAnimalNavMeshRetry(GameObject go, RTSMapGenerator generator, NavMeshAgent agent, AnimalPastureBehaviour behaviour)
+        {
+            if (go == null || agent == null) return;
+            var retry = go.GetComponent<AnimalNavMeshRetryDriver>();
+            if (retry == null)
+                retry = go.AddComponent<AnimalNavMeshRetryDriver>();
+            retry.Configure(generator, agent, behaviour);
+        }
+
+        static bool TryFindNearbyNavMeshPosition(Vector3 origin, RTSMapGenerator generator, out NavMeshHit hit)
+        {
+            if (NavMesh.SamplePosition(origin, out hit, 10f, NavMesh.AllAreas))
+                return true;
+
+            var rng = generator != null ? generator.GetRng() : null;
+            int attempts = 14;
+            float minR = 3f;
+            float maxR = 30f;
+            for (int i = 0; i < attempts; i++)
+            {
+                float t = attempts <= 1 ? 1f : (float)i / (attempts - 1);
+                float r = Mathf.Lerp(minR, maxR, t);
+                float angle = rng != null
+                    ? (float)(rng.NextDouble() * Math.PI * 2.0)
+                    : UnityEngine.Random.value * Mathf.PI * 2f;
+                Vector3 probe = origin + new Vector3(Mathf.Cos(angle) * r, 0f, Mathf.Sin(angle) * r);
+                if (generator != null && generator.terrain != null)
+                    probe.y = generator.SampleHeight(probe);
+                if (NavMesh.SamplePosition(probe, out hit, 14f, NavMesh.AllAreas))
+                    return true;
+            }
+            return false;
+        }
+
+        sealed class AnimalNavMeshRetryDriver : MonoBehaviour
+        {
+            RTSMapGenerator _generator;
+            NavMeshAgent _agent;
+            AnimalPastureBehaviour _behaviour;
+            int _attemptsLeft;
+            float _nextTryAt;
+
+            public void Configure(RTSMapGenerator generator, NavMeshAgent agent, AnimalPastureBehaviour behaviour)
+            {
+                _generator = generator;
+                _agent = agent;
+                _behaviour = behaviour;
+                _attemptsLeft = 18;
+                _nextTryAt = Time.time + 0.35f;
+                enabled = true;
+            }
+
+            void Update()
+            {
+                if (_agent == null)
+                {
+                    Destroy(this);
+                    return;
+                }
+                if (_attemptsLeft <= 0)
+                {
+                    if (_generator != null && _generator.debugLogs && s_AnimalNavMeshWarningCount < MaxAnimalNavMeshWarningLogs)
+                    {
+                        s_AnimalNavMeshWarningCount++;
+                        Debug.LogWarning($"[AnimalMove] {gameObject.name}: sin NavMesh cercano tras reintentos, comportamiento desactivado.", gameObject);
+                    }
+                    Destroy(this);
+                    return;
+                }
+                if (Time.time < _nextTryAt)
+                    return;
+
+                _attemptsLeft--;
+                _nextTryAt = Time.time + 0.35f;
+                if (!TryFindNearbyNavMeshPosition(transform.position, _generator, out var hit))
+                    return;
+
+                if (!_agent.enabled) _agent.enabled = true;
+                _agent.Warp(hit.position);
+                _agent.isStopped = false;
+                if (_behaviour != null) _behaviour.enabled = true;
+                Destroy(this);
             }
         }
 
@@ -1099,6 +1528,50 @@ namespace Project.Gameplay.Map
             float half = grid.cellSize * 0.5f * res.cellPlacementRandomOffset;
             w.x += (float)(rng.NextDouble() * 2.0 - 1.0) * half;
             w.z += (float)(rng.NextDouble() * 2.0 - 1.0) * half;
+        }
+
+        /// <summary>Offset dentro de la celda + clamp al rectángulo interior celda/mapa (evita props fuera del terreno).</summary>
+        static void ApplyCellRandomOffsetClamped(ref Vector3 w, Vector2Int cell, RTSMapGenerator generator, ResourceRuntimeSettings res)
+        {
+            ApplyRandomOffsetInCell(ref w, generator, res);
+            var grid = generator != null ? generator.GetGrid() : null;
+            if (grid == null || !grid.IsReady) return;
+            float cs = grid.cellSize;
+            const float cellPad = 0.14f;
+            float minX = grid.origin.x + cell.x * cs + cellPad;
+            float maxX = grid.origin.x + (cell.x + 1) * cs - cellPad;
+            float minZ = grid.origin.z + cell.y * cs + cellPad;
+            float maxZ = grid.origin.z + (cell.y + 1) * cs - cellPad;
+            if (minX <= maxX) w.x = Mathf.Clamp(w.x, minX, maxX);
+            if (minZ <= maxZ) w.z = Mathf.Clamp(w.z, minZ, maxZ);
+            generator.ClampWorldXZToAuthoritativeMap(ref w, 0.35f);
+        }
+
+        /// <summary>Reduce coste de CPU por árbol denso: sin probes dinámicos, sin motion vectors, sombras estáticas si el RP lo soporta.</summary>
+        static void ApplyWoodPerformanceRenderHints(GameObject go, ResourceRuntimeSettings res)
+        {
+            if (go == null) return;
+            bool forceCast = res != null && res.forceResourceShadowCasting;
+            foreach (var mr in go.GetComponentsInChildren<MeshRenderer>(true))
+            {
+                if (mr == null) continue;
+                mr.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
+                mr.lightProbeUsage = LightProbeUsage.Off;
+                mr.reflectionProbeUsage = ReflectionProbeUsage.Off;
+                mr.receiveShadows = false;
+                mr.shadowCastingMode = forceCast ? ShadowCastingMode.On : ShadowCastingMode.Off;
+                mr.staticShadowCaster = forceCast;
+            }
+            foreach (var smr in go.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (smr == null) continue;
+                smr.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
+                smr.lightProbeUsage = LightProbeUsage.Off;
+                smr.reflectionProbeUsage = ReflectionProbeUsage.Off;
+                smr.receiveShadows = false;
+                smr.shadowCastingMode = forceCast ? ShadowCastingMode.On : ShadowCastingMode.Off;
+                smr.staticShadowCaster = forceCast;
+            }
         }
 
         static void ApplyTreeMaterialOverrides(GameObject go, RTSMapGenerator generator, ResourceRuntimeSettings res)

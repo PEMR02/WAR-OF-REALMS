@@ -18,7 +18,7 @@ MonoBehaviour:
   origin: {x: 0, y: 0, z: 0}
   seed: 12345
   maxRetries: 5
-  debugLogs: 1
+  debugLogs: 0
   debugTerrainMoisture: 0
   debugTerrainMacro: 0
   debugTerrainGrassDry: 0
@@ -55,7 +55,8 @@ MonoBehaviour:
   riverVisualSampleSpacing: 0.4
   riverVisualBankInset: 0
   riverRibbonVerticalLiftWorld: 0.34
-  debugRiverRibbonGeometry: 1
+  debugRiverRibbonGeometry: 0
+  debugRenderRiverRibbonMesh: 0
   debugRiverVisualStats: 0
   riverTerrainCarveDepthWorld: 1
   riverTerrainCarveFalloffCells: 8
@@ -89,6 +90,7 @@ MonoBehaviour:
   riverFordDepthBelowWater01: 0.014
   riverFordBedLayer: {fileID: 0}
   riverAvoidCrossingOtherRivers: 1
+  allowFallbackCrossing: 1
   riverPlacementMaxAttemptsPerRiver: 40
   riverCorridorRejectEarlyAbort: 12
   riverLogPlacementFailureSummary: 1
@@ -100,8 +102,10 @@ MonoBehaviour:
   riverRibbonCellSpaceLaplacianPasses: 2
   riverRibbonCellSpaceLaplacianAlpha: 0.22
   debugDrawRiverPathInScene: 0
-  debugRiverDrawMacro: 1
-  debugRiverDrawSmoothedCenterline: 1
+  debugRiverDrawMacro: 0
+  debugRiverDrawSmoothedCenterline: 0
+  debugDrawRiverRibbonGizmos: 0
+  debugRiverRibbonPointSize: 0.12
   cityCount: 4
   minCityDistanceCells: 40
   cityRadiusCells: 8
@@ -173,8 +177,80 @@ MonoBehaviour:
   waterMaskPostProcess: 1
   waterMaskSmoothIterations: 2
   waterMaskSmoothThreshold: 5
+  riverFusionCoreThreshold: 0.55
+  riverFusionShoreThreshold: 0.25
+  riverFusionBlurPasses: 3
+  riverShoreWalkableWidthCells: 1
+  debugDrawWaterMaskGizmos: 0
+  waterEdgeSmoothness: 0.7
+  waterEdgeNoiseAmplitude: 0.08
+  waterEdgeNoiseScale: 0.18
+  riverWidthDownstreamFactor: 1.12
+  riverWidthConfluenceBoost: 0.16
+  riverWidthNoiseScale: 0.05
+  riverLakeVisualBlend: 0.35
+  shoreVisualWidth: 7
+  shoreVisualBlend: 1.25
+  waterDepthColorStrength: 0.62
+  waterUvFlowSpeedScale: 1
+  waterUVScale: 0.018
+  enableRiverCrossings: 1
+  enableFunctionalRiverFords: 1
+  useCrossingAssetFords: 1
+  riverCrossingMaxPerMap: 3
+  riverCrossingMinSpacing: 13
+  riverCrossingResourceChance: 0
+  riverCrossingMaxThicknessCells: 2
+  riverCrossingFordRadiusCells: 2
+  riverCrossingFunctionalHalfWidthCells: 2
+  riverCrossingBankSearchCells: 12
+  riverCrossingDecorYOffset: 0.15
+  riverCrossingDebugVisuals: 1
+  riverCrossingCorridorDebugLogs: 1
+  riverCrossingExtraForSpawnConnectivity: 1
+  riverCrossingMaxExtraConnectivityFords: 4
+  riverCrossingEnableStrategicRoadFords: 1
+  riverCrossingMaxStrategicRoadFords: 6
+  riverCrossingMaxStrategicRoadFordsAfterMandatory: 2
+  riverCrossingStrategicAnchorCount: 2
+  riverCrossingMaxMandatoryPerRiver: 1
+  mandatoryRiverFordMinSpacing: 6
+  minSpawnWalkableComponentCells: 1500
+  minSpawnWalkableComponentRatio: 0.2
+  riverFordMinSegmentLengthCells: 12
+  riverFordMinDistanceFromConfluenceCells: 8
+  riverFordMaxPerSegment: 1
+  riverFordMaxSegmentLengthCells: 80
+  riverFordMinSubSegmentLengthCells: 20
+  waterCrossingDecorationPrefab: {fileID: 595073020859021925, guid: 48435e0ae3fee3940a6a544ed57e9123, type: 3}
+  waterCrossingDecorationPrefabs: []
+  waterEnableShoreProps: 0
+  waterShoreRockPrefab: {fileID: 595073020859021925, guid: 48435e0ae3fee3940a6a544ed57e9123, type: 3}
+  waterShorePropDensity: 0
+  debugDrawWaterShoreDepthGizmos: 0
+  debugDrawWaterCrossingGizmos: 0
   waterMsMaxCornerSamples: 250000
   showTerrainSkirt: 1
   skirtDepth: 30
   skirtEdgeSamples: 128
   skirtMaterial: {fileID: 2100000, guid: f3e8a21c9d4b5e6f7a8b9c0d1e2f3a4b, type: 2}
+  macroTerrainEnabled: 0
+  macroMountainMassCount: 0
+  macroMountainHeight01Min: 0.08
+  macroMountainHeight01Max: 0.18
+  macroMountainRadiusCellsMin: 10
+  macroMountainRadiusCellsMax: 28
+  macroBasinCount: 0
+  macroBasinDepth01: 0.05
+  macroRoughnessWeight: 0.5
+  macroHillDensity: 0.45
+  macroMountainSpawnAvoidanceMarginCells: 24
+  macroAvoidCitiesForMountains: 1
+  alphaUseTerrainResourceBias: 0
+  alphaWoodNearWaterWeight: 1
+  alphaStoneMountainWeight: 1
+  alphaGoldMountainWeight: 1
+  alphaFoodNearWaterWeight: 1
+  alphaPreferPlainsForCities: 0
+  alphaCityCenterMaxMeanHeight01: 0.72
+  alphaMinChebyshevFromWaterForSpawn: 0

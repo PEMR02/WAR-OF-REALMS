@@ -1010,13 +1010,27 @@ namespace Project.Gameplay.Map
         static Vector2Int ScaleVec(Vector2Int v, float m) =>
             new(Mathf.Max(0, Mathf.RoundToInt(v.x * m)), Mathf.Max(0, Mathf.RoundToInt(v.y * m)));
 
+        static Vector2Int BuildGlobalTreeRangeByMapSize(int mapCells, int forestTier)
+        {
+            int safeCells = Mathf.Max(64, mapCells);
+            int area = safeCells * safeCells;
+
+            // Mitad de la densidad "alta" anterior: equilibrio rendimiento vs. bosques visibles.
+            // Referencia 256x256 aprox.: bajo ~1425, medio ~2250, alto ~3300 (antes de filtros/ocupación).
+            float density = forestTier <= 0 ? 0.02175f : forestTier == 1 ? 0.0345f : 0.05025f;
+            int center = Mathf.RoundToInt(area * density);
+            int min = Mathf.Max(0, Mathf.RoundToInt(center * 0.92f));
+            int max = Mathf.Max(min, Mathf.RoundToInt(center * 1.16f));
+            return new Vector2Int(min, max);
+        }
+
         void ApplyResourceTiers()
         {
             if (_gen == null) return;
-            float fm = TierMultiplier(_forestTier);
             float gm = TierMultiplier(_goldTier);
             float sm = TierMultiplier(_stoneTier);
-            _gen.globalTrees = ScaleVec(_snapTrees, fm);
+            int mapCells = MapSizes[Mathf.Clamp(_mapSizeIndex, 0, MapSizes.Length - 1)];
+            _gen.globalTrees = BuildGlobalTreeRangeByMapSize(mapCells, _forestTier);
             _gen.globalGold = ScaleVec(_snapGold, gm);
             _gen.globalStone = ScaleVec(_snapStone, sm);
             if (_animalsOn)

@@ -113,6 +113,12 @@ namespace Project.Gameplay.Map
         [Min(1f)] public float navMeshPostBakeSampleRadius = 48f;
         [Tooltip("Reintentos extra con radio ×1.5 por intento si el snap inicial falla.")]
         [Range(0, 5)] public int navMeshPostBakeSampleRetries = 2;
+        [Tooltip("Si true, crea NavMeshModifierVolume en cada vado para coste de área. Puede ser costoso en FPS en mapas grandes.")]
+        public bool enableRiverFordNavMeshVolumes = false;
+        [Tooltip("Tras hornear NavMesh: registra River sin ford donde NavMesh.SamplePosition sigue válido (mesh vs grid).")]
+        public bool debugNavMeshRiverLeakSamples = false;
+        [Tooltip("Coste multiplicador del área NavMesh en vados (≥1). Mayor = el pathfinding prefiere rodear salvo atajos claros. Añade área «Ford» o «Jump» en Navigation (Project Settings).")]
+        [Min(1f)] public float riverFordNavMeshAreaCost = 2.65f;
 
         [Header("Agua (visual)")]
         [Tooltip("Offset en Y sobre waterHeight para que la malla no z-fightee con el terreno. En world units.")]
@@ -298,6 +304,8 @@ namespace Project.Gameplay.Map
         public bool preferSceneHydrologyOverrides = true;
 
         MapGrid _grid;
+        /// <summary>Índice de área NavMesh usado en celdas de vado (p. ej. Ford/Jump) para <see cref="NavMesh.SetAreaCost"/>.</summary>
+        int _riverFordNavMeshAreaIndexUsed = -1;
         System.Random _rng;
         readonly List<Vector3> _spawns = new();
         readonly List<Vector3> _townCenterPositions = new();
@@ -326,6 +334,25 @@ namespace Project.Gameplay.Map
         public void PrepareGenerateFromLobby() => _pendingLobbyRuntimeTuning = true;
 
         public MapGrid GetGrid() => _grid;
+
+        /// <summary>Grid lógico de generación (agua, distancias, recursos por celda). Null antes/después de fallos de generación.</summary>
+        public GridSystem TryGetLogicalGrid()
+        {
+            var mapGen = GetComponent<MapGenerator>();
+            return mapGen != null ? mapGen.Grid : null;
+        }
+
+        /// <summary>
+        /// True si la altura del terreno en XZ queda por debajo del umbral de agua global (lagos / nivel lógico).
+        /// Útil para filtrar props que caen en depresiones inundadas aunque la celda del grid sea tierra.
+        /// </summary>
+        public bool IsWorldConsideredUnderWater(Vector3 worldXZ)
+        {
+            if (waterHeight <= -998f)
+                return false;
+            return SampleHeight(worldXZ) < waterHeight + 0.15f;
+        }
+
         public System.Random GetRng() => _rng;
         MatchConfig ResolveMatchConfig()
         {
@@ -583,11 +610,20 @@ namespace Project.Gameplay.Map
                 m.hydrology.riverCount = riverCount;
                 m.hydrology.lakesEnabled = lakeCount > 0;
                 m.hydrology.lakeCount = lakeCount;
-                if (waterHeightRelative >= 0f && waterHeightRelative <= 1f)
-                    m.hydrology.waterBaseHeightNormalized = waterHeightRelative;
+                float lobbyWater01 = waterHeightRelative >= 0f && waterHeightRelative <= 1f
+                    ? waterHeightRelative
+                    : 0.4f;
+                m.hydrology.waterBaseHeightNormalized = lobbyWater01;
+                // En el pipeline definitivo la autoridad es baseHeightNormalized.
+                // Dejamos waterHeightRelative fuera de [0,1] para evitar que parezca "doble fuente".
+                m.water.baseHeightNormalized = lobbyWater01;
+                m.water.waterHeightRelative = -1f;
 
                 m.terrainShape.mountainsEnabled = lobbyMacroMountainMasses > 0;
                 m.terrainShape.mountainMassCount = lobbyMacroMountainMasses;
+                // El lobby de macro montañas también debe empujar la semántica,
+                // si no, puede haber relieve visible pero 0 celdas "Mountain".
+                ApplyLobbyMountainSemantics(m.regionClassification, lobbyMacroMountainMasses);
 
                 HighLevelMatchSynthesizer.SynthesizeIntoLegacySlots(m);
 
@@ -598,6 +634,7 @@ namespace Project.Gameplay.Map
                 m.resources.berries = berries;
                 m.resources.nearTrees = nearTrees;
                 m.resources.midTrees = midTrees;
+                CopySceneResourceVisualsAndPlacementIntoMatch(m);
             }
             else
                 CopySceneGeneratorFieldsIntoMatchConfig(m);
@@ -605,6 +642,44 @@ namespace Project.Gameplay.Map
             m.map.seed = seed;
             m.map.randomSeedOnPlay = false;
             SyncLobbyPlayerSlotsIntoMatch(m);
+        }
+
+        static void ApplyLobbyMountainSemantics(RegionClassificationConfig region, int mountainMassCount)
+        {
+            if (region == null || mountainMassCount <= 0)
+                return;
+
+            float t = Mathf.Clamp01(mountainMassCount / 8f);
+            region.mountainHeightThreshold01 = Mathf.Min(region.mountainHeightThreshold01, Mathf.Lerp(0.74f, 0.62f, t));
+            region.mountainSlopeThresholdDeg = Mathf.Min(region.mountainSlopeThresholdDeg, Mathf.Lerp(26f, 20f, t));
+        }
+
+        void CopySceneResourceVisualsAndPlacementIntoMatch(MatchConfig m)
+        {
+            if (m == null) return;
+            m.resources.visuals.treePrefab = treePrefab;
+            m.resources.visuals.treePrefabVariants = treePrefabVariants;
+            m.resources.visuals.berryPrefab = berryPrefab;
+            m.resources.visuals.berryPrefabVariants = berryPrefabVariants;
+            m.resources.visuals.animalPrefab = animalPrefab;
+            m.resources.visuals.animalPrefabVariants = animalPrefabVariants;
+            m.resources.visuals.goldPrefab = goldPrefab;
+            m.resources.visuals.goldPrefabVariants = goldPrefabVariants;
+            m.resources.visuals.stonePrefab = stonePrefab;
+            m.resources.visuals.stonePrefabVariants = stonePrefabVariants;
+            m.resources.visuals.stoneMaterialOverride = stoneMaterialOverride;
+            m.resources.visuals.treeMaterialOverrides = treeMaterialOverrides;
+            m.resources.visuals.treePlacementRotation = treePlacementRotation;
+            m.resources.visuals.resourceLayerName = resourceLayerName;
+            m.resources.visuals.randomRotationPerResource = randomRotationPerResource;
+            m.resources.visuals.cellPlacementRandomOffset = cellPlacementRandomOffset;
+            m.resources.visuals.forceResourceShadowCasting = forceResourceShadowCasting;
+
+            m.resources.placement.globalTreesClusterFraction = globalTreesClusterFraction;
+            m.resources.placement.preferGlobalTreesOnGrassAlphamap = preferGlobalTreesOnGrassAlphamap;
+            m.resources.placement.globalStoneGoldClusterFraction = globalStoneGoldClusterFraction;
+            m.resources.placement.globalMineralClusterSize = globalMineralClusterSize;
+            m.resources.placement.globalMineralClusterRadiusCells = globalMineralClusterRadiusCells;
         }
 
         MapGenerationRuntimeContext BuildRuntimeGenerationContext()
@@ -743,6 +818,31 @@ namespace Project.Gameplay.Map
             if (terrain == null || terrain.terrainData == null) return world.y;
             return terrain.SampleHeight(world) + terrain.transform.position.y;
         }
+
+        /// <summary>
+        /// Restringe XZ al rectángulo interior común entre el grid autoritativo del match y el <see cref="Terrain"/>
+        /// (evita instancias fuera del heightmap / falda donde <see cref="Terrain.SampleHeight"/> clampa y los props "vuelan").
+        /// </summary>
+        public void ClampWorldXZToAuthoritativeMap(ref Vector3 world, float edgeInsetMeters = 0.35f)
+        {
+            GetAuthoritativeGridLayout(this, out float cs, out Vector3 o, out int gw, out int gh);
+            float minX = o.x + edgeInsetMeters;
+            float maxX = o.x + gw * cs - edgeInsetMeters;
+            float minZ = o.z + edgeInsetMeters;
+            float maxZ = o.z + gh * cs - edgeInsetMeters;
+            if (terrain != null && terrain.terrainData != null)
+            {
+                Vector3 tp = terrain.transform.position;
+                Vector3 ts = terrain.terrainData.size;
+                minX = Mathf.Max(minX, tp.x + edgeInsetMeters);
+                maxX = Mathf.Min(maxX, tp.x + ts.x - edgeInsetMeters);
+                minZ = Mathf.Max(minZ, tp.z + edgeInsetMeters);
+                maxZ = Mathf.Min(maxZ, tp.z + ts.z - edgeInsetMeters);
+            }
+            if (minX <= maxX) world.x = Mathf.Clamp(world.x, minX, maxX);
+            if (minZ <= maxZ) world.z = Mathf.Clamp(world.z, minZ, maxZ);
+        }
+
         public Vector3 SnapToGrid(Vector3 world)
         {
             float size = _grid != null ? _grid.cellSize : 1f;
@@ -2201,6 +2301,71 @@ namespace Project.Gameplay.Map
             return mask;
         }
 
+        void RebuildRiverFordNavMeshVolumesForNextBake(Terrain terrainForHeights)
+        {
+            _riverFordNavMeshAreaIndexUsed = -1;
+            if (!enableRiverFordNavMeshVolumes)
+            {
+                Transform oldDisabled = transform.Find("__NavMeshFordVolumes");
+                if (oldDisabled != null)
+                    Destroy(oldDisabled.gameObject);
+                return;
+            }
+            var logical = TryGetLogicalGrid();
+            var mg = GetGrid();
+            if (logical == null || mg == null || !mg.IsReady)
+                return;
+
+            Transform old = transform.Find("__NavMeshFordVolumes");
+            if (old != null)
+                Destroy(old.gameObject);
+
+            int fordArea = NavMesh.GetAreaFromName("Ford");
+            if (fordArea < 0)
+                fordArea = NavMesh.GetAreaFromName("Jump");
+            if (fordArea < 0)
+                fordArea = 2;
+            _riverFordNavMeshAreaIndexUsed = fordArea;
+
+            var root = new GameObject("__NavMeshFordVolumes");
+            root.transform.SetParent(transform, false);
+            float cs = mg.cellSize;
+            int added = 0;
+            for (int z = 0; z < logical.Height; z++)
+            {
+                for (int x = 0; x < logical.Width; x++)
+                {
+                    ref var cell = ref logical.GetCell(x, z);
+                    if (cell.type != CellType.River || !cell.riverFord)
+                        continue;
+
+                    Vector3 c = logical.CellToWorldCenter(x, z);
+                    if (terrainForHeights != null && terrainForHeights.terrainData != null)
+                        c.y = SampleHeight(new Vector3(c.x, 0f, c.z));
+
+                    var go = new GameObject($"FordVol_{x}_{z}");
+                    go.transform.SetParent(root.transform, false);
+                    go.transform.position = c;
+                    var vol = go.AddComponent<NavMeshModifierVolume>();
+                    vol.size = new Vector3(cs * 1.14f, Mathf.Max(cs * 2.6f, 5.5f), cs * 1.14f);
+                    vol.center = Vector3.zero;
+                    vol.area = fordArea;
+                    added++;
+                }
+            }
+
+            Log($"NavMesh: {added} volúmenes de área para vados (índice área={fordArea}).");
+        }
+
+        void ApplyRiverFordNavMeshAreaCostAfterBake()
+        {
+            if (_riverFordNavMeshAreaIndexUsed < 0)
+                return;
+            float c = Mathf.Max(1f, riverFordNavMeshAreaCost);
+            NavMesh.SetAreaCost(_riverFordNavMeshAreaIndexUsed, c);
+            Log($"NavMesh: coste de área de vado (índice {_riverFordNavMeshAreaIndexUsed}) = {c:F2}");
+        }
+
         IEnumerator RebuildNavMeshCoroutine()
         {
             if (!rebuildNavMeshOnGenerate)
@@ -2231,8 +2396,14 @@ namespace Project.Gameplay.Map
             if (terrainToUse == null)
                 Debug.LogWarning("NavMesh: No hay Terrain en la escena. El NavMesh puede quedar vacío (0 triángulos).");
 
+            RebuildRiverFordNavMeshVolumesForNextBake(terrainToUse);
+
             // Construir con agentSlope forzado a 60°. Pasar el Terrain para añadirlo como source si no se recogió.
             BuildNavMeshWithSlope(this, navMeshSurface, 60f, terrainToUse);
+            ApplyRiverFordNavMeshAreaCostAfterBake();
+
+            if (debugNavMeshRiverLeakSamples && TryGetLogicalGrid() != null && GetGrid() != null && GetGrid().IsReady)
+                MapGrid.ValidateRuntimeTraversableCells(TryGetLogicalGrid(), GetGrid().cellSize, true);
 
             if (navMeshSurface.navMeshData != null)
             {
