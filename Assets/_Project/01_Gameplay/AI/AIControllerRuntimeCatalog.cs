@@ -10,5 +10,19 @@ namespace Project.Gameplay.AI
         public static BuildingSO House;
         public static BuildingSO Barracks;
         public static ProductionCatalog ProductionCatalog;
+
+        public static BuildingSO FindBuildingSoById(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            var all = UnityEngine.Resources.FindObjectsOfTypeAll<BuildingSO>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                var so = all[i];
+                if (so == null || string.IsNullOrWhiteSpace(so.id)) continue;
+                if (string.Equals(so.id, id, System.StringComparison.OrdinalIgnoreCase))
+                    return so;
+            }
+            return null;
+        }
     }
 }

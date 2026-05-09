@@ -8,6 +8,8 @@ namespace Project.Gameplay.AI
 {
     public sealed class AIConstructionManager
     {
+        const int MinTownCenterBuildRing = 5;
+        const int ReservedLaneHalfWidthCells = 1;
         readonly BuildingPlacer _placer;
         readonly Terrain _terrain;
         readonly LayerMask _blockingMask;
@@ -33,7 +35,54 @@ namespace Project.Gameplay.AI
             Vector3 origin = MapGrid.Instance.origin;
             Random.InitState(profileSeed + center.x * 73856093 ^ center.y);
 
-            for (int ring = 3; ring <= 22; ring++)
+            for (int ring = MinTownCenterBuildRing; ring <= 22; ring++)
+            {
+                for (int dx = -ring; dx <= ring; dx++)
+                {
+                    for (int dz = -ring; dz <= ring; dz++)
+                    {
+                        if (Mathf.Abs(dx) != ring && Mathf.Abs(dz) != ring) continue;
+                        // Mantener un corredor cardinal libre alrededor del TownCenter para tránsito de unidades.
+                        if (Mathf.Abs(dx) <= ReservedLaneHalfWidthCells || Mathf.Abs(dz) <= ReservedLaneHalfWidthCells) continue;
+                        var cell = new Vector2Int(center.x + dx, center.y + dz);
+                        if (!MapGrid.Instance.IsInBounds(cell)) continue;
+                        Vector3 world = MapGrid.Instance.CellToWorld(cell);
+                        world = GridSnapUtil.SnapToBuildingGrid(world, origin, cs, bw, bh);
+                        if (_terrain != null)
+                            world.y = _terrain.SampleHeight(world) + _terrain.transform.position.y;
+                        if (world.sqrMagnitude < 9f) continue;
+                        if (!PlacementValidator.IsValidPlacement(world, building.size, _blockingMask)) continue;
+                        if (MapGrid.Instance.IsWorldAreaFree(world, building.size, true))
+                        {
+                            var rot = Quaternion.Euler(0f, Random.Range(0, 4) * 90f, 0f);
+                            if (_placer.TryPlaceBuildSiteForOwner(building, world, rot, payFrom, out site))
+                            {
+                                _placer.AssignBuildersToSiteForOwner(site, payFrom, faction, maxBuilders);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Espiral de colocación alrededor de un punto ancla (ej. recurso), no solo del TownCenter.</summary>
+        public bool TryBuildNearAnchor(BuildingSO building, Vector3 anchorWorld, PlayerResources payFrom, FactionId faction, int maxBuilders, int profileSeed, out BuildSite site)
+        {
+            site = null;
+            if (building == null || payFrom == null || _placer == null) return false;
+            if (MapGrid.Instance == null || !MapGrid.Instance.IsReady) return false;
+            if (!_placer.CanAffordFor(building, payFrom)) return false;
+
+            Vector2Int center = MapGrid.Instance.WorldToCell(anchorWorld);
+            int bw = Mathf.Max(1, Mathf.RoundToInt(building.size.x));
+            int bh = Mathf.Max(1, Mathf.RoundToInt(building.size.y));
+            float cs = MapGrid.Instance.cellSize;
+            Vector3 origin = MapGrid.Instance.origin;
+            Random.InitState(profileSeed + center.x * 73856093 ^ center.y);
+
+            for (int ring = 2; ring <= 24; ring++)
             {
                 for (int dx = -ring; dx <= ring; dx++)
                 {

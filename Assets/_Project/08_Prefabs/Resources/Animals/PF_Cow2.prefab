@@ -178,6 +178,9 @@ MonoBehaviour:
   speedParameter: Speed
   idleStateName: Idle
   animSpeedSmoothTime: 0.2
+  navRecoverRadius: 8
+  navRecoverInterval: 0.75
+  debugMovementLogs: 0
 --- !u!1001 &1274841179136237283
 PrefabInstance:
   m_ObjectHideFlags: 0

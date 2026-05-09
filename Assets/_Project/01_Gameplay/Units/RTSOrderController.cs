@@ -5,6 +5,7 @@ using Project.Core.Commands;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Combat;
 using Project.Gameplay.Faction;
+using Project.Gameplay.Players;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Units.Movement;
 using Project.UI;
@@ -26,6 +27,7 @@ namespace Project.Gameplay.Units
 
     public class RTSOrderController : MonoBehaviour
     {
+        enum InputOrderType { None, AttackTarget, Gather, Move, InvalidBlocked }
         [Header("Refs")]
         public Camera cam;
         public RTSSelectionController selection;
@@ -55,6 +57,7 @@ namespace Project.Gameplay.Units
         /// <summary>Lista reutilizable para cachear componentes de la selección (evita alloc por orden).</summary>
         private readonly List<CachedUnitComponents> _cachedUnits = new List<CachedUnitComponents>(64);
         private readonly List<IUnitMovementComponent> _movementUnits = new List<IUnitMovementComponent>(64);
+        InputOrderType _lastLoggedOrderType = InputOrderType.None;
 
         void Awake()
         {
@@ -92,7 +95,10 @@ namespace Project.Gameplay.Units
             if (!mouse.rightButton.wasPressedThisFrame) return;
 
             if (UiInputRaycast.IsPointerOverGameObject())
+            {
+                LogInputOrder(InputOrderType.InvalidBlocked, "UI bloquea click derecho");
                 return;
+            }
 
             Ray ray = cam.ScreenPointToRay(mouse.position.ReadValue());
             var selectedUnits = selection.GetSelected();
@@ -106,7 +112,7 @@ namespace Project.Gameplay.Units
                 {
                     prod.useRallyPoint = true;
                     prod.rallyPointWorld = hitRally.point;
-                    OrderFeedback.Spawn(hitRally.point);
+                    OrderFeedback.Spawn(hitRally.point, OrderFeedbackType.Move);
                 }
                 return;
             }
@@ -124,15 +130,23 @@ namespace Project.Gameplay.Units
             {
                 case RTSOrderTargetResolver.TargetType.BuildSite:
                     DispatchBuildSite(result.buildSite, _cachedUnits);
+                    LogInputOrder(InputOrderType.InvalidBlocked, "build site");
                     return;
                 case RTSOrderTargetResolver.TargetType.Resource:
                     DispatchGather(result.resourceNode, _cachedUnits);
+                    LogInputOrder(InputOrderType.Gather, "recurso");
                     return;
                 case RTSOrderTargetResolver.TargetType.Building:
                     DispatchBuilding(result, _cachedUnits);
                     return;
                 case RTSOrderTargetResolver.TargetType.Ground:
                     DispatchMove(result.hit.point, _cachedUnits);
+                    LogInputOrder(InputOrderType.Move, "suelo");
+                    return;
+                default:
+                    LogInputOrder(InputOrderType.InvalidBlocked, "sin objetivo");
+                    if (result.hasGroundHit)
+                        OrderFeedback.Spawn(result.groundPosition, OrderFeedbackType.Invalid);
                     return;
             }
         }
@@ -172,31 +186,24 @@ namespace Project.Gameplay.Units
                 if (hits[h].collider == null) continue;
 
                 var victimSel = hits[h].collider.GetComponentInParent<UnitSelectable>();
-                var victimHealth = hits[h].collider.GetComponentInParent<IHealth>();
+                if (!TryResolveAttackTargetFromHit(hits[h], out Transform resolvedTarget, out IHealth victimHealth))
+                    continue;
 
                 if (victimSel != null)
                 {
-                    if (!FactionMember.IsHostileToPlayer(victimSel.gameObject))
-                        continue;
-                    if (victimHealth == null || !victimHealth.IsAlive)
+                    if (!IsHostileAttackTarget(victimSel.gameObject))
                         continue;
                     if (TryAssignAttackers(victimSel.transform, hits[h].point))
                         return true;
                     continue;
                 }
 
-                // Edificio u objetivo estático con vida (sin UnitSelectable)
-                if (victimHealth == null || !victimHealth.IsAlive)
-                    continue;
-                if (hits[h].collider.GetComponentInParent<UnitMover>() != null)
-                    continue;
+                // Objetivo con vida sin UnitSelectable (unidad o edificio).
                 var hpGo = (victimHealth as MonoBehaviour)?.gameObject;
-                if (hpGo == null || !FactionMember.IsHostileToPlayer(hpGo))
+                if (hpGo == null || !IsHostileAttackTarget(hpGo))
                     continue;
 
-                var targetTf = (victimHealth as MonoBehaviour)?.transform;
-                if (targetTf == null) continue;
-                if (TryAssignAttackers(targetTf, hits[h].point))
+                if (TryAssignAttackers(resolvedTarget, hits[h].point))
                     return true;
             }
 
@@ -205,16 +212,92 @@ namespace Project.Gameplay.Units
 
         bool TryAssignAttackers(Transform attackTarget, Vector3 feedbackPoint)
         {
+            var healthComp = attackTarget != null ? RTSOrderTargetResolver.ResolveHealthInHierarchy(attackTarget) : null;
+            var targetHealth = healthComp as IHealth;
+            if (targetHealth == null || !targetHealth.IsAlive)
+                return false;
             bool any = false;
             for (int i = 0; i < _cachedUnits.Count; i++)
             {
                 var atk = FindUnitAttackerForOrders(_cachedUnits[i].selectable);
+                if (atk != null && atk.GetAttackDamage() <= 0) atk = null;
                 if (atk == null) continue;
                 atk.SetTarget(attackTarget);
+                atk.EnableChaseForCurrentOrder();
                 any = true;
             }
-            if (any) OrderFeedback.Spawn(feedbackPoint);
+            if (any)
+            {
+                OrderFeedback.Spawn(feedbackPoint, OrderFeedbackType.Attack);
+                LogInputOrder(InputOrderType.AttackTarget, attackTarget != null ? attackTarget.name : "<null>");
+                if (debugLogs && attackTarget != null && healthComp != null
+                    && attackTarget.GetComponentInParent<UnitSelectable>() == null
+                    && attackTarget.GetComponentInParent<BuildingOwnership>() != null)
+                    Debug.Log($"[Combat] Attack building target={attackTarget.root.name} hp={healthComp.CurrentHP}/{healthComp.MaxHP}");
+            }
+            else
+            {
+                LogInputOrder(InputOrderType.InvalidBlocked, "sin atacantes válidos");
+                OrderFeedback.Spawn(feedbackPoint, OrderFeedbackType.Invalid);
+            }
             return any;
+        }
+
+        static bool TryResolveAttackTargetFromHit(RaycastHit hit, out Transform target, out IHealth health)
+        {
+            target = null;
+            health = null;
+            if (hit.collider == null) return false;
+            var hp = RTSOrderTargetResolver.ResolveHealthInHierarchy(hit.collider.transform);
+            health = hp as IHealth;
+            if (health == null || !health.IsAlive) return false;
+            var mb = health as MonoBehaviour;
+            if (mb != null)
+                target = mb.transform;
+            if (target == null)
+                target = hit.collider.transform.root;
+            return target != null;
+        }
+
+        static bool IsHostileAttackTarget(GameObject targetGo)
+        {
+            if (targetGo == null) return false;
+            if (FactionMember.IsHostileToPlayer(targetGo))
+                return true;
+
+            var playerOwner = PlayerResources.FindPrimaryHumanSkirmish();
+            var ownership = targetGo.GetComponentInParent<BuildingOwnership>();
+            if (ownership == null)
+            {
+                var hp = RTSOrderTargetResolver.ResolveHealthInHierarchy(targetGo.transform);
+                if (hp != null)
+                    ownership = hp.transform.root.GetComponentInChildren<BuildingOwnership>(true);
+            }
+            if (ownership != null && ownership.owner != null && playerOwner != null && ownership.owner != playerOwner)
+                return true;
+
+            return false;
+        }
+
+        static string DescribeBuildingHostilityReason(GameObject targetGo, Health buildingHealth)
+        {
+            if (targetGo == null) return "null_target";
+            if (FactionMember.IsHostileToPlayer(targetGo)) return "faction_hostile_on_chain";
+            var humanPr = PlayerResources.FindPrimaryHumanSkirmish();
+            var ownership = targetGo.GetComponentInParent<BuildingOwnership>();
+            if (ownership == null && buildingHealth != null)
+                ownership = buildingHealth.transform.root.GetComponentInChildren<BuildingOwnership>(true);
+            if (ownership == null)
+            {
+                var hp = RTSOrderTargetResolver.ResolveHealthInHierarchy(targetGo.transform);
+                if (hp != null)
+                    ownership = hp.transform.root.GetComponentInChildren<BuildingOwnership>(true);
+            }
+            if (ownership == null) return "no_building_ownership";
+            if (ownership.owner == null) return "ownership_owner_null";
+            if (humanPr == null) return "no_human_PlayerResources";
+            if (ownership.owner == humanPr) return "owner_is_human";
+            return "owner_not_human";
         }
 
         static UnitAttacker FindUnitAttackerForOrders(UnitSelectable selectable)
@@ -259,12 +342,19 @@ namespace Project.Gameplay.Units
                 if (c.builder != null) c.builder.SetBuildTarget(null, "RTSOrder DispatchGather");
                 if (c.gatherer != null) c.gatherer.Gather(node);
             }
+            OrderFeedback.Spawn(node.transform.position, OrderFeedbackType.Gather);
         }
 
         void DispatchBuilding(RTSOrderTargetResolver.ResolveResult result, List<CachedUnitComponents> cached)
         {
             bool hostileBuilding = result.buildingHealth != null && result.buildingHealth.IsAlive
-                && FactionMember.IsHostileToPlayer(result.buildingHealth.gameObject);
+                && IsHostileAttackTarget(result.buildingHealth.gameObject);
+
+            if (debugLogs && result.buildingHealth != null)
+            {
+                string reason = DescribeBuildingHostilityReason(result.buildingHealth.gameObject, result.buildingHealth);
+                Debug.Log($"[InputOrder] Building target hostile={hostileBuilding} reason={reason} name={result.buildingHealth.name}");
+            }
 
             if (hostileBuilding && TryAssignAttackers(result.buildingHealth.transform, result.hit.point))
             {
@@ -314,12 +404,14 @@ namespace Project.Gameplay.Units
                 }
             }
             if (anyHandled) _bus.Flush();
+            if (anyHandled)
+                LogInputOrder(InputOrderType.Move, "building fallback");
         }
 
         void DispatchMove(Vector3 target, List<CachedUnitComponents> cached)
         {
             ClearAttackTargets(cached);
-            OrderFeedback.Spawn(target);
+            OrderFeedback.Spawn(target, OrderFeedbackType.Move);
 
             for (int i = 0; i < cached.Count; i++)
             {
@@ -373,6 +465,14 @@ namespace Project.Gameplay.Units
                 dynamicSpacing,
                 effectiveStyle,
                 formationRandomOffset);
+        }
+
+        void LogInputOrder(InputOrderType type, string detail)
+        {
+            if (!debugLogs) return;
+            if (type == _lastLoggedOrderType) return;
+            _lastLoggedOrderType = type;
+            Debug.Log($"[InputOrder] RightClick -> {type} ({detail})");
         }
 
         bool ShouldKeepActiveWallTarget(Builder builder, Vector3 moveTarget)

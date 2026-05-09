@@ -40,6 +40,9 @@ namespace Project.Gameplay.Units
 
         [Header("Debug")]
         public bool debugLogs = false;
+        [Header("Gather Retarget")]
+        [Tooltip("Distancia máxima para auto-retarget al agotarse un recurso (m).")]
+        public float autoRetargetMaxDistance = 80f;
 
         private NavMeshAgent _agent;
         private UnitMover _mover;
@@ -183,7 +186,8 @@ namespace Project.Gameplay.Units
             // Nodo agotado sin carga: evitar Gathering con Take() siempre 0 (bloquea órdenes).
             if (_targetNode.IsDepleted && _carried == 0)
             {
-                ClearGatherTargetIdle();
+                if (!TryRetargetNearestSameKind())
+                    ClearGatherTargetIdle();
                 return;
             }
 
@@ -243,7 +247,7 @@ namespace Project.Gameplay.Units
             if (staleMover)
                 _mover.Stop();
 
-            var drop = DropOffFinder.FindNearest(transform.position, _carriedKind, GetComponent<FactionMember>());
+            var drop = DropOffFinder.FindNearest(transform.position, _carriedKind, owner, GetComponent<FactionMember>());
             if (drop != null)
             {
                 if (GoDepositAt(drop))
@@ -300,6 +304,40 @@ namespace Project.Gameplay.Units
             }
             _stuckTimer += Time.deltaTime;
             return _stuckTimer >= stuckRecoverSeconds;
+        }
+
+        bool TryRetargetNearestSameKind()
+        {
+            if (_targetNode == null) return false;
+            ResourceKind desiredKind = _targetNode.kind;
+            float maxDist = Mathf.Max(1f, autoRetargetMaxDistance);
+            float maxSqr = maxDist * maxDist;
+            Vector3 from = transform.position;
+            var nodes = Object.FindObjectsByType<ResourceNode>(FindObjectsSortMode.None);
+            ResourceNode best = null;
+            float bestSqr = float.MaxValue;
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                var n = nodes[i];
+                if (n == null || n == _targetNode || n.IsDepleted) continue;
+                if (n.kind != desiredKind) continue;
+                float d = (n.transform.position - from).sqrMagnitude;
+                if (d > maxSqr || d >= bestSqr) continue;
+                bestSqr = d;
+                best = n;
+            }
+
+            if (best == null)
+            {
+                if (debugLogs)
+                    Debug.Log($"[Gather] [{gameObject.name}] Retarget fallido {desiredKind} (sin nodos dentro de {maxDist:F1}m).");
+                return false;
+            }
+
+            if (debugLogs)
+                Debug.Log($"[Gather] [{gameObject.name}] Retarget {desiredKind} -> {best.gameObject.name}");
+            Gather(best);
+            return true;
         }
 
         void ClearStuckAndRepathTowardResource()
@@ -373,7 +411,12 @@ namespace Project.Gameplay.Units
                 }
                 if (taken <= 0)
                 {
-                    if (_targetNode.IsDepleted)
+                    if (_targetNode != null && _targetNode.IsDepleted && _carried == 0)
+                    {
+                        if (!TryRetargetNearestSameKind())
+                            ClearGatherTargetIdle();
+                    }
+                    else if (_targetNode != null && _targetNode.IsDepleted)
                         ClearGatherTargetIdle();
                     return;
                 }
@@ -401,17 +444,17 @@ namespace Project.Gameplay.Units
                     if (debugLogs)
                         Debug.Log($"[{gameObject.name}] Buscando depsito para: {_carriedKind} (raw: {(int)_carriedKind})");
 
-                    _deposit = DropOffFinder.FindNearest(transform.position, _carriedKind, GetComponent<FactionMember>());
+                    _deposit = DropOffFinder.FindNearest(transform.position, _carriedKind, owner, GetComponent<FactionMember>());
 
                     if (_deposit == null)
                     {
                         if (debugLogs)
-                            Debug.LogWarning($"[{gameObject.name}] ? NO se encontr depsito para {_carriedKind}. Quedando idle con recursos.");
+                            Debug.LogWarning($"[Economy] [{gameObject.name}] No se encontró depósito válido owner={owner?.name ?? "<null>"} kind={_carriedKind}.");
                     }
                     else
                     {
                         if (debugLogs)
-                            Debug.Log($"[{gameObject.name}] ? Depsito encontrado: {_deposit.gameObject.name}");
+                            Debug.Log($"[Economy] [{gameObject.name}] Depósito aceptado: {_deposit.gameObject.name} owner={owner?.name ?? "<null>"} kind={_carriedKind}");
                     }
 
                     if (_deposit == null)
@@ -560,6 +603,7 @@ namespace Project.Gameplay.Units
 		if (point == null) return false;
 		if (_carried <= 0) return false;
 		if (!point.Accepts(_carriedKind)) return false;
+        if (!IsDropOffOwnedByCurrentOwner(point)) return false;
 
 		_playerOverrodeGatherAutomation = false;
 		_manualOrderDepositResumeAfterTime = -1f;
@@ -573,6 +617,20 @@ namespace Project.Gameplay.Units
 
 		return true;
 	}
+
+        bool IsDropOffOwnedByCurrentOwner(DropOffPoint point)
+        {
+            if (point == null) return false;
+            if (owner == null) return true;
+            var marker = point.GetComponentInParent<BuildingOwnership>();
+            if (marker != null && marker.owner != null)
+                return marker.owner == owner;
+            var prod = point.GetComponentInParent<ProductionBuilding>();
+            if (prod != null && prod.owner != null)
+                return prod.owner == owner;
+            var pr = point.GetComponentInParent<PlayerResources>();
+            return pr == null || pr == owner;
+        }
 
 	/// <summary>True si el aldeano lleva recursos cargados.</summary>
 	public bool IsCarrying => _carried > 0;

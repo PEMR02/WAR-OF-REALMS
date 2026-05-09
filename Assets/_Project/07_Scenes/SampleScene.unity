@@ -26,7 +26,7 @@ RenderSettings:
   m_AmbientIntensity: 0.88
   m_AmbientMode: 2
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
-  m_SkyboxMaterial: {fileID: 2100000, guid: 0da336727ac4b6642b618f68e93fd063, type: 2}
+  m_SkyboxMaterial: {fileID: 2100000, guid: 94edcc9bc8a30064db2bd5b7afd0ae08, type: 2}
   m_HaloStrength: 0.5
   m_FlareStrength: 1
   m_FlareFadeSpeed: 3
@@ -93,7 +93,7 @@ LightmapSettings:
     m_ExportTrainingData: 0
     m_TrainingDataDestination: TrainingData
     m_LightProbeSampleCountMultiplier: 4
-  m_LightingDataAsset: {fileID: 20201, guid: 0000000000000000f000000000000000, type: 0}
+  m_LightingDataAsset: {fileID: 112000000, guid: 23a3b3e412060e14eaece76f44712883, type: 2}
   m_LightingSettings: {fileID: 0}
 --- !u!196 &4
 NavMeshSettings:
@@ -352,7 +352,7 @@ MonoBehaviour:
   fogMode: 2
   fogDensity: 0.0035
   fogColor: {r: 0.56, g: 0.65, b: 0.75, a: 1}
-  skyboxMaterial: {fileID: 0}
+  skyboxMaterial: {fileID: 2100000, guid: 94edcc9bc8a30064db2bd5b7afd0ae08, type: 2}
   skyboxExposure: 1.2
 --- !u!4 &7068120
 Transform:
@@ -938,7 +938,7 @@ Camera:
     serializedVersion: 2
     m_Bits: 4294963147
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 518027452}
+  m_TargetTexture: {fileID: 1391058090}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 0
@@ -1845,7 +1845,7 @@ MonoBehaviour:
   height: 256
   centerAtOrigin: 1
   cellPlacementRandomOffset: 0.1
-  seed: 12345
+  seed: 22046
   randomSeedOnPlay: 1
   terrain: {fileID: 316680944}
   waterHeight: 1
@@ -1876,6 +1876,8 @@ MonoBehaviour:
   rebuildNavMeshOnGenerate: 1
   navMeshPostBakeSampleRadius: 48
   navMeshPostBakeSampleRetries: 2
+  enableRiverFordNavMeshVolumes: 1
+  riverFordNavMeshAreaCost: 2.65
   waterSurfaceOffset: 0.05
   showWater: 1
   waterMeshMode: 0
@@ -2018,7 +2020,7 @@ Terrain:
   m_GameObject: {fileID: 316680941}
   m_Enabled: 0
   serializedVersion: 6
-  m_TerrainData: {fileID: 15600000, guid: 6680ded7dc92b85498e3b1dadf750244, type: 2}
+  m_TerrainData: {fileID: 0}
   m_TreeDistance: 5000
   m_TreeBillboardDistance: 50
   m_TreeCrossFadeLength: 5
@@ -2482,7 +2484,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.UniversalAdditionalCameraData
   m_RenderShadows: 1
   m_RequiresDepthTextureOption: 2
   m_RequiresOpaqueTextureOption: 2
@@ -2494,7 +2496,7 @@ MonoBehaviour:
     m_Bits: 1
   m_VolumeTrigger: {fileID: 0}
   m_VolumeFrameworkUpdateModeOption: 2
-  m_RenderPostProcessing: 1
+  m_RenderPostProcessing: 0
   m_Antialiasing: 0
   m_AntialiasingQuality: 2
   m_StopNaN: 0
@@ -2871,6 +2873,14 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 215663709744633162, guid: 6488b6e6bbe8a9c4585b531a71d8211c, type: 3}
+      propertyPath: m_Mode
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 215663709744633162, guid: 6488b6e6bbe8a9c4585b531a71d8211c, type: 3}
+      propertyPath: m_RenderDynamicObjects
+      value: 0
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -3151,7 +3161,7 @@ Light:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 410087039}
   m_Enabled: 1
-  serializedVersion: 12
+  serializedVersion: 13
   m_Type: 1
   m_Color: {r: 1, g: 0.945098, b: 0.839216, a: 1}
   m_Intensity: 1.15
@@ -3203,7 +3213,7 @@ Light:
   m_UseBoundingSphereOverride: 0
   m_UseViewFrustumForShadowCasterCull: 1
   m_ForceVisible: 0
-  m_ShadowRadius: 0
+  m_ShapeRadius: 0
   m_ShadowAngle: 0
   m_LightUnit: 2
   m_LuxAtDistance: 1
@@ -3905,43 +3915,6 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 5edc043de19f28c48b9f6c35e70be348, type: 3}
---- !u!84 &518027452
-RenderTexture:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_Name: Minimap_RT
-  m_ImageContentsHash:
-    serializedVersion: 2
-    Hash: 00000000000000000000000000000000
-  m_IsAlphaChannelOptional: 0
-  serializedVersion: 6
-  m_Width: 256
-  m_Height: 256
-  m_AntiAliasing: 1
-  m_MipCount: -1
-  m_DepthStencilFormat: 90
-  m_ColorFormat: 4
-  m_MipMap: 0
-  m_GenerateMips: 0
-  m_SRGB: 1
-  m_UseDynamicScale: 0
-  m_UseDynamicScaleExplicit: 0
-  m_BindMS: 0
-  m_EnableCompatibleFormat: 1
-  m_EnableRandomWrite: 0
-  m_TextureSettings:
-    serializedVersion: 2
-    m_FilterMode: 1
-    m_Aniso: 0
-    m_MipBias: 0
-    m_WrapU: 1
-    m_WrapV: 1
-    m_WrapW: 1
-  m_Dimension: 2
-  m_VolumeDepth: 1
-  m_ShadowSamplingMode: 2
 --- !u!1 &521716450
 GameObject:
   m_ObjectHideFlags: 0
@@ -4506,6 +4479,7 @@ Canvas:
   m_OverridePixelPerfect: 0
   m_SortingBucketNormalizedSize: 0
   m_VertexColorAlwaysGammaSpace: 0
+  m_UseReflectionProbes: 0
   m_AdditionalShaderChannelsFlag: 25
   m_UpdateRectTransformForStandalone: 0
   m_SortingLayerID: 0
@@ -6259,6 +6233,8 @@ MonoBehaviour:
   healthBarPrefab: {fileID: 800005, guid: c54e5547f6a307c44b1d96a2ea58a90a, type: 3}
   maxBarDistance: 0
   viewportVisibilityMargin: 0.35
+  showWhenFull: 0
+  debugLogs: 1
 --- !u!4 &847107715
 Transform:
   m_ObjectHideFlags: 0
@@ -9984,7 +9960,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 518027452}
+  m_Texture: {fileID: 1391058090}
   m_UVRect:
     serializedVersion: 2
     x: 0
@@ -10801,6 +10777,8 @@ MonoBehaviour:
     m_Bits: 1152
   pathPreviewLineWidth: 0.25
   pathConfirmWithDoubleClick: 1
+  minWallPathPointSpacingFloor: 0.75
+  minWallSegmentLengthFloor: 1
   selection: {fileID: 0}
 --- !u!4 &1240009322
 Transform:
@@ -10904,7 +10882,7 @@ MonoBehaviour:
   wood: 200
   stone: 200
   gold: 100
-  food: 200
+  food: 1000
   debugLogs: 0
 --- !u!4 &1271764605
 Transform:
@@ -11630,6 +11608,43 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1388872247}
   m_CullTransparentMesh: 1
+--- !u!84 &1391058090
+RenderTexture:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Minimap_RT
+  m_ImageContentsHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_IsAlphaChannelOptional: 0
+  serializedVersion: 6
+  m_Width: 256
+  m_Height: 256
+  m_AntiAliasing: 1
+  m_MipCount: -1
+  m_DepthStencilFormat: 90
+  m_ColorFormat: 4
+  m_MipMap: 0
+  m_GenerateMips: 0
+  m_SRGB: 1
+  m_UseDynamicScale: 0
+  m_UseDynamicScaleExplicit: 0
+  m_BindMS: 0
+  m_EnableCompatibleFormat: 1
+  m_EnableRandomWrite: 0
+  m_TextureSettings:
+    serializedVersion: 2
+    m_FilterMode: 1
+    m_Aniso: 0
+    m_MipBias: 0
+    m_WrapU: 1
+    m_WrapV: 1
+    m_WrapW: 1
+  m_Dimension: 2
+  m_VolumeDepth: 1
+  m_ShadowSamplingMode: 2
 --- !u!1 &1392860617
 GameObject:
   m_ObjectHideFlags: 0
@@ -12784,7 +12799,7 @@ MonoBehaviour:
   formationSpacing: 1.5
   formationStyle: 0
   formationRandomOffset: 0.15
-  debugLogs: 0
+  debugLogs: 1
 --- !u!4 &1649107294
 Transform:
   m_ObjectHideFlags: 0
@@ -15504,6 +15519,7 @@ Canvas:
   m_OverridePixelPerfect: 0
   m_SortingBucketNormalizedSize: 0
   m_VertexColorAlwaysGammaSpace: 0
+  m_UseReflectionProbes: 0
   m_AdditionalShaderChannelsFlag: 0
   m_UpdateRectTransformForStandalone: 0
   m_SortingLayerID: 0

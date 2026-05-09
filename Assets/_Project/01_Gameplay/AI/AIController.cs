@@ -1,9 +1,11 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Project.Gameplay.Buildings;
 using Project.Gameplay.Combat;
 using Project.Gameplay.Faction;
 using Project.Gameplay.Players;
+using Project.Gameplay.Resources;
 using Project.Gameplay.Units;
 
 namespace Project.Gameplay.AI
@@ -36,6 +38,8 @@ namespace Project.Gameplay.AI
 
         float _stratAcc, _ecoAcc, _consAcc, _milAcc, _tacAcc, _scoutAcc;
         float _gameTime;
+        const float MinOffensiveAttackTimeSeconds = 180f;
+        const int MinOffensiveArmyUnits = 4;
 
         public void Initialize(
             AIDifficulty difficulty,
@@ -73,9 +77,8 @@ namespace Project.Gameplay.AI
 
             _knowledge.GameTimeSeconds = _gameTime;
             _knowledge.MyTownCenterPosition = townCenterTransform.position;
-            if (_knowledge.KnownEnemyTownCenter == null)
-                _knowledge.KnownEnemyTownCenter = FindEnemyTownCenterTransform();
             _knowledge.RefreshHostiles(myFaction, townCenterTransform.position, 42f * Mathf.Max(0.35f, _profile.scoutingFrequency), 14f);
+            RegisterRecentThreatFromDamage();
 
             var villagers = CollectMyVillagers();
             _knowledge.EstimateSelfMilitary(CollectMyArmyRoots());
@@ -134,7 +137,9 @@ namespace Project.Gameplay.AI
             float atk = AIDecisionScoring.AttackScore(_military, _strategy.State, _profile);
             float def = AIDecisionScoring.DefendScore(_knowledge, _strategy.State, _profile);
             if (def >= atk) return;
+            if (_gameTime < MinOffensiveAttackTimeSeconds) return;
             var army = CollectMyArmy();
+            if (army.Count < MinOffensiveArmyUnits) return;
             if (army.Count == 0 || _knowledge.KnownEnemyTownCenter == null) return;
             if (!_military.ShouldAttackNow()) return;
             _tactical.TickAttackMove(army, _knowledge.KnownEnemyTownCenter, _profile);
@@ -143,6 +148,9 @@ namespace Project.Gameplay.AI
         void RunConstructionScoring()
         {
             if (_construction == null || _placer == null) return;
+
+            if (TryBuildEconomyBuildingNearResources())
+                return;
 
             bool houseSite = HasBuildSiteFor(resources, "House");
             bool raxSite = HasBuildSiteFor(resources, "Barracks");
@@ -225,7 +233,8 @@ namespace Project.Gameplay.AI
             for (int i = 0; i < atk.Length; i++)
             {
                 var a = atk[i];
-                if (a == null || a.GetComponent<VillagerGatherer>() != null) continue;
+                if (a == null || a.GetAttackDamage() <= 0) continue;
+                if (a.GetComponent<VillagerGatherer>() != null) continue;
                 var fm = a.GetComponentInParent<FactionMember>();
                 if (fm != null && fm.faction == myFaction)
                     list.Add(a.gameObject);
@@ -240,7 +249,8 @@ namespace Project.Gameplay.AI
             for (int i = 0; i < atk.Length; i++)
             {
                 var a = atk[i];
-                if (a == null || a.GetComponent<VillagerGatherer>() != null) continue;
+                if (a == null || a.GetAttackDamage() <= 0) continue;
+                if (a.GetComponent<VillagerGatherer>() != null) continue;
                 var fm = a.GetComponentInParent<FactionMember>();
                 if (fm != null && fm.faction == myFaction)
                     list.Add(a);
@@ -298,5 +308,117 @@ namespace Project.Gameplay.AI
         }
 
         bool HasCompletedBarracks() => HasCompletedBuildingId("Barracks");
+
+        /// <summary>
+        /// Depósitos de economía cerca del recurso correspondiente (ids de BuildingSO del proyecto).
+        /// </summary>
+        bool TryBuildEconomyBuildingNearResources()
+        {
+            if (_knowledge == null || townCenterTransform == null || _profile == null) return false;
+            if (_gameTime < 14f) return false;
+
+            float sight = 220f * Mathf.Lerp(0.75f, 1.15f, _profile.scoutingFrequency);
+            _knowledge.RefreshResourceLists(townCenterTransform.position, sight, myFaction);
+
+            const float claimRadius = 44f;
+            var plans = new (ResourceKind kind, string buildingId)[]
+            {
+                (ResourceKind.Wood, "Lumber_Camp"),
+                (ResourceKind.Gold, "Mining_Camp"),
+                (ResourceKind.Food, "Granary"),
+            };
+
+            Vector3 tc = townCenterTransform.position;
+            for (int p = 0; p < plans.Length; p++)
+            {
+                string bid = plans[p].buildingId;
+                if (HasBuildSiteFor(resources, bid)) continue;
+
+                List<ResourceNode> list = plans[p].kind switch
+                {
+                    ResourceKind.Wood => _knowledge.WoodNodes,
+                    ResourceKind.Gold => _knowledge.GoldNodes,
+                    ResourceKind.Food => _knowledge.FoodNodes,
+                    _ => null
+                };
+                if (list == null || list.Count == 0) continue;
+
+                ResourceNode nearest = null;
+                float bestD = float.MaxValue;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var n = list[i];
+                    if (n == null || n.IsDepleted) continue;
+                    float d = (n.transform.position - tc).sqrMagnitude;
+                    if (d < bestD)
+                    {
+                        bestD = d;
+                        nearest = n;
+                    }
+                }
+                if (nearest == null) continue;
+
+                if (HasEconomyBuildingOwnerNear(bid, nearest.transform.position, claimRadius)) continue;
+
+                var bso = AIControllerRuntimeCatalog.FindBuildingSoById(bid);
+                if (bso == null) continue;
+
+                if (_construction.TryBuildNearAnchor(
+                    bso,
+                    nearest.transform.position,
+                    resources,
+                    myFaction,
+                    _profile.maxBuilders,
+                    playerIndexOneBased * 5000 + Mathf.FloorToInt(_gameTime) + p * 131,
+                    out _))
+                    return true;
+            }
+
+            return false;
+        }
+
+        bool HasEconomyBuildingOwnerNear(string buildingId, Vector3 anchor, float radius)
+        {
+            float r2 = radius * radius;
+            var bis = FindObjectsByType<BuildingInstance>(FindObjectsSortMode.None);
+            for (int i = 0; i < bis.Length; i++)
+            {
+                var bi = bis[i];
+                if (bi == null || bi.buildingSO == null) continue;
+                if (!string.Equals(bi.buildingSO.id, buildingId, StringComparison.OrdinalIgnoreCase)) continue;
+                var fm = bi.GetComponentInParent<FactionMember>();
+                if (fm == null || fm.faction != myFaction) continue;
+
+                var prod = bi.GetComponent<ProductionBuilding>();
+                var bo = bi.GetComponent<BuildingOwnership>();
+                bool ownerMatch = prod != null && prod.owner == resources
+                    || bo != null && bo.owner == resources;
+                if (!ownerMatch) continue;
+
+                if ((bi.transform.position - anchor).sqrMagnitude <= r2)
+                    return true;
+            }
+            return false;
+        }
+
+        void RegisterRecentThreatFromDamage()
+        {
+            float now = Time.time;
+            var allHealth = FindObjectsByType<Health>(FindObjectsSortMode.None);
+            for (int i = 0; i < allHealth.Length; i++)
+            {
+                var h = allHealth[i];
+                if (h == null || !h.IsAlive) continue;
+                if (now - h.LastDamageTime > 15f) continue;
+                var fm = h.GetComponentInParent<FactionMember>();
+                if (fm == null || fm.faction != myFaction) continue;
+                Transform attacker = h.LastAttackerTransform;
+                if (attacker == null) continue;
+                var attackerFaction = attacker.GetComponentInParent<FactionMember>();
+                if (attackerFaction != null && !FactionMember.IsHostile(myFaction, attackerFaction.faction))
+                    continue;
+                _knowledge.RegisterThreat(attacker, now);
+            }
+        }
     }
 }

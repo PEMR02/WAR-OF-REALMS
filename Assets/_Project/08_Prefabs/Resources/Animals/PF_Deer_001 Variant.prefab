@@ -226,3 +226,4 @@ MonoBehaviour:
   maxAmount: 0
   snapToNavMeshOnAwake: 1
   snapRadius: 3
+  showWorldBar: 0

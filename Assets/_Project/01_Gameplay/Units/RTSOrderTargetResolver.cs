@@ -36,6 +36,17 @@ namespace Project.Gameplay.Units
         /// <summary>
         /// Orden de raycast: BuildSite → Resource → Building → Ground.
         /// </summary>
+        /// <summary>Health en el mismo GO, padres o hijos (colliders en raíz vs Health en hijo).</summary>
+        public static Health ResolveHealthInHierarchy(Transform from)
+        {
+            if (from == null) return null;
+            var h = from.GetComponent<Health>();
+            if (h != null) return h;
+            h = from.GetComponentInParent<Health>();
+            if (h != null) return h;
+            return from.GetComponentInChildren<Health>(true);
+        }
+
         public static ResolveResult Resolve(Ray ray, LayerMask buildSiteMask, LayerMask resourceMask, LayerMask buildingMask, LayerMask groundMask)
         {
             var result = new ResolveResult { type = TargetType.None };
@@ -130,7 +141,7 @@ namespace Project.Gameplay.Units
                 }
 
                 result.dropOffPoint = bestBuilding.collider.GetComponentInParent<DropOffPoint>();
-                result.buildingHealth = bestBuilding.collider.GetComponentInParent<Health>();
+                result.buildingHealth = ResolveHealthInHierarchy(bestBuilding.collider.transform);
                 var buildingRoot = bestBuilding.collider.transform.root;
                 result.buildingPosition = buildingRoot != null ? buildingRoot.position : bestBuilding.point;
 

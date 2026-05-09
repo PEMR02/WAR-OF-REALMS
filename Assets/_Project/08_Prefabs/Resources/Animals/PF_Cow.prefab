@@ -506,6 +506,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitAnimatorDriver
   speedParameter: Speed
   runThreshold: 2
+  pendingPathVisualSpeed: 0.12
 --- !u!4 &886261260306952385 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}
@@ -736,6 +737,9 @@ MonoBehaviour:
   speedParameter: Speed
   idleStateName: Idle
   animSpeedSmoothTime: 0.2
+  navRecoverRadius: 8
+  navRecoverInterval: 0.75
+  debugMovementLogs: 0
 --- !u!4 &652872388816624274 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: ca8aaf9ec24ef7b43affc81bc71ee64f, type: 3}

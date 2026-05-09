@@ -16,6 +16,7 @@ namespace Project.Gameplay.Combat
     /// </summary>
     public class Health : MonoBehaviour, IHealth, IWorldBarSource
     {
+        static bool s_loggedFloatingTextFailure;
         [Header("Stats")]
         [Tooltip("Vida máxima. Si se usa InitFromMax() al spawnear, este valor se sobrescribe.")]
         public int maxHP = 100;
@@ -47,6 +48,10 @@ namespace Project.Gameplay.Combat
         public event System.Action OnDeath;
         /// <summary>Se invoca al recibir daño (amount, source). Útil para mobs que se vuelven hostiles al ser atacados.</summary>
         public event System.Action<int, object> OnDamageReceived;
+        /// <summary>Se invoca cuando cambia la vida (current, max).</summary>
+        public event System.Action<int, int> OnHealthChanged;
+        public Transform LastAttackerTransform { get; private set; }
+        public float LastDamageTime { get; private set; } = -999f;
 
         /// <summary>Posición en mundo donde debe dibujarse la barra (HealthBarManager la convierte a pantalla).</summary>
         public Vector3 GetBarWorldPosition()
@@ -65,6 +70,7 @@ namespace Project.Gameplay.Combat
         void Awake()
         {
             EnsureHPInitialized();
+            NotifyHealthChanged();
         }
 
         void Start()
@@ -73,6 +79,8 @@ namespace Project.Gameplay.Combat
                 _currentHP = Mathf.Clamp(Mathf.RoundToInt(maxHP * startPercent / 100f), 1, maxHP);
             else
                 EnsureHPInitialized();
+
+            NotifyHealthChanged();
         }
 
         void OnDestroy()
@@ -93,6 +101,7 @@ namespace Project.Gameplay.Combat
         {
             maxHP = Mathf.Max(1, newMaxHP);
             _currentHP = maxHP;
+            NotifyHealthChanged();
         }
 
         /// <summary>Inflige daño. Si hay UnitStatsRuntime, aplica reducción por armadura (Physical) o resistencia mágica (Magic).</summary>
@@ -106,9 +115,15 @@ namespace Project.Gameplay.Combat
                 reduction = type == DamageType.Physical ? stats.GetEffectiveArmor() : stats.GetEffectiveMagicResist();
             int final = Mathf.Max(1, amount - reduction);
 
-            FloatingDamageText.Spawn(transform.position, final, isHeal: false);
+            TrySpawnFloatingText(final, isHeal: false);
             _currentHP = Mathf.Max(0, _currentHP - final);
+            if (source is GameObject sourceGo)
+                LastAttackerTransform = sourceGo.transform;
+            else if (source is Component sourceComponent)
+                LastAttackerTransform = sourceComponent.transform;
+            LastDamageTime = Time.time;
             OnDamageReceived?.Invoke(final, source);
+            NotifyHealthChanged();
 
             if (_currentHP <= 0)
             {
@@ -126,8 +141,32 @@ namespace Project.Gameplay.Combat
         public void Heal(int amount)
         {
             if (amount <= 0 || !IsAlive) return;
-            if (amount >= 5) FloatingDamageText.Spawn(transform.position, amount, isHeal: true);
+            if (amount >= 5) TrySpawnFloatingText(amount, isHeal: true);
+            int prev = _currentHP;
             _currentHP = Mathf.Min(maxHP, _currentHP + amount);
+            if (_currentHP != prev)
+                NotifyHealthChanged();
+        }
+
+        void NotifyHealthChanged()
+        {
+            OnHealthChanged?.Invoke(_currentHP, Mathf.Max(1, maxHP));
+        }
+
+        void TrySpawnFloatingText(int amount, bool isHeal)
+        {
+            try
+            {
+                FloatingDamageText.Spawn(transform.position, amount, isHeal);
+            }
+            catch (System.Exception ex)
+            {
+                if (!s_loggedFloatingTextFailure)
+                {
+                    s_loggedFloatingTextFailure = true;
+                    Debug.LogWarning($"[Combat] FloatingDamageText deshabilitado por error: {ex.GetType().Name}");
+                }
+            }
         }
 
         // IWorldBarSource (deprecated: usado por HealthBarWorld legacy)

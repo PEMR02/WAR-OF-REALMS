@@ -243,6 +243,11 @@ namespace Project.Gameplay.Combat
                 return;
             }
 
+            if (fillImage == null)
+                fillImage = GetComponentInChildren<Image>(true);
+            if (fillImage == null)
+                return;
+
             if (_source == null)
             {
                 _source = ResolveSource();

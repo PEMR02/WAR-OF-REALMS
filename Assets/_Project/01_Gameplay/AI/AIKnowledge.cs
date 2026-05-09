@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using Project.Gameplay.Combat;
+using Project.Gameplay.Buildings;
 using Project.Gameplay.Faction;
 using Project.Gameplay.Resources;
 using Project.Gameplay.Units;
@@ -21,12 +22,30 @@ namespace Project.Gameplay.AI
 
         public readonly List<Transform> VisibleHostileUnits = new();
         public readonly Dictionary<Transform, float> LastKnownEnemyPositionTime = new();
+        public Transform RecentThreat { get; private set; }
+        public float RecentThreatTime { get; private set; } = -999f;
         public float EstimatedEnemyMilitaryStrength { get; set; }
         public float EstimatedSelfMilitaryStrength { get; set; }
 
         public void ClearPerceptions()
         {
             VisibleHostileUnits.Clear();
+        }
+
+        public void RegisterThreat(Transform attacker, float now)
+        {
+            if (attacker == null) return;
+            RecentThreat = attacker;
+            RecentThreatTime = now;
+        }
+
+        public bool TryGetRecentThreat(float now, float memorySeconds, out Transform attacker)
+        {
+            attacker = null;
+            if (RecentThreat == null) return false;
+            if (now - RecentThreatTime > memorySeconds) return false;
+            attacker = RecentThreat;
+            return true;
         }
 
         public void RefreshResourceLists(Vector3 from, float maxDistance, FactionId myFaction)
@@ -67,7 +86,10 @@ namespace Project.Gameplay.AI
                 float dist2 = (t.position - from).sqrMagnitude;
                 if (dist2 <= sight2)
                 {
-                    if (fm.GetComponent<VillagerGatherer>() != null) continue;
+                    if (KnownEnemyTownCenter == null && fm.GetComponentInParent<TownCenter>() != null)
+                        KnownEnemyTownCenter = t;
+                    var atk = fm.GetComponent<UnitAttacker>();
+                    if (atk == null || atk.GetAttackDamage() <= 0) continue;
                     VisibleHostileUnits.Add(t);
                     LastKnownEnemyPositionTime[t] = now;
                 }
@@ -91,8 +113,8 @@ namespace Project.Gameplay.AI
             foreach (var go in units)
             {
                 if (go == null) continue;
-                if (go.GetComponent<VillagerGatherer>() != null) continue;
-                if (go.GetComponent<UnitAttacker>() == null) continue;
+                var atk = go.GetComponent<UnitAttacker>();
+                if (atk == null || atk.GetAttackDamage() <= 0) continue;
                 list.Add(go.transform);
             }
             EstimatedSelfMilitaryStrength = ScoreMilitary(list);

@@ -46,6 +46,15 @@ namespace Project.Gameplay.Buildings
 		[Tooltip("Cuántos slots de población proporciona este edificio (ej: Casa = 5)")]
 		public int populationProvided = 0;
 
+        [Header("Combat")]
+        [Tooltip("Si está activo y damage/range/cooldown son válidos, el edificio puede atacar.")]
+        public bool canAttack = false;
+        [Min(0)] public int attackDamage = 0;
+        [Min(0f)] public float attackRange = 0f;
+        [Min(0f)] public float attackCooldown = 0f;
+        [Tooltip("Si false, solo atacará objetivos marcados como unidades (UnitMover).")]
+        public bool attackTargetsGroundUnits = true;
+
         [Header("Production")]
         [Tooltip("Dirección de salida de unidades respecto al forward del edificio. 1 = forward, -1 = backward.")]
         [Range(-1f, 1f)] public float unitSpawnForwardSign = -1f;

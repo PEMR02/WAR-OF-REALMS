@@ -92,11 +92,17 @@ namespace Project.Gameplay.Units
         public Transform Transform => transform;
 
         Builder _cachedBuilder;
+        UnitStatsRuntime _statsRuntime;
+
+        [Header("Río · vado")]
+        [Tooltip("Factor aplicado a la velocidad efectiva del NavMesh cuando la unidad está en celda de vado (río poco hondo). El A* ya penaliza el tile (~1.35× coste).")]
+        [SerializeField, Range(0.15f, 1f)] float _riverFordMoveSpeedFactor = 0.48f;
 
         void Awake()
         {
             _agent = GetComponent<NavMeshAgent>();
             _cachedBuilder = GetComponent<Builder>();
+            _statsRuntime = GetComponent<UnitStatsRuntime>();
             _planner = new GridUnitMovementPlanner(useGridPathfinding, canSwim, pathSmoothEpsilon);
             _locomotion = new NavMeshUnitLocomotionController(_agent, snapToNavMeshRadius);
             _navWaterCheckPath = new NavMeshPath();
@@ -217,23 +223,6 @@ namespace Project.Gameplay.Units
             _gateSecondLeg = false;
             _hasPostGateDestination = false;
             _activeGate = null;
-
-            if (playerOrder)
-            {
-                _followingAStarPath = false;
-                _waypoints = null;
-                _waypointIndex = 0;
-                _hasAStarGoal = false;
-                SetMovementState(UnitMovementState.Moving);
-                SetAgentDestinationDirect(worldPos);
-                MovementStarted?.Invoke(this);
-                _playerOrderSetDestinationTime = Time.realtimeSinceStartup;
-                _playerOrderTimingPending = true;
-                if (debugLogs)
-                    Debug.Log($"[UnitMover] player order timing received={_playerOrderReceivedTime:F4} setDestination={_playerOrderSetDestinationTime:F4} unit={name}", this);
-                LogPlayerTransitionIfNeeded();
-                return true;
-            }
 
             GateController ignoredGate = ShouldIgnoreGate(_ignoreGateTemporarily) ? _ignoreGateTemporarily : null;
             if (_planner != null && _planner.TryCreateGateTraversal(transform.position, worldPos, ignoredGate, out GateTraversalPlan gatePlan) && gatePlan.isValid)
@@ -373,6 +362,35 @@ namespace Project.Gameplay.Units
             SetMovementState(UnitMovementState.Idle);
             _locomotion?.Stop();
             MovementStopped?.Invoke(this);
+        }
+
+        void LateUpdate()
+        {
+            ApplyRiverFordSpeedModifier();
+        }
+
+        /// <summary>Opción (3) sin rebake de áreas NavMesh: reduce velocidad en celdas de vado.</summary>
+        void ApplyRiverFordSpeedModifier()
+        {
+            if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh)
+                return;
+            var grid = MapGrid.Instance;
+            if (grid == null || !grid.IsReady)
+                return;
+
+            Vector2Int cell = grid.WorldToCell(transform.position);
+            if (!grid.IsInBounds(cell))
+                return;
+
+            float baseSpeed = _statsRuntime != null ? _statsRuntime.GetEffectiveMoveSpeed() : _agent.speed;
+            if (!grid.IsRiverFordCell(cell))
+            {
+                if (Mathf.Abs(_agent.speed - baseSpeed) > 0.02f)
+                    _agent.speed = baseSpeed;
+                return;
+            }
+
+            _agent.speed = Mathf.Max(0.25f, baseSpeed * _riverFordMoveSpeedFactor);
         }
 
         /// <summary>True si está siguiendo una ruta A*.</summary>
@@ -764,6 +782,7 @@ namespace Project.Gameplay.Units
 
             Vector3 pathFrom = _agent.nextPosition;
             TryClampNavDestinationToAvoidGridWater(pathFrom, ref navDest);
+            RejectDestinationOnWaterCell(ref navDest, snapR, worldPos);
 
             // Si el waypoint A* se proyecta al mismo punto actual del agente, la unidad queda en estado "Moving"
             // pero el NavMeshAgent nunca arranca (hasPath=false, remainingDistance=0). Saltar ese waypoint evita
@@ -805,6 +824,7 @@ namespace Project.Gameplay.Units
 
             Vector3 pathFrom = _agent.nextPosition;
             TryClampNavDestinationToAvoidGridWater(pathFrom, ref navDest);
+            RejectDestinationOnWaterCell(ref navDest, snapR, worldPos);
 
             _locomotion.SetDestination(navDest);
         }
@@ -842,7 +862,7 @@ namespace Project.Gameplay.Units
             }
         }
 
-        /// <summary>El NavMesh suele ser continuo bajo el agua: recorta el destino al último vértice del path que no cruce celdas de agua según MapGrid.</summary>
+        /// <summary>El NavMesh suele ser continuo bajo el agua: recorta el destino al último vértice del path que no cruce agua lógica según MapGrid (solo vado ford cuenta como cruce permitido para pie).</summary>
         void TryClampNavDestinationToAvoidGridWater(Vector3 fromWorld, ref Vector3 navDestWorld)
         {
             Vector3 desired = navDestWorld;

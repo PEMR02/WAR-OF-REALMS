@@ -85,7 +85,10 @@ namespace Project.UI
             for (int i = 0; i < _unitButtons.Length; i++)
             {
                 if (_unitButtons[i] != null)
+                {
                     _unitLabels[i] = _unitButtons[i].GetComponentInChildren<TextMeshProUGUI>();
+                    ConfigureUnitLabelLayout(_unitLabels[i]);
+                }
             }
 
             // Hook click listeners
@@ -187,6 +190,29 @@ namespace Project.UI
                 RefreshProgress();
             else if (hasBuildSite && _currentBuildSite != null)
                 RefreshBuildSitePanel();
+        }
+
+        void ConfigureUnitLabelLayout(TextMeshProUGUI label)
+        {
+            if (label == null) return;
+
+            // Normaliza labels heredados con offsets inválidos para evitar que se monten entre celdas.
+            var rt = label.rectTransform;
+            if (rt != null)
+            {
+                rt.anchorMin = Vector2.zero;
+                rt.anchorMax = Vector2.one;
+                rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.anchoredPosition = Vector2.zero;
+                rt.sizeDelta = Vector2.zero;
+                rt.offsetMin = new Vector2(4f, 2f);
+                rt.offsetMax = new Vector2(-4f, -2f);
+            }
+
+            label.enableWordWrapping = true;
+            label.overflowMode = TextOverflowModes.Truncate;
+            label.alignment = TextAlignmentOptions.TopLeft;
+            label.fontSize = Mathf.Min(label.fontSize, 11f);
         }
 
         ProductionBuilding GetSelectedProductionBuilding()

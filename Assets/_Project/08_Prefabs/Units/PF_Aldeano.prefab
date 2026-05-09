@@ -10805,6 +10805,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Gameplay.Units.UnitAnimatorDriver
   speedParameter: Speed
   runThreshold: 2
+  pendingPathVisualSpeed: 0.12
 --- !u!136 &-1696616604028483559
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -10869,7 +10870,10 @@ MonoBehaviour:
   interactRange: 1.6
   navSampleRadius: 2.5
   retryDepositEvery: 0.8
+  stuckRecoverSeconds: 2.4
+  stuckMinMoveSpeed: 0.06
   debugLogs: 0
+  autoRetargetMaxDistance: 80
 --- !u!114 &-3644453095254969826
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -10885,6 +10889,7 @@ MonoBehaviour:
   renderers: []
   highlightIntensity: 0.25
   selectionTint: {r: 0.15, g: 0.35, b: 0.5, a: 0}
+  enemySelectionTint: {r: 0.38, g: 0.06, b: 0.05, a: 0}
 --- !u!114 &-5320073158538347839
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -10907,6 +10912,8 @@ MonoBehaviour:
   stuckMinMoveDistance: 0.22
   repathCooldownSeconds: 1.35
   debugLogs: 0
+  drawMovementGizmos: 1
+  _riverFordMoveSpeedFactor: 0.48
 --- !u!114 &7780282167726397865
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -10922,6 +10929,9 @@ MonoBehaviour:
   buildPower: 1
   buildRangeCells: 1
   buildRangeWorldFallback: 1
+  constructionOrderDebug: 0
+  debugWallBuildRuntime: 0
+  wallBuildDebugLogInterval: 0.35
 --- !u!114 &1829679831253128845
 MonoBehaviour:
   m_ObjectHideFlags: 0
