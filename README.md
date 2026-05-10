@@ -27,6 +27,14 @@ El repositorio incluye **MCP for Unity** (`com.coplaydev.unity-mcp` en el manifi
 
 Con ese servidor activo, las herramientas MCP permiten inspeccionar jerarquía, escenas y estado del Editor sin depender del antiguo stack IvanMurzak / `unity-mcp-cli` sobre `/api/tools/`.
 
+## Gameplay Map Notes
+
+- **Autoridad lógica:** `MapGrid` y `CellData` definen transitabilidad y costes base; el runtime sincroniza desde el grid generado.
+- **NavMesh:** solo suaviza y proyecta el movimiento sobre el terreno; no sustituye las reglas de paso del grid.
+- **Ríos:** las celdas de río **sin** `riverFord` no son transitables para unidades terrestres (p. ej. A* vía `IsPassableForPathfinding`).
+- **Vados:** se generan con cobertura **mandatory** según centerline, **conectividad de spawn** opcional y **RoadFords** con tope; la decoración es independiente.
+- **Validación / diagnóstico (según flags y logs):** `RiverCellInvalid`, flujos `SpawnConnectivity`, muestreo `NavMeshLeak` si se activa la validación en runtime.
+
 ## Licencia
 
 Sin licencia pública definida en este repositorio; uso interno o según acuerdo del propietario.

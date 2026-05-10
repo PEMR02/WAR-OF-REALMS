@@ -2140,9 +2140,12 @@ namespace Project.Gameplay.Map.Generator
             if (config.riverCrossingDebugVisuals)
                 BuildCrossingDebugCubes(parent, marked, failedCenters, grid, waterY, cellSize);
 
-            if (marked.Count > 0)
-                Debug.Log($"[RiverFord] source=crossing-assets created={createdCorridors} cells={marked.Count} radius={halfWidth}");
-            Debug.Log($"[RiverFordCorridor] created={createdCorridors} cells={marked.Count} failed={failedCenters.Count} width={halfWidth} bankSearch={bankSearch}");
+            if (config != null && config.riverCrossingCorridorDebugLogs)
+            {
+                if (marked.Count > 0)
+                    Debug.Log($"[RiverFord] source=crossing-assets created={createdCorridors} cells={marked.Count} radius={halfWidth}");
+                Debug.Log($"[RiverFordCorridor] created={createdCorridors} cells={marked.Count} failed={failedCenters.Count} width={halfWidth} bankSearch={bankSearch}");
+            }
         }
 
         private static void BuildCrossingDebugCubes(
