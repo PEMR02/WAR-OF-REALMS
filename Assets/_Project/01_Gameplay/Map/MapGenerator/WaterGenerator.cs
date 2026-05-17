@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -10,6 +11,11 @@ namespace Project.Gameplay.Map.Generator
         public static float[,] DebugLastRiverFusionMask01 { get; private set; }
         public static bool[,] DebugLastRiverFusionCoreMask { get; private set; }
         public static bool[,] DebugLastRiverFusionShoreMask { get; private set; }
+        /// <summary>Campo 0..1 tras blur de fusión (mismo que etapa intermedia de <see cref="DebugLastRiverFusionMask01"/>). Solo para gizmo <c>debugDrawWaterFusionMask</c>.</summary>
+        public static float[,] DebugLastRiverFusionBlurField { get; private set; }
+
+        /// <summary>Celdas (packed) convertidas a tierra por <see cref="WaterTopologyCleanup"/>; solo si <c>MapGenConfig.debugDrawWaterTopologyCleanupGizmo</c>.</summary>
+        public static HashSet<long> DebugLastWaterCleanupRemovedPacked { get; private set; }
 
         // 🟢 Direcciones con diagonales (8) para lagos orgánicos
         private static readonly Vector2Int[] AllDirections = { 
@@ -17,16 +23,283 @@ namespace Project.Gameplay.Map.Generator
             new Vector2Int(1, 1), new Vector2Int(1, -1), new Vector2Int(-1, 1), new Vector2Int(-1, -1)
         };
 
+        private static readonly HashSet<long> s_riverCorridorPackedScratch = new HashSet<long>();
+        private static readonly HashSet<long> s_fordPackedScratch = new HashSet<long>();
+        private static readonly HashSet<Vector2Int> s_axisCentersScratch = new HashSet<Vector2Int>();
+
+        /// <summary>Solo expansión lateral del raster River (grid); ~30% más estrecho que el config nominal. No afecta lagos.</summary>
+        const float RiverRasterLateralExpandScale = 0.70f;
+
+        /// <summary>
+        /// Radio efectivo RTS para pintar/expander el raster del río (no corredor ocupado ni lobby compilado global).
+        /// Principal = canal fino; tributario = 0 (solo eje si el amortiguamiento no ensancha).
+        /// </summary>
+        static int VisualRiverRasterRadiusCells(bool isTributary) => isTributary ? 0 : 1;
+
+        static int ScaledRiverRasterBaseRadius(MapGenConfig config)
+        {
+            if (config == null) return 0;
+            int b = Mathf.Clamp(config.riverWidthRadiusCells, 0, 6);
+            return Mathf.Clamp(Mathf.RoundToInt(b * RiverRasterLateralExpandScale), 0, 6);
+        }
+
+        static int ScaledRiverRasterWidthAmplitude(MapGenConfig config)
+        {
+            if (config == null) return 0;
+            int a = Mathf.Clamp(config.riverWidthNoiseAmplitudeCells, 0, 3);
+            return Mathf.Clamp(Mathf.RoundToInt(a * RiverRasterLateralExpandScale), 0, 3);
+        }
+
+        private static int AdaptiveRiverMaxAttemptsForMap(int minDim)
+        {
+            if (minDim <= 64) return 8;
+            if (minDim <= 128) return 11;
+            if (minDim <= 256) return 12;
+            return 18;
+        }
+
+        private static void RiverOccupiedAddPackedCell(
+            HashSet<long> set,
+            ref bool aabbValid,
+            ref int minX,
+            ref int maxX,
+            ref int minZ,
+            ref int maxZ,
+            long k)
+        {
+            if (!set.Add(k))
+                return;
+            int x = (int)(k >> 32);
+            int z = (int)(uint)k;
+            if (!aabbValid)
+            {
+                aabbValid = true;
+                minX = maxX = x;
+                minZ = maxZ = z;
+            }
+            else
+            {
+                minX = Mathf.Min(minX, x);
+                maxX = Mathf.Max(maxX, x);
+                minZ = Mathf.Min(minZ, z);
+                maxZ = Mathf.Max(maxZ, z);
+            }
+        }
+
+        private enum WaterPerfCaller
+        {
+            None,
+            FusionRiverRemovalProbe,
+            TopologyTryRemove,
+        }
+
+        /// <summary>Solo diagnóstico: tiempos y contadores cuando <see cref="MapGenConfig.debugWaterGeneratePerfDiagnostics"/> está activo.</summary>
+        private static class WaterGenPerfDiag
+        {
+            public static bool Active;
+
+            public static double MsHydrologyRivers;
+            public static double MsLakesAbsorbMerge;
+            public static double MsFusionPrepBlur;
+            public static double MsFusionClassifyCoreShore;
+            public static double MsFusionConnectivityApply;
+            public static double MsThinZoneFords;
+            public static double MsFillLandIslands;
+            public static double MsLakeDeepCore;
+            public static double MsTopologyCleanupTotal;
+            public static double MsTopoCenterlinePacked;
+            public static double MsTopoIslandPass;
+            public static double MsTopoSpikePass;
+            public static double MsTopoDiagonalPass;
+
+            public static long RiverBuildAttempts;
+            public static double MsRiverPathBuildSum;
+            public static double MsRiverRasterApplySum;
+
+            public static long BfsReachabilityCalls;
+            public static long BfsReachabilityNodesVisited;
+
+            public static long MaskCriticalCallsFusion;
+            public static long MaskCriticalReturnsTrueFusion;
+            public static long MaskCriticalCallsTopology;
+            public static long MaskCriticalReturnsTrueTopology;
+
+            public static long BridgeDisconnectedChecks;
+
+            public static long AquaIslandComponentsDiscovered;
+            public static long AquaIslandComponentCellsSum;
+            public static long AquaIslandComponentMaxSize;
+            public static long AquaIslandFloodDequeues;
+
+            public static long TopologyTryRemoveCalls;
+            public static long RebuildAquaBaseCalls;
+
+            public static double TarjanBuildMs;
+            public static long TarjanFusionLookups;
+
+            public static long RiverHydrologyEarlyRejects;
+            public static long RiverHydrologyStrictAttempts;
+            public static long RiverHydrologyCrossingAttempts;
+
+            public static double MsGenerateWaterTotal;
+            public static long HydroRiverAttemptsTotal;
+            public static long HydroEarlyRejectsTotal;
+            public static long HydroCorridorRejectsTotal;
+            public static long HydroLaplacianAllocAvoidedTotal;
+            public static int HydroRiversAccepted;
+            public static double HydroPathBuildMsSum;
+
+            public static void Begin(MapGenConfig config)
+            {
+                Active = config != null && config.debugWaterGeneratePerfDiagnostics;
+                if (!Active)
+                    return;
+                MsHydrologyRivers = 0;
+                MsLakesAbsorbMerge = 0;
+                MsFusionPrepBlur = 0;
+                MsFusionClassifyCoreShore = 0;
+                MsFusionConnectivityApply = 0;
+                MsThinZoneFords = 0;
+                MsFillLandIslands = 0;
+                MsLakeDeepCore = 0;
+                MsTopologyCleanupTotal = 0;
+                MsTopoCenterlinePacked = 0;
+                MsTopoIslandPass = 0;
+                MsTopoSpikePass = 0;
+                MsTopoDiagonalPass = 0;
+                RiverBuildAttempts = 0;
+                MsRiverPathBuildSum = 0;
+                MsRiverRasterApplySum = 0;
+                BfsReachabilityCalls = 0;
+                BfsReachabilityNodesVisited = 0;
+                MaskCriticalCallsFusion = 0;
+                MaskCriticalReturnsTrueFusion = 0;
+                MaskCriticalCallsTopology = 0;
+                MaskCriticalReturnsTrueTopology = 0;
+                BridgeDisconnectedChecks = 0;
+                AquaIslandComponentsDiscovered = 0;
+                AquaIslandComponentCellsSum = 0;
+                AquaIslandComponentMaxSize = 0;
+                AquaIslandFloodDequeues = 0;
+                TopologyTryRemoveCalls = 0;
+                RebuildAquaBaseCalls = 0;
+                TarjanBuildMs = 0;
+                TarjanFusionLookups = 0;
+                RiverHydrologyEarlyRejects = 0;
+                RiverHydrologyStrictAttempts = 0;
+                RiverHydrologyCrossingAttempts = 0;
+                MsGenerateWaterTotal = 0;
+                HydroRiverAttemptsTotal = 0;
+                HydroEarlyRejectsTotal = 0;
+                HydroCorridorRejectsTotal = 0;
+                HydroLaplacianAllocAvoidedTotal = 0;
+                HydroRiversAccepted = 0;
+                HydroPathBuildMsSum = 0;
+            }
+
+            public static void LogSummary(int w, int h, int rngSeed, MapGenConfig cfg)
+            {
+                if (Active)
+                {
+                double fusionSum = MsFusionPrepBlur + MsFusionClassifyCoreShore + MsFusionConnectivityApply;
+                double topoInner = MsTopoCenterlinePacked + MsTopoIslandPass + MsTopoSpikePass + MsTopoDiagonalPass;
+                double avgIsland =
+                    AquaIslandComponentsDiscovered > 0
+                        ? AquaIslandComponentCellsSum / (double)AquaIslandComponentsDiscovered
+                        : 0.0;
+
+                Debug.Log(
+                    "[WaterGenPerf] grid=" + w + "x" + h + " rngSeed=" + rngSeed +
+                    "\n  ms hydrologyRivers=" + MsHydrologyRivers.ToString("F2") +
+                    " lakesAbsorbMerge=" + MsLakesAbsorbMerge.ToString("F2") +
+                    "\n  ms fusion prepBlur=" + MsFusionPrepBlur.ToString("F2") +
+                    " classifyCoreShore=" + MsFusionClassifyCoreShore.ToString("F2") +
+                    " connectivityApply=" + MsFusionConnectivityApply.ToString("F2") +
+                    " fusionSum=" + fusionSum.ToString("F2") +
+                    "\n  ms thinZoneFords=" + MsThinZoneFords.ToString("F2") +
+                    " fillLandIslands=" + MsFillLandIslands.ToString("F2") +
+                    " lakeDeepCore=" + MsLakeDeepCore.ToString("F2") +
+                    "\n  ms topologyCleanupTotal=" + MsTopologyCleanupTotal.ToString("F2") +
+                    " (centerlinePacked=" + MsTopoCenterlinePacked.ToString("F2") +
+                    " islands=" + MsTopoIslandPass.ToString("F2") +
+                    " spikes=" + MsTopoSpikePass.ToString("F2") +
+                    " diagonal=" + MsTopoDiagonalPass.ToString("F2") +
+                    " innerSum=" + topoInner.ToString("F2") + ")" +
+                    "\n  river pathBuild attempts=" + RiverBuildAttempts +
+                    " sumBuildMs=" + MsRiverPathBuildSum.ToString("F2") +
+                    " sumApplyMs=" + MsRiverRasterApplySum.ToString("F2") +
+                    "\n  BFS reachability calls=" + BfsReachabilityCalls +
+                    " nodesVisited=" + BfsReachabilityNodesVisited +
+                    "\n  IsMaskConnectivityCritical fusion calls=" + MaskCriticalCallsFusion +
+                    " returnsTrue=" + MaskCriticalReturnsTrueFusion +
+                    " topology calls=" + MaskCriticalCallsTopology +
+                    " returnsTrue=" + MaskCriticalReturnsTrueTopology +
+                    "\n  MaskBridgePairDisconnected checks=" + BridgeDisconnectedChecks +
+                    "\n  aqua island labeling components=" + AquaIslandComponentsDiscovered +
+                    " avgCellsPerComp=" + avgIsland.ToString("F2") +
+                    " maxComp=" + AquaIslandComponentMaxSize +
+                    " floodDequeues=" + AquaIslandFloodDequeues +
+                    "\n  topology TryRemoveCalls=" + TopologyTryRemoveCalls +
+                    " RebuildAquaBaseCalls=" + RebuildAquaBaseCalls +
+                    "\n  Tarjan fusion buildMs=" + TarjanBuildMs.ToString("F2") +
+                    " fusionLookups=" + TarjanFusionLookups);
+                }
+
+                if ((cfg != null && cfg.debugRiverHydrologyPerf) || Active)
+                {
+                    double avgRiverBuild = HydroRiverAttemptsTotal > 0 ? HydroPathBuildMsSum / HydroRiverAttemptsTotal : 0.0;
+                    Debug.Log(
+                        "[WaterPerfSummary] totalGenerateWaterMs=" + MsGenerateWaterTotal.ToString("F2") +
+                        " hydrologyMs=" + MsHydrologyRivers.ToString("F2") +
+                        " avgRiverBuildMs=" + avgRiverBuild.ToString("F3") +
+                        " attempts=" + HydroRiverAttemptsTotal +
+                        " acceptedRivers=" + HydroRiversAccepted +
+                        " earlyRejects=" + HydroEarlyRejectsTotal +
+                        " corridorRejects=" + HydroCorridorRejectsTotal +
+                        " allocAvoidedEstimate=" + HydroLaplacianAllocAvoidedTotal);
+                }
+            }
+        }
+
         /// <summary>Parámetros: riverCount, lakeCount, maxLakeCells. Marca CellType Water/River. Determinista por rng.</summary>
         public static void GenerateWater(GridSystem grid, MapGenConfig config, IRng rng)
         {
             if (grid == null || config == null || rng == null) return;
+
+            if (config.debugHydrologyNetwork || config.debugRiverHydrologyPerf || config.debugLogs)
+            {
+                UnityEngine.Debug.Log(
+                    "[HydrologyRuntimeConfig] " +
+                    $"debugHydrologyNetwork={config.debugHydrologyNetwork} " +
+                    $"debugRiverHydrologyPerf={config.debugRiverHydrologyPerf} " +
+                    $"debugWaterGeneratePerfDiagnostics={config.debugWaterGeneratePerfDiagnostics} " +
+                    $"riverCount={config.riverCount} lakeCount={config.lakeCount} maxLakeCells={config.maxLakeCells} " +
+                    $"seed={config.seed} mapGenAsset='{config.name}'");
+            }
+
+            if (config.debugHydrologyNetwork || config.debugRiverHydrologyPerf || config.debugLogs)
+            {
+                UnityEngine.Debug.Log(
+                    "[RiverWidthTrace] stage=water_start riverWidthRadiusCells=" + config.riverWidthRadiusCells);
+            }
+
+            WaterGenPerfDiag.Begin(config);
+
+            SimpleRiverPathGenerator.ResetHeightSummaryLog();
+
+            bool logPhaseTiming = config.debugWaterTopologyCleanup || config.debugLogs;
+            var swPhase = logPhaseTiming ? System.Diagnostics.Stopwatch.StartNew() : null;
+            bool trackRiverHydroSummary = config.debugRiverHydrologyPerf || WaterGenPerfDiag.Active;
+            var swPerfWhole = trackRiverHydroSummary ? System.Diagnostics.Stopwatch.StartNew() : null;
 
             int w = grid.Width;
             int h = grid.Height;
             int waterCells = 0;
             grid.RiverCenterlinesCellSpace = new List<List<Vector2>>();
             grid.RiverCenterlinesWorld = new List<List<Vector3>>();
+            grid.HydrologyMainRiverPattern = null;
+            grid.HydrologyMainRiverTerminusCell = null;
+            grid.HydrologyNetwork = new HydrologyNetworkGraph();
             if (config.debugDrawRiverPathInScene)
             {
                 grid.RiverPathDebugMacro = new List<List<Vector2>>();
@@ -38,18 +311,34 @@ namespace Project.Gameplay.Map.Generator
                 grid.RiverPathDebugSmoothed = null;
             }
 
-            // Ríos: meandro procedural; opcional evitar solapes; vados = River transitable + riverFord.
+            RiverRouteGenerator.PreparePlannedLakeSinkCandidates(grid, config, rng);
+
+            // Ríos: descenso simple (SimpleRiverPathGenerator); opcional evitar solapes; vados = River transitable + riverFord.
             int riverCount = Mathf.Min(config.riverCount, 8);
             var riverOccupiedCells = new HashSet<long>();
-            int baseAttempts = Mathf.Clamp(config.riverPlacementMaxAttemptsPerRiver, 4, 96);
-            // Más ríos pedidos ⇒ más intentos por río (el corredor se llena y hay más abortos por cruces).
-            int maxAttemptsPerPass = Mathf.Clamp(baseAttempts + Mathf.Max(0, riverCount - 2) * 12, 4, 96);
+            bool riverOccAabbValid = false;
+            int riverOccMinX = 0, riverOccMaxX = 0, riverOccMinZ = 0, riverOccMaxZ = 0;
+            int minDim = Mathf.Min(w, h);
+            int mapAttemptCap = AdaptiveRiverMaxAttemptsForMap(minDim);
+            int baseAttempts = Mathf.Clamp(config.riverPlacementMaxAttemptsPerRiver, 4, mapAttemptCap);
+            int extraPerRiver = Mathf.Min(8, Mathf.Max(2, mapAttemptCap / 4));
+            int maxAttemptsPerPass = Mathf.Clamp(baseAttempts + Mathf.Max(0, riverCount - 2) * extraPerRiver, 4, mapAttemptCap);
             int earlyAbortBase = Mathf.Clamp(config.riverCorridorRejectEarlyAbort, 6, 40);
             int earlyAbortThreshold = Mathf.Clamp(earlyAbortBase + Mathf.Max(0, riverCount - 3) * 4, 6, 40);
+            int globalRiverBuildBudget = config.maxTotalRiverBuildAttempts > 0
+                ? config.maxTotalRiverBuildAttempts
+                : Mathf.Clamp(40 + riverCount * 5, 48, 72);
+            if (config.riverDebugUnlimitedBuildAttempts)
+                globalRiverBuildBudget = int.MaxValue;
+            bool budgetForcedRelax = false;
 
             int hydrologyPlacedStrict = 0;
             int hydrologyPlacedFallback = 0;
             int hydrologyRiversStartedFallbackPass = 0;
+
+            var swHydrology = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+
+            SimpleRiverPathGenerator.TryLogHeightmapSummaryOnce(grid, config);
 
             for (int i = 0; i < riverCount; i++)
             {
@@ -58,149 +347,346 @@ namespace Project.Gameplay.Map.Generator
                 int buildFail = 0, corridorReject = 0;
                 long buildTicks = 0, corridorTicks = 0, applyTicks = 0;
                 bool usedRelaxedCrossing = false;
+                double rbAccBuildMs = 0, rbAccCorMs = 0;
+                string rbRejectReason = "";
+                int consecutiveEarlyRejectsRiver = 0;
 
                 // Pase 1: respetar riverAvoidCrossingOtherRivers. Pase 2 (solo si aplica): permitir cruces para cumplir riverCount del lobby.
                 for (int pass = 0; pass < 2 && !placed; pass++)
                 {
+                    consecutiveEarlyRejectsRiver = 0;
                     if (pass == 1 && (!config.riverAvoidCrossingOtherRivers || !config.allowFallbackCrossing))
                         break;
                     if (pass == 1)
                         hydrologyRiversStartedFallbackPass++;
 
                     bool avoidCross = pass == 0 ? config.riverAvoidCrossingOtherRivers : false;
+                    if (pass == 0 && budgetForcedRelax && config.allowFallbackCrossing)
+                    {
+                        if (config.debugRiverHydrologyPerf || config.debugLogs)
+                            UnityEngine.Debug.Log(
+                                $"[RiverAttemptBudget] used={WaterGenPerfDiag.HydroRiverAttemptsTotal} cap={globalRiverBuildBudget} riverId={i + 1} action=relax skip_strict_pass");
+                        continue;
+                    }
 
                     int consecutiveCorridorReject = 0;
                     int attemptsThisPass = 0;
+                    int attemptLimit = maxAttemptsPerPass;
 
                     for (int attempt = 0; attempt < maxAttemptsPerPass && !placed; attempt++)
                     {
+                        if (attempt >= attemptLimit)
+                            break;
+
+                        if (!config.riverDebugUnlimitedBuildAttempts &&
+                            WaterGenPerfDiag.HydroRiverAttemptsTotal >= globalRiverBuildBudget &&
+                            avoidCross &&
+                            config.allowFallbackCrossing)
+                        {
+                            if (!budgetForcedRelax)
+                            {
+                                budgetForcedRelax = true;
+                                UnityEngine.Debug.LogWarning(
+                                    $"[RiverAttemptBudget] used={WaterGenPerfDiag.HydroRiverAttemptsTotal} cap={globalRiverBuildBudget} riverId={i + 1} action=relax global_cap");
+                            }
+                            break;
+                        }
+
                         attemptsUsed++;
                         attemptsThisPass++;
-                        Vector2Int start = PickRiverStart(w, h, rng);
-                        Vector2Int exit = PickRiverExitOpposite(start, w, h, rng, attempt + pass * 997 + i * 13);
+                        if (WaterGenPerfDiag.Active)
+                        {
+                            if (avoidCross)
+                                WaterGenPerfDiag.RiverHydrologyStrictAttempts++;
+                            else
+                                WaterGenPerfDiag.RiverHydrologyCrossingAttempts++;
+                        }
+
+                        bool logHydrologyNet = config.debugHydrologyNetwork || config.debugRiverHydrologyPerf || config.debugLogs;
+
+                        bool appliedConfluenceTrim = false;
+                        int trimJoinIdx = -1;
+                        Vector2Int trimJoinCell = default;
+
+                        bool mergeTributary =
+                            i > 0 &&
+                            grid.RiverCenterlinesCellSpace != null &&
+                            grid.RiverCenterlinesCellSpace.Count > 0;
+
+                        int riverWidthCompiledBackup = config.riverWidthRadiusCells;
+                        int riverNoiseCompiledBackup = config.riverWidthNoiseAmplitudeCells;
+                        int functionalRiverRadiusCells =
+                            Mathf.Clamp(riverWidthCompiledBackup, 0, 6);
 
                         var swBuild = System.Diagnostics.Stopwatch.StartNew();
-                        bool okBuild = RiverPathBuilder.TryBuildSmoothCenterlineAndRaster(w, h, start, exit, config, rng,
-                            out List<Vector2> centerline, out List<Vector2Int> path, out List<Vector2Int> fordCells,
-                            out List<Vector2> dbgMacro, out List<Vector2> dbgSmooth);
-                        swBuild.Stop();
-                        buildTicks += swBuild.ElapsedTicks;
-                        if (!okBuild)
+
+                        bool okBuild = false;
+                        List<Vector2> centerline = null;
+                        List<Vector2Int> path = null;
+                        List<Vector2Int> fordCells = null;
+                        List<Vector2> dbgMacro = null;
+                        List<Vector2> dbgSmooth = null;
+                        string simpleFail = null;
+
+                        int visualRiverRadiusCells = VisualRiverRasterRadiusCells(mergeTributary);
+
+                        try
                         {
-                            buildFail++;
-                            consecutiveCorridorReject = 0;
-                            continue;
-                        }
+                            // Visual/logs + path temporal: mismo radio que usará Expand (principal=1, tributario=0).
+                            config.riverWidthRadiusCells = visualRiverRadiusCells;
 
-                        if (!HydrologyValidation.ValidateRiverGeometry(centerline, path, config, w, h, out string validationReason))
-                        {
-                            buildFail++;
-                            consecutiveCorridorReject = 0;
-                            if (config.debugLogs)
-                                UnityEngine.Debug.Log($"Fase3 Agua: río {i + 1}/{riverCount} descartado por validación geométrica: {validationReason}");
-                            continue;
-                        }
-
-                        var swCor = System.Diagnostics.Stopwatch.StartNew();
-                        HashSet<long> corridor = CollectRiverCorridorPacked(path, config, w, h);
-                        bool intersectsOccupied = CorridorIntersectsOccupied(corridor, riverOccupiedCells);
-                        bool cross = avoidCross && intersectsOccupied;
-                        swCor.Stop();
-                        corridorTicks += swCor.ElapsedTicks;
-
-                        if (cross)
-                        {
-                            corridorReject++;
-                            consecutiveCorridorReject++;
-                            if (consecutiveCorridorReject >= earlyAbortThreshold)
-                                break;
-                            continue;
-                        }
-
-                        consecutiveCorridorReject = 0;
-
-                        // Pase fallback (cruces permitidos): en vez de dibujar una "X", el río nuevo
-                        // termina en la primera confluencia con uno existente (comportamiento natural).
-                        if (!avoidCross && intersectsOccupied)
-                        {
-                            if (!TryTrimRiverPathToFirstConfluence(grid, path, centerline, riverOccupiedCells, w, h))
+                            if (logHydrologyNet)
                             {
-                                corridorReject++;
+                                UnityEngine.Debug.Log(
+                                    $"[RiverWidthTrace] stage=before_simple_river slot={i + 1} attempt={attempt} " +
+                                    $"merge={(mergeTributary ? 1 : 0)} riverWidthRadiusCells={visualRiverRadiusCells} " +
+                                    $"resolvedFromCompiled={riverWidthCompiledBackup} " +
+                                    $"functionalRiverRadiusCells={functionalRiverRadiusCells}");
+                            }
+
+                            okBuild = RiverRouteGenerator.TryGenerateRouteRiver(
+                                grid,
+                                config,
+                                rng,
+                                i + 1,
+                                attempt,
+                                mergeTributary,
+                                avoidCross,
+                                avoidCross ? riverOccupiedCells : null,
+                                out path,
+                                out centerline,
+                                out fordCells,
+                                out dbgMacro,
+                                out dbgSmooth,
+                                out simpleFail);
+
+                            swBuild.Stop();
+                            buildTicks += swBuild.ElapsedTicks;
+                            if (trackRiverHydroSummary)
+                            {
+                                WaterGenPerfDiag.HydroRiverAttemptsTotal++;
+                                WaterGenPerfDiag.HydroPathBuildMsSum += swBuild.Elapsed.TotalMilliseconds;
+                            }
+
+                            if (WaterGenPerfDiag.Active)
+                            {
+                                WaterGenPerfDiag.RiverBuildAttempts++;
+                                WaterGenPerfDiag.MsRiverPathBuildSum += swBuild.Elapsed.TotalMilliseconds;
+                            }
+
+                            if (config.debugRiverHydrologyPerf)
+                                rbAccBuildMs += swBuild.Elapsed.TotalMilliseconds;
+
+                            if (!okBuild)
+                            {
+                                buildFail++;
+                                consecutiveCorridorReject = 0;
+                                rbRejectReason = string.IsNullOrEmpty(simpleFail) ? "simple_river_fail" : simpleFail;
+                                consecutiveEarlyRejectsRiver++;
+                                if (avoidCross &&
+                                    consecutiveEarlyRejectsRiver >= config.riverEarlyRejectConsecutiveToBreakStrictPass &&
+                                    config.allowFallbackCrossing)
+                                {
+                                    if (config.debugRiverHydrologyPerf || config.debugLogs)
+                                        UnityEngine.Debug.Log(
+                                            $"[RiverAttemptBudget] used={WaterGenPerfDiag.HydroRiverAttemptsTotal} cap={globalRiverBuildBudget} riverId={i + 1} action=relax consecutive_simple_fail");
+                                    break;
+                                }
+
                                 continue;
                             }
-                            if (fordCells != null && fordCells.Count > 0)
-                                TrimFordCellsToPath(fordCells, path);
-                            corridor = CollectRiverCorridorPacked(path, config, w, h);
-                        }
 
-                        var swApply = System.Diagnostics.Stopwatch.StartNew();
-                        if (centerline != null && centerline.Count >= 2)
+                            consecutiveEarlyRejectsRiver = 0;
+
+                            config.riverWidthRadiusCells = functionalRiverRadiusCells;
+
+                            var swCor = System.Diagnostics.Stopwatch.StartNew();
+                            CollectRiverCorridorPackedInto(path, config, w, h, s_riverCorridorPackedScratch);
+                            bool intersectsOccupied =
+                                CorridorIntersectsOccupied(s_riverCorridorPackedScratch, riverOccupiedCells);
+                            bool cross = avoidCross && intersectsOccupied;
+                            swCor.Stop();
+                            corridorTicks += swCor.ElapsedTicks;
+                            if (config.debugRiverHydrologyPerf)
+                                rbAccCorMs += swCor.Elapsed.TotalMilliseconds;
+
+                            if (cross)
+                            {
+                                corridorReject++;
+                                WaterGenPerfDiag.HydroCorridorRejectsTotal++;
+                                consecutiveCorridorReject++;
+                                rbRejectReason = "corridor_strict";
+                                if (consecutiveCorridorReject >= 4)
+                                    attemptLimit = Mathf.Min(attemptLimit, attempt + 1 + Mathf.Max(4, maxAttemptsPerPass / 4));
+                                if (consecutiveCorridorReject >= 6)
+                                    attemptLimit = Mathf.Min(attemptLimit, attempt + 1 + Mathf.Max(2, maxAttemptsPerPass / 6));
+                                if (consecutiveCorridorReject >= earlyAbortThreshold)
+                                    break;
+                                continue;
+                            }
+
+                            consecutiveCorridorReject = 0;
+
+                            // Pase fallback (cruces permitidos): en vez de dibujar una "X", el río nuevo
+                            // termina en la primera confluencia con uno existente (comportamiento natural).
+                            if (!avoidCross && intersectsOccupied)
+                            {
+                                int minCellsAfterTrim = mergeTributary ? 12 : 18;
+                                if (!TryTrimRiverPathToFirstConfluence(
+                                        grid,
+                                        path,
+                                        centerline,
+                                        riverOccupiedCells,
+                                        w,
+                                        h,
+                                        minCellsAfterTrim,
+                                        out trimJoinIdx,
+                                        out trimJoinCell))
+                                {
+                                    corridorReject++;
+                                    WaterGenPerfDiag.HydroCorridorRejectsTotal++;
+                                    rbRejectReason = "corridor_trim";
+                                    continue;
+                                }
+
+                                appliedConfluenceTrim = true;
+                                if (fordCells != null && fordCells.Count > 0)
+                                    TrimFordCellsToPath(fordCells, path);
+                                config.riverWidthRadiusCells = functionalRiverRadiusCells;
+                                CollectRiverCorridorPackedInto(path, config, w, h, s_riverCorridorPackedScratch);
+                            }
+
+                            int riverIdBeforeAdd = grid.RiverCenterlinesCellSpace != null ? grid.RiverCenterlinesCellSpace.Count : 0;
+
+                            config.riverWidthRadiusCells = visualRiverRadiusCells;
+                            var swApply = System.Diagnostics.Stopwatch.StartNew();
+                            if (centerline != null && centerline.Count >= 2)
+                            {
+                                grid.RiverCenterlinesCellSpace.Add(centerline);
+                                float cs = grid.CellSizeWorld;
+                                Vector3 o = grid.Origin;
+                                var world = new List<Vector3>(centerline.Count);
+                                for (int pi = 0; pi < centerline.Count; pi++)
+                                {
+                                    var p = centerline[pi];
+                                    world.Add(new Vector3(o.x + p.x * cs, o.y, o.z + p.y * cs));
+                                }
+                                grid.RiverCenterlinesWorld.Add(world);
+                            }
+
+                            if (config.debugDrawRiverPathInScene && dbgMacro != null && dbgSmooth != null)
+                            {
+                                grid.RiverPathDebugMacro.Add(dbgMacro);
+                                grid.RiverPathDebugSmoothed.Add(dbgSmooth);
+                            }
+
+                            s_fordPackedScratch.Clear();
+                            if (fordCells != null)
+                            {
+                                for (int fi = 0; fi < fordCells.Count; fi++)
+                                    s_fordPackedScratch.Add(PackCellLong(fordCells[fi]));
+                            }
+
+                            for (int pi = 0; pi < path.Count; pi++)
+                            {
+                                var c = path[pi];
+                                if (!grid.InBoundsCell(c.x, c.y)) continue;
+                                ref var cell = ref grid.GetCell(c);
+                                if (cell.type != CellType.Land) continue;
+                                bool isFord = s_fordPackedScratch.Contains(PackCellLong(c));
+                                cell.type = CellType.River;
+                                cell.riverFord = isFord;
+                                cell.walkable = isFord;
+                                cell.buildable = false;
+                                cell.waterTraverse = isFord ? WaterTraverseMode.FordShallow : WaterTraverseMode.SwimNavigable;
+                                waterCells++;
+                            }
+                            if (visualRiverRadiusCells <= 0)
+                                config.riverWidthNoiseAmplitudeCells = 0;
+                            waterCells += ExpandRiverWidthAroundPath(grid, path, config, i);
+                            config.riverWidthNoiseAmplitudeCells = riverNoiseCompiledBackup;
+
+                            if (fordCells != null && fordCells.Count > 0 && config.riverFordCorridorRadiusCells > 0)
+                                ApplyRiverFordCorridor(grid, fordCells, config.riverFordCorridorRadiusCells);
+
+                            foreach (long k in s_riverCorridorPackedScratch)
+                                RiverOccupiedAddPackedCell(
+                                    riverOccupiedCells,
+                                    ref riverOccAabbValid,
+                                    ref riverOccMinX,
+                                    ref riverOccMaxX,
+                                    ref riverOccMinZ,
+                                    ref riverOccMaxZ,
+                                    k);
+                            swApply.Stop();
+                            applyTicks += swApply.ElapsedTicks;
+                            if (WaterGenPerfDiag.Active)
+                                WaterGenPerfDiag.MsRiverRasterApplySum += swApply.Elapsed.TotalMilliseconds;
+
+                            if (grid.HydrologyNetwork != null && path != null && path.Count > 0)
+                            {
+                                int? parentRiver = null;
+                                float joinDistSq = 0f;
+                                if (appliedConfluenceTrim)
+                                    parentRiver = TryResolveParentRiverAtJoin(grid, trimJoinCell, riverIdBeforeAdd, out joinDistSq);
+
+                                string hReason = appliedConfluenceTrim ? "trimmed_to_confluence" : "full_cross_map";
+                                var hydroRec = new HydrologyRiverRecord
+                                {
+                                    RiverId = riverIdBeforeAdd,
+                                    RiverClass = appliedConfluenceTrim ? RiverClass.Tributary : RiverClass.MainRiver,
+                                    ParentRiverId = parentRiver,
+                                    BasinId = 0,
+                                    EstimatedFlow01 = 1f,
+                                    WidthClass = 0,
+                                    JoinVertexIndex = appliedConfluenceTrim ? trimJoinIdx : -1,
+                                    StartCell = path[0],
+                                    EndCell = appliedConfluenceTrim ? trimJoinCell : path[path.Count - 1],
+                                    AcceptedLengthCells = path.Count,
+                                    HierarchyFromConfluenceTrim = appliedConfluenceTrim,
+                                    HierarchyReason = hReason,
+                                };
+                                grid.HydrologyNetwork.AddRiver(hydroRec);
+
+                                if (logHydrologyNet)
+                                {
+                                    string pst = parentRiver.HasValue ? parentRiver.Value.ToString() : "null";
+                                    UnityEngine.Debug.Log(
+                                        $"[RiverHierarchy] riverId={hydroRec.RiverId} class={hydroRec.RiverClass} parent={pst} " +
+                                        $"joinCell={(appliedConfluenceTrim ? trimJoinCell.ToString() : "_")} joinIdx={hydroRec.JoinVertexIndex} " +
+                                        $"reason={hReason} distSq={(appliedConfluenceTrim ? joinDistSq.ToString("F4") : "na")}");
+                                }
+                            }
+
+                            placed = true;
+                            usedRelaxedCrossing = pass == 1;
+                            rbRejectReason = "";
+                        }
+                        finally
                         {
-                            grid.RiverCenterlinesCellSpace.Add(centerline);
-                            float cs = grid.CellSizeWorld;
-                            Vector3 o = grid.Origin;
-                            var world = new List<Vector3>(centerline.Count);
-                            foreach (var p in centerline)
-                                world.Add(new Vector3(o.x + p.x * cs, o.y, o.z + p.y * cs));
-                            grid.RiverCenterlinesWorld.Add(world);
+                            config.riverWidthRadiusCells = riverWidthCompiledBackup;
+                            config.riverWidthNoiseAmplitudeCells = riverNoiseCompiledBackup;
                         }
-
-                        if (config.debugDrawRiverPathInScene && dbgMacro != null && dbgSmooth != null)
-                        {
-                            grid.RiverPathDebugMacro.Add(dbgMacro);
-                            grid.RiverPathDebugSmoothed.Add(dbgSmooth);
-                        }
-
-                        var fordPacked = new HashSet<long>();
-                        if (fordCells != null)
-                        {
-                            foreach (var fc in fordCells)
-                                fordPacked.Add(PackCellLong(fc));
-                        }
-
-                        foreach (var c in path)
-                        {
-                            if (!grid.InBoundsCell(c.x, c.y)) continue;
-                            ref var cell = ref grid.GetCell(c);
-                            if (cell.type != CellType.Land) continue;
-                            bool isFord = fordPacked.Contains(PackCellLong(c));
-                            cell.type = CellType.River;
-                            cell.riverFord = isFord;
-                            cell.walkable = isFord;
-                            cell.buildable = false;
-                            cell.waterTraverse = isFord ? WaterTraverseMode.FordShallow : WaterTraverseMode.SwimNavigable;
-                            waterCells++;
-                        }
-                        waterCells += ExpandRiverWidthAroundPath(grid, path, config, i);
-
-                        if (fordCells != null && fordCells.Count > 0 && config.riverFordCorridorRadiusCells > 0)
-                            ApplyRiverFordCorridor(grid, fordCells, config.riverFordCorridorRadiusCells);
-
-                        foreach (long k in corridor)
-                            riverOccupiedCells.Add(k);
-                        swApply.Stop();
-                        applyTicks += swApply.ElapsedTicks;
-                        placed = true;
-                        usedRelaxedCrossing = pass == 1;
                     }
 
                     if (!placed && attemptsThisPass < maxAttemptsPerPass && corridorReject > 0 && avoidCross && config.debugLogs)
-                        UnityEngine.Debug.Log($"Fase3 Agua: río {i + 1}/{riverCount} pase estricto: aborto anticipado tras {attemptsThisPass} intentos (rechazos consecutivos ≥{earlyAbortThreshold}).");
+                        UnityEngine.Debug.Log($"Fase4 Agua: río {i + 1}/{riverCount} pase estricto: aborto anticipado tras {attemptsThisPass} intentos (rechazos consecutivos ≥{earlyAbortThreshold}).");
                 }
 
                 if (placed)
                 {
+                    WaterGenPerfDiag.HydroRiversAccepted++;
                     if (usedRelaxedCrossing) hydrologyPlacedFallback++;
                     else hydrologyPlacedStrict++;
 
                     if (config.debugLogs && usedRelaxedCrossing)
-                        UnityEngine.Debug.Log($"Fase3 Agua: río {i + 1}/{riverCount} colocado permitiendo cruce con ríos ya existentes (fallback lobby).");
+                        UnityEngine.Debug.Log($"Fase4 Agua: río {i + 1}/{riverCount} colocado permitiendo cruce con ríos ya existentes (fallback lobby).");
                     if (config.debugLogs && config.riverLogSuccessfulPlacementMetrics)
                     {
                         double msBuild = buildTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                         double msCor = corridorTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                         double msApply = applyTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                        UnityEngine.Debug.Log($"Fase3 Agua: río {i + 1}/{riverCount} OK | intentos={attemptsUsed} buildFail={buildFail} corridorReject={corridorReject} | ms: build≈{msBuild:F1} corridor≈{msCor:F1} apply≈{msApply:F1}");
+                        UnityEngine.Debug.Log($"Fase4 Agua: río {i + 1}/{riverCount} OK | intentos={attemptsUsed} buildFail={buildFail} corridorReject={corridorReject} | ms: build≈{msBuild:F1} corridor≈{msCor:F1} apply≈{msApply:F1}");
                     }
                 }
                 else if (config.riverLogPlacementFailureSummary || config.debugLogs)
@@ -209,9 +695,21 @@ namespace Project.Gameplay.Map.Generator
                     double msCor = corridorTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                     double msApply = applyTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                     double msPerAttempt = attemptsUsed > 0 ? (buildTicks + corridorTicks + applyTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency / attemptsUsed : 0.0;
-                    UnityEngine.Debug.LogWarning($"Fase3 Agua: río {i + 1}/{riverCount} no colocado | intentos={attemptsUsed} (hasta {maxAttemptsPerPass} por pase) buildFail={buildFail} corridorReject={corridorReject} evitarCrucesCfg={config.riverAvoidCrossingOtherRivers} | ms tot≈{msBuild + msCor + msApply:F0} (build≈{msBuild:F0} corredor≈{msCor:F0} aplicar≈{msApply:F0}) | ms/intento≈{msPerAttempt:F2}");
+                    UnityEngine.Debug.LogWarning($"Fase4 Agua: río {i + 1}/{riverCount} no colocado | intentos={attemptsUsed} (hasta {maxAttemptsPerPass} por pase) buildFail={buildFail} corridorReject={corridorReject} evitarCrucesCfg={config.riverAvoidCrossingOtherRivers} | ms tot≈{msBuild + msCor + msApply:F0} (build≈{msBuild:F0} corredor≈{msCor:F0} aplicar≈{msApply:F0}) | ms/intento≈{msPerAttempt:F2}");
+                }
+
+                if (config.debugRiverHydrologyPerf)
+                {
+                    double msApplyDiag = applyTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    UnityEngine.Debug.Log(
+                        $"[RiverBuildPerf] riverId={i + 1} attempts={attemptsUsed} accepted={placed} " +
+                        $"buildMs={rbAccBuildMs:F2} corridorMs={rbAccCorMs:F2} applyMs={msApplyDiag:F2} " +
+                        $"rejectReason={(string.IsNullOrEmpty(rbRejectReason) ? (placed ? "none" : "unknown") : rbRejectReason)}");
                 }
             }
+
+            if (swHydrology != null)
+                WaterGenPerfDiag.MsHydrologyRivers = swHydrology.Elapsed.TotalMilliseconds;
 
             int hydrologyNotPlaced = riverCount - hydrologyPlacedStrict - hydrologyPlacedFallback;
             if (config.debugLogs || config.riverLogPlacementFailureSummary)
@@ -221,22 +719,135 @@ namespace Project.Gameplay.Map.Generator
                     $"colocados tras pase cruce={hydrologyPlacedFallback}, no colocados={hydrologyNotPlaced}, allowFallbackCrossing={config.allowFallbackCrossing}");
             }
 
-            // Lagos: flood fill (BFS) desde semilla en Land, hasta maxLakeCells por lago
-            int lakeCount = Mathf.Min(config.lakeCount, 12);
-            int maxLake = Mathf.Clamp(config.maxLakeCells, 50, 2500);
+            if (grid.HydrologyNetwork != null && grid.HydrologyNetwork.Rivers.Count > 0)
+            {
+                grid.HydrologyNetwork.FinalizeLengthClassification();
+                grid.HydrologyNetwork.LogHydrologyGraphSummary(config);
+            }
+
+            AuditRiverTopology(grid, config);
+
+            // Lagos: flood fill (BFS) desde semilla en Land; en mapas ≤256 tope duro lobby/alpha (no muta el asset).
+            var swLakePipe = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+            int lakeCountEff = Mathf.Min(config.lakeCount, 12);
+            int maxLakeEff = Mathf.Clamp(config.maxLakeCells, 50, 2500);
+            if (w <= 256 && h <= 256)
+            {
+                lakeCountEff = Mathf.Min(lakeCountEff, 2);
+                maxLakeEff = Mathf.Min(maxLakeEff, 240);
+            }
+
+            if (riverCount > 0)
+            {
+                lakeCountEff = Mathf.Min(lakeCountEff, 2);
+                maxLakeEff = Mathf.Min(maxLakeEff, 150);
+            }
+
             grid.LakeBodyCellsPacked = new HashSet<long>();
-            for (int i = 0; i < lakeCount; i++)
+            for (int i = 0; i < lakeCountEff; i++)
             {
                 int attempts = 20;
                 while (attempts-- > 0)
                 {
-                    int cx = rng.NextInt(w / 6, (5 * w) / 6);
-                    int cz = rng.NextInt(h / 6, (5 * h) / 6);
-                    ref var seedCell = ref grid.GetCell(cx, cz);
-                    if (seedCell.type != CellType.Land) continue;
+                    int cx;
+                    int cz;
+                    var planned = grid.PlannedLakeSinkCandidates;
+                    var term = grid.HydrologyMainRiverTerminusCell;
+                    RiverMainPattern? mpat = grid.HydrologyMainRiverPattern;
+                    bool highToLakeMouth =
+                        i == 0 &&
+                        term.HasValue &&
+                        mpat.HasValue &&
+                        (mpat.Value == RiverMainPattern.HighlandToLake || mpat.Value == RiverMainPattern.BorderToLake);
 
-                    int added = FloodFillLake(grid, new Vector2Int(cx, cz), maxLake, config);
+                    string lakeFallback = "random";
+                    if (highToLakeMouth && term.HasValue)
+                    {
+                        Vector2Int t = term.Value;
+                        lakeFallback = "highland_to_lake_mouth";
+                        cx = Mathf.Clamp(t.x, 1, w - 2);
+                        cz = Mathf.Clamp(t.y, 1, h - 2);
+                        if (planned != null && planned.Count > 0)
+                        {
+                            Vector2Int pc = planned[0];
+                            if (Mathf.Max(Mathf.Abs(pc.x - t.x), Mathf.Abs(pc.y - t.y)) <= 6)
+                            {
+                                cx = Mathf.Clamp(pc.x + rng.NextInt(-1, 2), 1, w - 2);
+                                cz = Mathf.Clamp(pc.y + rng.NextInt(-1, 2), 1, h - 2);
+                                lakeFallback = "planned_near_mouth";
+                            }
+                        }
+                    }
+                    else if (planned != null && i < planned.Count && rng.NextFloat() < 0.72f)
+                    {
+                        Vector2Int pc = planned[i];
+                        cx = Mathf.Clamp(pc.x + rng.NextInt(-4, 5), w / 6, (5 * w) / 6 - 1);
+                        cz = Mathf.Clamp(pc.y + rng.NextInt(-4, 5), h / 6, (5 * h) / 6 - 1);
+                        lakeFallback = "planned_jitter";
+                    }
+                    else
+                    {
+                        cx = rng.NextInt(w / 6, (5 * w) / 6);
+                        cz = rng.NextInt(h / 6, (5 * h) / 6);
+                        lakeFallback = "random";
+                    }
+
+                    ref var seedCell = ref grid.GetCell(cx, cz);
+                    if (seedCell.type != CellType.Land)
+                        continue;
+
+                    int sepDist = -1;
+                    if (config.riverCount > 0 &&
+                        config.lakeValidateSeparationFromMainRiver &&
+                        grid.RiverCenterlinesCellSpace != null &&
+                        grid.RiverCenterlinesCellSpace.Count > 0)
+                    {
+                        sepDist = MinChebyshevSeedToMainRiverCenterline(
+                            cx,
+                            cz,
+                            grid.RiverCenterlinesCellSpace[0],
+                            w,
+                            h);
+                        int mouthCheb = term.HasValue
+                            ? Mathf.Max(Mathf.Abs(cx - term.Value.x), Mathf.Abs(cz - term.Value.y))
+                            : int.MaxValue;
+                        bool mouthExempt = highToLakeMouth && term.HasValue && mouthCheb <= 4;
+                        if (sepDist < config.lakeMinChebyshevDistanceFromMainRiverCells && !mouthExempt)
+                        {
+                            if (config.debugLogs || config.debugLakeRiverSeparationLog)
+                            {
+                                UnityEngine.Debug.Log(
+                                    $"[LakeRiverSeparation] lakeId={i + 1} distanceToNearestRiver={sepDist} accepted=0 reason=too_close_to_main_river");
+                            }
+
+                            continue;
+                        }
+                    }
+
+                    int added = FloodFillLake(grid, new Vector2Int(cx, cz), maxLakeEff, config);
                     waterCells += added;
+                    Vector2Int? plannedSinkLog =
+                        planned != null && i < planned.Count ? (Vector2Int?)planned[i] : (Vector2Int?)null;
+                    int dts = term.HasValue ? Mathf.Max(Mathf.Abs(cx - term.Value.x), Mathf.Abs(cz - term.Value.y)) : -1;
+                    bool mouthConnected =
+                        added > 0 && term.HasValue && dts <= Mathf.Max(2, config.lakeRiverMouthBlendCells + 2);
+                    RiverRouteGenerator.LogLakeSinkValidation(
+                        config,
+                        i + 1,
+                        plannedSinkLog,
+                        added > 0,
+                        new Vector2Int(cx, cz),
+                        term,
+                        dts,
+                        mouthConnected,
+                        lakeFallback);
+
+                    if (config.debugLogs || config.debugLakeRiverSeparationLog)
+                    {
+                        UnityEngine.Debug.Log(
+                            $"[LakeRiverSeparation] lakeId={i + 1} distanceToNearestRiver={sepDist} accepted={(added > 0 ? 1 : 0)} reason={(added > 0 ? "ok" : "flood_empty")}");
+                    }
+
                     break;
                 }
             }
@@ -246,35 +857,65 @@ namespace Project.Gameplay.Map.Generator
             if (config.mergeRiverCellsTouchingLake)
                 MergeRiverCellsTouchingLake(grid);
 
+            if (swLakePipe != null)
+                WaterGenPerfDiag.MsLakesAbsorbMerge = swLakePipe.Elapsed.TotalMilliseconds;
+
             // Fusión lógica de ríos por máscara acumulativa (no solo visual):
             // elimina puntas/abanicos en confluencias y define una franja de orilla transitable.
             ApplyRiverFusionMaskAndShoreWalkability(grid, config);
-            // Vados por zonas delgadas (Fase3): solo si NO usamos el modo asset en Fase9 (evita duplicar lógica).
+            // Vados por zonas delgadas (Fase4 hidrología): solo si NO usamos el modo asset en Fase9 (evita duplicar lógica).
+            var swThin = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
             if (!config.useCrossingAssetFords)
                 ApplyFunctionalRiverFordsFromThinZones(grid, config);
+            if (swThin != null)
+                WaterGenPerfDiag.MsThinZoneFords = swThin.Elapsed.TotalMilliseconds;
 
             // Elimina pequeñas "islas" de tierra totalmente encerradas por agua (artefactos visuales).
+            var swFillIslands = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
             waterCells += FillSmallLandIslandsInsideWater(grid, maxIslandCells: 14);
+            if (swFillIslands != null)
+                WaterGenPerfDiag.MsFillLandIslands = swFillIslands.Elapsed.TotalMilliseconds;
 
             int deepRing = Mathf.Clamp(config.lakeDeepImpassableMinDistanceFromShore, 0, 64);
+            var swDeep = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
             if (deepRing > 0)
                 ApplyLakeDeepImpassableCore(grid, deepRing);
+            if (swDeep != null)
+                WaterGenPerfDiag.MsLakeDeepCore = swDeep.Elapsed.TotalMilliseconds;
+
+            var swTopo = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+            if (config.enableWaterTopologyCleanup)
+                WaterTopologyCleanup(grid, config);
+            else
+                DebugLastWaterCleanupRemovedPacked = null;
+            if (swTopo != null)
+                WaterGenPerfDiag.MsTopologyCleanupTotal = swTopo.Elapsed.TotalMilliseconds;
 
             int total = w * h;
             float pct = total > 0 ? (waterCells * 100f / total) : 0f;
             int placedRiverCount = grid.RiverCenterlinesCellSpace != null ? grid.RiverCenterlinesCellSpace.Count : 0;
             if (config.debugLogs)
             {
-                Debug.Log($"Fase3 Agua: {waterCells} celdas ({pct:F1}%), ríos colocados={placedRiverCount}/{riverCount} (centerline procedural→borde opuesto), lagos={lakeCount} (flood fill).");
+                Debug.Log($"Fase4 Agua: {waterCells} celdas ({pct:F1}%), ríos colocados={placedRiverCount}/{riverCount} (centerline procedural→borde opuesto), lagos={lakeCountEff} (flood fill).");
                 if (placedRiverCount < riverCount)
                 {
                     Debug.LogWarning(
-                        $"Fase3 Agua: faltan {riverCount - placedRiverCount} río(s). Suele deberse a " +
+                        $"Fase4 Agua: faltan {riverCount - placedRiverCount} río(s). Suele deberse a " +
                         $"'{nameof(config.riverAvoidCrossingOtherRivers)}' y poco espacio de corredor. " +
                         $"Aumenta {nameof(config.riverPlacementMaxAttemptsPerRiver)}, " +
                         $"sube {nameof(config.riverCorridorRejectEarlyAbort)} o desactiva evitar cruces en el MapGenConfig (perfil técnico).");
                 }
             }
+
+            if (swPhase != null)
+            {
+                Debug.Log($"[Fase4 Agua] GenerateWater total ms={swPhase.Elapsed.TotalMilliseconds:F1} rngSeed={rng.Seed}");
+            }
+
+            if (swPerfWhole != null)
+                WaterGenPerfDiag.MsGenerateWaterTotal = swPerfWhole.Elapsed.TotalMilliseconds;
+
+            WaterGenPerfDiag.LogSummary(w, h, rng.Seed, config);
         }
 
         /// <summary>Una sola pasada: River con vecino Water (8-dir) pasa a Water para confluencias coherentes.</summary>
@@ -411,43 +1052,65 @@ namespace Project.Gameplay.Map.Generator
             return false;
         }
 
-        /// <summary>Elige una celda en el borde del mapa (arriba/abajo/izq/der).</summary>
-        private static Vector2Int PickRiverStart(int w, int h, IRng rng)
-        {
-            int side = rng.NextInt(0, 4);
-            switch (side)
-            {
-                case 0: return new Vector2Int(rng.NextInt(0, w), 0);           // abajo
-                case 1: return new Vector2Int(rng.NextInt(0, w), h - 1);      // arriba
-                case 2: return new Vector2Int(0, rng.NextInt(0, h));           // izq
-                default: return new Vector2Int(w - 1, rng.NextInt(0, h));      // der
-            }
-        }
-
         /// <summary>Destino del río en el borde opuesto al de inicio (cruce del mapa, sin sesgo al centro).</summary>
         private static long PackCellLong(Vector2Int c) => ((long)c.x << 32) | (uint)c.y;
+
+        private static int CountMaskDegree4(bool[,] mask, int w, int h, int x, int z)
+        {
+            int n = 0;
+            for (int i = 0; i < Cardinal4.Length; i++)
+            {
+                int nx = x + Cardinal4[i].x;
+                int nz = z + Cardinal4[i].y;
+                if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                    continue;
+                if (mask[nx, nz])
+                    n++;
+            }
+
+            return n;
+        }
+
+        /// <summary>Misma decisión que el antiguo par puente+BFS en fusión: centerline o articulación (grado ≥ 2) sobre <paramref name="riverBase"/>.</summary>
+        private static bool IsFusionRiverRemovalCriticalTarjan(
+            bool[,] riverBase,
+            bool[,] fusionArticulation,
+            int w,
+            int h,
+            int x,
+            int z,
+            HashSet<long> centerlinePacked)
+        {
+            if (!riverBase[x, z])
+                return false;
+            if (centerlinePacked != null && centerlinePacked.Contains(PackCellLong(new Vector2Int(x, z))))
+                return true;
+            if (CountMaskDegree4(riverBase, w, h, x, z) < 2)
+                return false;
+            return fusionArticulation[x, z];
+        }
 
         /// <summary>Radio máximo del corredor del río (base + variación) para evitar cruces inválidos al colocar otro río.</summary>
         private static int RiverCorridorMaxRadiusCells(MapGenConfig config)
         {
             if (config == null) return 1;
-            int b = Mathf.Clamp(config.riverWidthRadiusCells, 0, 6);
-            int a = Mathf.Clamp(config.riverWidthNoiseAmplitudeCells, 0, 3);
+            int b = ScaledRiverRasterBaseRadius(config);
+            int a = ScaledRiverRasterWidthAmplitude(config);
             return Mathf.Clamp(b + a, 0, 6);
         }
 
-        private static HashSet<long> CollectRiverCorridorPacked(List<Vector2Int> axis, MapGenConfig config, int gw, int gh)
+        private static void CollectRiverCorridorPackedInto(List<Vector2Int> axis, MapGenConfig config, int gw, int gh, HashSet<long> into)
         {
-            var mask = new HashSet<long>();
-            if (axis == null) return mask;
+            into.Clear();
+            if (axis == null) return;
             int radiusCells = RiverCorridorMaxRadiusCells(config);
-            var centers = new HashSet<Vector2Int>();
-            foreach (var c in axis)
-                centers.Add(c);
+            s_axisCentersScratch.Clear();
+            for (int i = 0; i < axis.Count; i++)
+                s_axisCentersScratch.Add(axis[i]);
             int rSq = radiusCells * radiusCells;
-            foreach (var c in centers)
+            foreach (var c in s_axisCentersScratch)
             {
-                mask.Add(PackCellLong(c));
+                into.Add(PackCellLong(c));
                 if (radiusCells <= 0) continue;
                 for (int dz = -radiusCells; dz <= radiusCells; dz++)
                 {
@@ -462,11 +1125,10 @@ namespace Project.Gameplay.Map.Generator
                         int x = c.x + dx;
                         int z = c.y + dz;
                         if ((uint)x >= (uint)gw || (uint)z >= (uint)gh) continue;
-                        mask.Add(PackCellLong(new Vector2Int(x, z)));
+                        into.Add(PackCellLong(new Vector2Int(x, z)));
                     }
                 }
             }
-            return mask;
         }
 
         /// <summary>
@@ -514,6 +1176,55 @@ namespace Project.Gameplay.Map.Generator
             return false;
         }
 
+        static float MinDistSqPointToPolylineCellSpace(Vector2 p, List<Vector2> poly)
+        {
+            if (poly == null || poly.Count < 2)
+                return float.MaxValue;
+            float best = float.MaxValue;
+            for (int i = 0; i < poly.Count - 1; i++)
+            {
+                Vector2 a = poly[i];
+                Vector2 b = poly[i + 1];
+                Vector2 ab = b - a;
+                float denom = ab.sqrMagnitude;
+                float t = denom < 1e-8f ? 0f : Mathf.Clamp01(Vector2.Dot(p - a, ab) / denom);
+                Vector2 proj = a + ab * t;
+                float d2 = (p - proj).sqrMagnitude;
+                if (d2 < best)
+                    best = d2;
+            }
+
+            return best;
+        }
+
+        static int? TryResolveParentRiverAtJoin(GridSystem grid, Vector2Int joinCell, int previousRiverCount, out float bestDistSq)
+        {
+            bestDistSq = float.MaxValue;
+            if (grid?.RiverCenterlinesCellSpace == null || previousRiverCount <= 0)
+                return null;
+
+            Vector2 jp = new Vector2(joinCell.x + 0.5f, joinCell.y + 0.5f);
+            int bestR = -1;
+            float best = float.MaxValue;
+            for (int r = 0; r < previousRiverCount; r++)
+            {
+                var line = grid.RiverCenterlinesCellSpace[r];
+                if (line == null || line.Count < 2)
+                    continue;
+                float d2 = MinDistSqPointToPolylineCellSpace(jp, line);
+                if (d2 < best)
+                {
+                    best = d2;
+                    bestR = r;
+                }
+            }
+
+            bestDistSq = best;
+            if (bestR < 0)
+                return null;
+            return bestR;
+        }
+
         /// <summary>
         /// Recorta el río candidato hasta su primera confluencia con el corredor de ríos existentes.
         /// Evita cruces tipo "X": el candidato pasa a ser afluente y termina en la unión.
@@ -524,10 +1235,17 @@ namespace Project.Gameplay.Map.Generator
             List<Vector2> centerline,
             HashSet<long> occupiedRiverCorridor,
             int gw,
-            int gh)
+            int gh,
+            int minCellsAfterTrim,
+            out int joinPathIndex,
+            out Vector2Int joinCell)
         {
+            joinPathIndex = -1;
+            joinCell = default;
             if (grid == null || path == null || path.Count < 12 || occupiedRiverCorridor == null || occupiedRiverCorridor.Count == 0)
                 return false;
+
+            int minAfter = Mathf.Clamp(minCellsAfterTrim, 6, 64);
 
             int hitIdx = -1;
             int startScan = Mathf.Clamp(path.Count / 8, 3, path.Count - 2);
@@ -565,6 +1283,8 @@ namespace Project.Gameplay.Map.Generator
             if (realJoinIdx < 0)
                 return false;
             hitIdx = realJoinIdx;
+            joinPathIndex = hitIdx;
+            joinCell = path[hitIdx];
 
             int removeStart = hitIdx + 1;
             if (removeStart < path.Count)
@@ -583,7 +1303,14 @@ namespace Project.Gameplay.Map.Generator
             }
 
             // Evita afluentes demasiado cortos que generan parches/segmentos visuales extraños.
-            return path.Count >= 18;
+            if (path.Count < minAfter)
+            {
+                joinPathIndex = -1;
+                joinCell = default;
+                return false;
+            }
+
+            return true;
         }
 
         private static void TrimFordCellsToPath(List<Vector2Int> fordCells, List<Vector2Int> path)
@@ -670,32 +1397,14 @@ namespace Project.Gameplay.Map.Generator
             return converted;
         }
 
-        /// <summary>Destino del río en el borde opuesto. <paramref name="attempt"/> desplaza el margen para variar rutas entre reintentos.</summary>
-        private static Vector2Int PickRiverExitOpposite(Vector2Int start, int w, int h, IRng rng, int attempt = 0)
-        {
-            int margin = Mathf.Clamp(Mathf.Min(w, h) / 10 + (attempt % 4), 1, 16);
-            if (w <= 2 || h <= 2) margin = 0;
-            int xMin = Mathf.Clamp(margin, 0, w - 1);
-            int xMax = Mathf.Clamp(w - 1 - margin, 0, w - 1);
-            if (xMax < xMin) { xMin = 0; xMax = Mathf.Max(0, w - 1); }
-            int yMin = Mathf.Clamp(margin, 0, h - 1);
-            int yMax = Mathf.Clamp(h - 1 - margin, 0, h - 1);
-            if (yMax < yMin) { yMin = 0; yMax = Mathf.Max(0, h - 1); }
-
-            if (start.y == 0) return new Vector2Int(rng.NextInt(xMin, xMax + 1), h - 1);
-            if (start.y == h - 1) return new Vector2Int(rng.NextInt(xMin, xMax + 1), 0);
-            if (start.x == 0) return new Vector2Int(w - 1, rng.NextInt(yMin, yMax + 1));
-            return new Vector2Int(0, rng.NextInt(yMin, yMax + 1));
-        }
-
         /// <summary>
         /// Ensancha el río en el grid tras el eje: disco euclídeo o cuadrado Chebyshev según config (menos “manhattan” visual con euclídeo).
         /// </summary>
         private static int ExpandRiverWidthAroundPath(GridSystem grid, List<Vector2Int> path, MapGenConfig config, int riverIndex)
         {
             if (path == null || path.Count == 0 || config == null) return 0;
-            int baseR = Mathf.Clamp(config.riverWidthRadiusCells, 0, 6);
-            int amp = Mathf.Clamp(config.riverWidthNoiseAmplitudeCells, 0, 3);
+            int baseR = ScaledRiverRasterBaseRadius(config);
+            int amp = ScaledRiverRasterWidthAmplitude(config);
             if (baseR <= 0 && amp <= 0) return 0;
 
             int seedMix = config.seed ^ (riverIndex * 739391);
@@ -880,6 +1589,40 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
+        /// <summary>Distancia Chebyshev mínima de una celda semilla a la huella muestreada de la centerline del río principal (celdas).</summary>
+        static int MinChebyshevSeedToMainRiverCenterline(int cx, int cz, List<Vector2> mainCenterlineCellSpace, int gw, int gh)
+        {
+            if (mainCenterlineCellSpace == null || mainCenterlineCellSpace.Count == 0)
+                return 99999;
+            int best = 99999;
+            for (int i = 0; i < mainCenterlineCellSpace.Count; i++)
+            {
+                int x = Mathf.Clamp(Mathf.FloorToInt(mainCenterlineCellSpace[i].x), 0, gw - 1);
+                int z = Mathf.Clamp(Mathf.FloorToInt(mainCenterlineCellSpace[i].y), 0, gh - 1);
+                int d = Mathf.Max(Mathf.Abs(cx - x), Mathf.Abs(cz - z));
+                if (d < best)
+                    best = d;
+            }
+
+            for (int i = 0; i < mainCenterlineCellSpace.Count - 1; i++)
+            {
+                Vector2 a = mainCenterlineCellSpace[i];
+                Vector2 b = mainCenterlineCellSpace[i + 1];
+                int steps = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(a, b) * 2f));
+                for (int s = 0; s <= steps; s++)
+                {
+                    Vector2 p = Vector2.Lerp(a, b, s / (float)steps);
+                    int x = Mathf.Clamp(Mathf.FloorToInt(p.x), 0, gw - 1);
+                    int z = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, gh - 1);
+                    int d = Mathf.Max(Mathf.Abs(cx - x), Mathf.Abs(cz - z));
+                    if (d < best)
+                        best = d;
+                }
+            }
+
+            return best;
+        }
+
         /// <summary>
         /// Flood fill desde seed; solo Land; máximo maxCells. 8 direcciones + irregularidad y semillas extra.
         /// </summary>
@@ -977,7 +1720,7 @@ namespace Project.Gameplay.Map.Generator
         /// Marca vados funcionales en tramos delgados del río usando distancia interior al borde.
         /// No cambia la topología del agua: solo transitabilidad en celdas River.
         /// </summary>
-        /// <summary>Llamado desde Fase3 (si no hay modo asset) o como fallback desde WaterMeshBuilder.</summary>
+        /// <summary>Llamado desde Fase4 hidrología (si no hay modo asset) o como fallback desde WaterMeshBuilder.</summary>
         public static void ApplyFunctionalRiverFordsFromThinZones(GridSystem grid, MapGenConfig config)
         {
             if (grid == null || config == null || !config.enableFunctionalRiverFords)
@@ -1101,6 +1844,190 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
+        private static readonly Vector2Int[] Cardinal4 =
+        {
+            new Vector2Int(0, 1), new Vector2Int(0, -1), new Vector2Int(1, 0), new Vector2Int(-1, 0)
+        };
+
+        /// <summary>True si convertir esta celda acuática a Land rompería 4-conectividad entre pares de vecinos cardinales, o es ford/centerline.</summary>
+        private static bool IsMaskConnectivityCritical(
+            bool[,] mask, int w, int h, int x, int z, HashSet<long> centerlinePacked, bool fordCell,
+            Queue<Vector2Int> q, int[,] visitStamp, ref int stamp,
+            WaterPerfCaller perfCaller = WaterPerfCaller.None)
+        {
+            if (WaterGenPerfDiag.Active && perfCaller != WaterPerfCaller.None)
+            {
+                if (perfCaller == WaterPerfCaller.FusionRiverRemovalProbe)
+                    WaterGenPerfDiag.MaskCriticalCallsFusion++;
+                else if (perfCaller == WaterPerfCaller.TopologyTryRemove)
+                    WaterGenPerfDiag.MaskCriticalCallsTopology++;
+            }
+
+            if (!mask[x, z])
+                return false;
+            if (fordCell)
+            {
+                if (WaterGenPerfDiag.Active && perfCaller != WaterPerfCaller.None)
+                {
+                    if (perfCaller == WaterPerfCaller.FusionRiverRemovalProbe)
+                        WaterGenPerfDiag.MaskCriticalReturnsTrueFusion++;
+                    else if (perfCaller == WaterPerfCaller.TopologyTryRemove)
+                        WaterGenPerfDiag.MaskCriticalReturnsTrueTopology++;
+                }
+
+                return true;
+            }
+
+            if (centerlinePacked != null && centerlinePacked.Contains(PackCellLong(new Vector2Int(x, z))))
+            {
+                if (WaterGenPerfDiag.Active && perfCaller != WaterPerfCaller.None)
+                {
+                    if (perfCaller == WaterPerfCaller.FusionRiverRemovalProbe)
+                        WaterGenPerfDiag.MaskCriticalReturnsTrueFusion++;
+                    else if (perfCaller == WaterPerfCaller.TopologyTryRemove)
+                        WaterGenPerfDiag.MaskCriticalReturnsTrueTopology++;
+                }
+
+                return true;
+            }
+
+            bool bridge = MaskBridgePairDisconnectedWithoutCell(mask, w, h, x, z, q, visitStamp, ref stamp);
+            if (bridge)
+            {
+                if (WaterGenPerfDiag.Active && perfCaller != WaterPerfCaller.None)
+                {
+                    if (perfCaller == WaterPerfCaller.FusionRiverRemovalProbe)
+                        WaterGenPerfDiag.MaskCriticalReturnsTrueFusion++;
+                    else if (perfCaller == WaterPerfCaller.TopologyTryRemove)
+                        WaterGenPerfDiag.MaskCriticalReturnsTrueTopology++;
+                }
+            }
+
+            return bridge;
+        }
+
+        private static bool MaskBridgePairDisconnectedWithoutCell(
+            bool[,] mask, int w, int h, int bx, int bz, Queue<Vector2Int> q, int[,] visitStamp, ref int stamp)
+        {
+            if (WaterGenPerfDiag.Active)
+                WaterGenPerfDiag.BridgeDisconnectedChecks++;
+
+            var neigh = new List<Vector2Int>(4);
+            for (int i = 0; i < Cardinal4.Length; i++)
+            {
+                int nx = bx + Cardinal4[i].x;
+                int nz = bz + Cardinal4[i].y;
+                if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                    continue;
+                if (mask[nx, nz])
+                    neigh.Add(new Vector2Int(nx, nz));
+            }
+
+            int n = neigh.Count;
+            if (n < 2)
+                return false;
+            for (int i = 0; i < n; i++)
+            {
+                for (int j = i + 1; j < n; j++)
+                {
+                    if (!MaskCellsReachableWithoutBlocking(mask, w, h, neigh[i], neigh[j], bx, bz, q, visitStamp, ref stamp))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool MaskCellsReachableWithoutBlocking(
+            bool[,] mask, int w, int h, Vector2Int start, Vector2Int goal, int blockX, int blockZ,
+            Queue<Vector2Int> q, int[,] visitStamp, ref int stamp)
+        {
+            if (start.x == goal.x && start.y == goal.y)
+                return true;
+            if (WaterGenPerfDiag.Active)
+                WaterGenPerfDiag.BfsReachabilityCalls++;
+
+            int gen = ++stamp;
+            if (gen == int.MaxValue)
+            {
+                Array.Clear(visitStamp, 0, visitStamp.Length);
+                stamp = 0;
+                gen = ++stamp;
+            }
+
+            q.Clear();
+            q.Enqueue(start);
+            visitStamp[start.x, start.y] = gen;
+            while (q.Count > 0)
+            {
+                var c = q.Dequeue();
+                if (WaterGenPerfDiag.Active)
+                    WaterGenPerfDiag.BfsReachabilityNodesVisited++;
+                if (c.x == goal.x && c.y == goal.y)
+                    return true;
+                for (int i = 0; i < Cardinal4.Length; i++)
+                {
+                    int nx = c.x + Cardinal4[i].x;
+                    int nz = c.y + Cardinal4[i].y;
+                    if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                        continue;
+                    if (nx == blockX && nz == blockZ)
+                        continue;
+                    if (!mask[nx, nz])
+                        continue;
+                    if (visitStamp[nx, nz] == gen)
+                        continue;
+                    visitStamp[nx, nz] = gen;
+                    q.Enqueue(new Vector2Int(nx, nz));
+                }
+            }
+
+            return false;
+        }
+
+        private static HashSet<long> BuildCenterlineRiverCellsPacked(GridSystem grid)
+        {
+            var cells = new HashSet<long>();
+            var lines = grid.RiverCenterlinesCellSpace;
+            if (lines == null)
+                return cells;
+            int w = grid.Width;
+            int h = grid.Height;
+            foreach (var line in lines)
+            {
+                if (line == null || line.Count == 0)
+                    continue;
+                for (int i = 0; i < line.Count; i++)
+                {
+                    var p = line[i];
+                    int cx = Mathf.Clamp(Mathf.FloorToInt(p.x), 0, w - 1);
+                    int cz = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, h - 1);
+                    cells.Add(PackCellLong(new Vector2Int(cx, cz)));
+                }
+
+                for (int i = 0; i < line.Count - 1; i++)
+                    RasterCenterlineSegmentToPacked(cells, line[i], line[i + 1], w, h);
+            }
+
+            return cells;
+        }
+
+        private static void RasterCenterlineSegmentToPacked(HashSet<long> cells, Vector2 a, Vector2 b, int w, int h)
+        {
+            float x0 = Mathf.Clamp(a.x, 0f, w - 1f);
+            float z0 = Mathf.Clamp(a.y, 0f, h - 1f);
+            float x1 = Mathf.Clamp(b.x, 0f, w - 1f);
+            float z1 = Mathf.Clamp(b.y, 0f, h - 1f);
+            int steps = Mathf.Max(1, Mathf.CeilToInt(Mathf.Max(Mathf.Abs(x1 - x0), Mathf.Abs(z1 - z0))) * 2);
+            for (int s = 0; s <= steps; s++)
+            {
+                float t = steps == 0 ? 0f : s / (float)steps;
+                int xi = Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(x0, x1, t)), 0, w - 1);
+                int zi = Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(z0, z1, t)), 0, h - 1);
+                cells.Add(PackCellLong(new Vector2Int(xi, zi)));
+            }
+        }
+
         private static void ApplyRiverFusionMaskAndShoreWalkability(GridSystem grid, MapGenConfig config)
         {
             if (grid == null || config == null)
@@ -1133,8 +2060,15 @@ namespace Project.Gameplay.Map.Generator
                 DebugLastRiverFusionMask01 = null;
                 DebugLastRiverFusionCoreMask = null;
                 DebugLastRiverFusionShoreMask = null;
+                DebugLastRiverFusionBlurField = null;
                 return;
             }
+
+            System.Diagnostics.Stopwatch swPrepBlur = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+
+            var centerlinePacked = BuildCenterlineRiverCellsPacked(grid);
+            int removedRiverToLand = 0;
+            int preservedContinuity = 0;
 
             var a = new float[w, h];
             var b = new float[w, h];
@@ -1170,6 +2104,9 @@ namespace Project.Gameplay.Map.Generator
 
                 var t = a; a = b; b = t;
             }
+
+            if (swPrepBlur != null)
+                WaterGenPerfDiag.MsFusionPrepBlur += swPrepBlur.Elapsed.TotalMilliseconds;
 
             float coreThreshold = Mathf.Clamp(config.riverFusionCoreThreshold, 0.35f, 0.9f);
             float shoreThreshold = Mathf.Clamp(config.riverFusionShoreThreshold, 0.05f, 0.7f);
@@ -1215,6 +2152,8 @@ namespace Project.Gameplay.Map.Generator
                 return false;
             }
 
+            System.Diagnostics.Stopwatch swClassify = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+
             for (int z = 0; z < h; z++)
             {
                 for (int x = 0; x < w; x++)
@@ -1236,6 +2175,24 @@ namespace Project.Gameplay.Map.Generator
                         shore[x, z] = true;
                 }
             }
+
+            if (swClassify != null)
+                WaterGenPerfDiag.MsFusionClassifyCoreShore += swClassify.Elapsed.TotalMilliseconds;
+
+            System.Diagnostics.Stopwatch swTarjan = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+            bool[,] fusionArticulation = GridArticulationPoints4.Compute(
+                riverBase, w, h, out int tarjanNodes, out int tarjanEdges, out int tarjanArticCount);
+            if (swTarjan != null)
+                WaterGenPerfDiag.TarjanBuildMs += swTarjan.Elapsed.TotalMilliseconds;
+
+            if (WaterGenPerfDiag.Active)
+            {
+                double tarjanMs = swTarjan != null ? swTarjan.Elapsed.TotalMilliseconds : 0.0;
+                Debug.Log(
+                    $"[WaterTarjan] nodes={tarjanNodes} edges={tarjanEdges} articulationCount={tarjanArticCount} ms={tarjanMs:F3}");
+            }
+
+            System.Diagnostics.Stopwatch swConnApply = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
 
             int coreCount = 0;
             int shoreCount = 0;
@@ -1259,6 +2216,24 @@ namespace Project.Gameplay.Map.Generator
                     {
                         if (c.type == CellType.River && !preserveFord[x, z])
                         {
+                            if (WaterGenPerfDiag.Active)
+                                WaterGenPerfDiag.TarjanFusionLookups++;
+
+                            if (IsFusionRiverRemovalCriticalTarjan(
+                                    riverBase,
+                                    fusionArticulation,
+                                    w,
+                                    h,
+                                    x,
+                                    z,
+                                    centerlinePacked))
+                            {
+                                preservedContinuity++;
+                                continue;
+                            }
+
+                            removedRiverToLand++;
+
                             c.type = CellType.Land;
                             c.walkable = true;
                             c.buildable = true;
@@ -1278,11 +2253,22 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
+            if (swConnApply != null)
+                WaterGenPerfDiag.MsFusionConnectivityApply += swConnApply.Elapsed.TotalMilliseconds;
+
             if (config.debugLogs)
             {
                 Debug.Log(
                     $"[RiverFusion] coreNoWalkable={coreCount} shoreWalkable={shoreCount} preservedFords={preservedFordCount} " +
                     $"thr(core={coreThreshold:F2}, shore={shoreThreshold:F2}) blur={blurPasses} shoreWidth={shoreWidth}");
+            }
+
+            if (config.riverFusionContinuityDebug)
+            {
+                Debug.Log($"[RiverFusionRemoved] count={removedRiverToLand}");
+                Debug.Log($"[RiverFusionPreserved] connectivityKeeps={preservedContinuity}");
+                Debug.Log(
+                    $"[RiverContinuityProtected] centerlineCells={centerlinePacked.Count} convertedRiverToLand={removedRiverToLand} keptForTopology={preservedContinuity}");
             }
 
             if (config.debugDrawWaterMaskGizmos)
@@ -1297,6 +2283,495 @@ namespace Project.Gameplay.Map.Generator
                 DebugLastRiverFusionCoreMask = null;
                 DebugLastRiverFusionShoreMask = null;
             }
+
+            if (config.debugDrawWaterFusionMask)
+                DebugLastRiverFusionBlurField = a;
+            else
+                DebugLastRiverFusionBlurField = null;
+        }
+
+        /// <summary>
+        /// Última pasada de hidrología antes del MS: elimina micro-islas acuáticas, puntas cardinales y pares diagonales tipo tablero sin soporte N/E/S/W.
+        /// No modifica centerlines ni spawn connectivity; preserva vados y celdas críticas para la conectividad 4-del máscara acuático actual.
+        /// </summary>
+        private static void WaterTopologyCleanup(GridSystem grid, MapGenConfig config)
+        {
+            if (grid == null || config == null)
+            {
+                DebugLastWaterCleanupRemovedPacked = null;
+                return;
+            }
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int threshold = Mathf.Clamp(config.waterTopologyRemoveIslandThresholdCells, 2, 24);
+            bool recordRemoved = config.debugDrawWaterTopologyCleanupGizmo;
+            var removedPacked = recordRemoved ? new HashSet<long>() : null;
+            DebugLastWaterCleanupRemovedPacked = removedPacked;
+
+            var swTotal = System.Diagnostics.Stopwatch.StartNew();
+
+            System.Diagnostics.Stopwatch swClPacked = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+            var centerlinePacked = BuildCenterlineRiverCellsPacked(grid);
+            if (swClPacked != null)
+                WaterGenPerfDiag.MsTopoCenterlinePacked += swClPacked.Elapsed.TotalMilliseconds;
+            var q = new Queue<Vector2Int>(Mathf.Min(w * h, 8192));
+            var comp = new List<Vector2Int>(64);
+            var visited = new bool[w, h];
+            var aquaBase = new bool[w, h];
+            var bfsVisit = new int[w, h];
+            int bfsStamp = 0;
+
+            int removedIslands = 0;
+            int removedSpikes = 0;
+            int removedDiag = 0;
+            int preservedFord = 0;
+            int preservedCenterline = 0;
+
+            static bool IsAquaType(CellType t) => t == CellType.Water || t == CellType.River;
+
+            void RebuildAquaBase()
+            {
+                if (WaterGenPerfDiag.Active)
+                    WaterGenPerfDiag.RebuildAquaBaseCalls++;
+
+                for (int zz = 0; zz < h; zz++)
+                {
+                    for (int xx = 0; xx < w; xx++)
+                    {
+                        aquaBase[xx, zz] = IsAquaType(grid.GetCell(xx, zz).type);
+                    }
+                }
+            }
+
+            void RefreshAquaCell(int cx, int cz)
+            {
+                aquaBase[cx, cz] = IsAquaType(grid.GetCell(cx, cz).type);
+            }
+
+            int CardinalAquaCount(int cx, int cz)
+            {
+                int n = 0;
+                for (int i = 0; i < Cardinal4.Length; i++)
+                {
+                    int nx = cx + Cardinal4[i].x;
+                    int nz = cz + Cardinal4[i].y;
+                    if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                        continue;
+                    if (IsAquaType(grid.GetCell(nx, nz).type))
+                        n++;
+                }
+
+                return n;
+            }
+
+            bool IsAquaAt(int cx, int cz) =>
+                (uint)cx < (uint)w && (uint)cz < (uint)h && IsAquaType(grid.GetCell(cx, cz).type);
+
+            void ConvertAquaToLand(int cx, int cz)
+            {
+                ref var cell = ref grid.GetCell(cx, cz);
+                cell.type = CellType.Land;
+                cell.walkable = true;
+                cell.buildable = true;
+                cell.riverFord = false;
+                cell.waterTraverse = WaterTraverseMode.NotWater;
+                long pk = PackCellLong(new Vector2Int(cx, cz));
+                if (grid.LakeBodyCellsPacked != null)
+                    grid.LakeBodyCellsPacked.Remove(pk);
+                removedPacked?.Add(pk);
+            }
+
+            bool TryRemoveAquaCell(int cx, int cz)
+            {
+                if (WaterGenPerfDiag.Active)
+                    WaterGenPerfDiag.TopologyTryRemoveCalls++;
+
+                ref var cd = ref grid.GetCell(cx, cz);
+                if (!IsAquaType(cd.type))
+                    return false;
+                if (cd.riverFord)
+                {
+                    preservedFord++;
+                    return false;
+                }
+
+                if (centerlinePacked != null && centerlinePacked.Contains(PackCellLong(new Vector2Int(cx, cz))))
+                {
+                    preservedCenterline++;
+                    return false;
+                }
+
+                if (!aquaBase[cx, cz])
+                    RebuildAquaBase();
+                if (IsMaskConnectivityCritical(
+                        aquaBase,
+                        w,
+                        h,
+                        cx,
+                        cz,
+                        centerlinePacked,
+                        fordCell: false,
+                        q,
+                        bfsVisit,
+                        ref bfsStamp,
+                        WaterPerfCaller.TopologyTryRemove))
+                    return false;
+
+                ConvertAquaToLand(cx, cz);
+                RefreshAquaCell(cx, cz);
+                return true;
+            }
+
+            RebuildAquaBase();
+
+            // A) Componentes 4-conexos menores que el umbral (sin ford ni centerline en el componente).
+            System.Diagnostics.Stopwatch swIslandPass = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+            Array.Clear(visited, 0, visited.Length);
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (visited[x, z] || !aquaBase[x, z])
+                        continue;
+
+                    comp.Clear();
+                    q.Clear();
+                    q.Enqueue(new Vector2Int(x, z));
+                    visited[x, z] = true;
+                    while (q.Count > 0)
+                    {
+                        var c = q.Dequeue();
+                        if (WaterGenPerfDiag.Active)
+                            WaterGenPerfDiag.AquaIslandFloodDequeues++;
+                        comp.Add(c);
+                        for (int i = 0; i < Cardinal4.Length; i++)
+                        {
+                            int nx = c.x + Cardinal4[i].x;
+                            int nz = c.y + Cardinal4[i].y;
+                            if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                                continue;
+                            if (visited[nx, nz] || !aquaBase[nx, nz])
+                                continue;
+                            visited[nx, nz] = true;
+                            q.Enqueue(new Vector2Int(nx, nz));
+                        }
+                    }
+
+                    if (WaterGenPerfDiag.Active)
+                    {
+                        WaterGenPerfDiag.AquaIslandComponentsDiscovered++;
+                        WaterGenPerfDiag.AquaIslandComponentCellsSum += comp.Count;
+                        if (comp.Count > WaterGenPerfDiag.AquaIslandComponentMaxSize)
+                            WaterGenPerfDiag.AquaIslandComponentMaxSize = comp.Count;
+                    }
+
+                    if (comp.Count >= threshold)
+                        continue;
+
+                    bool fordBlocked = false;
+                    bool clBlocked = false;
+                    int fordCells = 0;
+                    int clCells = 0;
+                    for (int i = 0; i < comp.Count; i++)
+                    {
+                        var p = comp[i];
+                        ref var cd = ref grid.GetCell(p.x, p.y);
+                        if (cd.riverFord)
+                        {
+                            fordBlocked = true;
+                            fordCells++;
+                        }
+
+                        if (centerlinePacked != null && centerlinePacked.Contains(PackCellLong(p)))
+                        {
+                            clBlocked = true;
+                            clCells++;
+                        }
+                    }
+
+                    if (fordBlocked || clBlocked)
+                    {
+                        preservedFord += fordCells;
+                        preservedCenterline += clCells;
+                        continue;
+                    }
+
+                    for (int i = 0; i < comp.Count; i++)
+                    {
+                        ConvertAquaToLand(comp[i].x, comp[i].y);
+                        removedIslands++;
+                    }
+
+                    RebuildAquaBase();
+                }
+            }
+
+            if (swIslandPass != null)
+                WaterGenPerfDiag.MsTopoIslandPass += swIslandPass.Elapsed.TotalMilliseconds;
+
+            Array.Clear(visited, 0, visited.Length);
+            RebuildAquaBase();
+
+            // B) Spikes: a lo sumo 1 vecino cardinal acuático (Water o River), con protección de conectividad.
+            System.Diagnostics.Stopwatch swSpikePass = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (!aquaBase[x, z])
+                        continue;
+                    ref var cell = ref grid.GetCell(x, z);
+                    if (cell.riverFord)
+                        continue;
+                    if (centerlinePacked != null && centerlinePacked.Contains(PackCellLong(new Vector2Int(x, z))))
+                        continue;
+
+                    if (CardinalAquaCount(x, z) > 1)
+                        continue;
+
+                    if (TryRemoveAquaCell(x, z))
+                        removedSpikes++;
+                }
+            }
+
+            if (swSpikePass != null)
+                WaterGenPerfDiag.MsTopoSpikePass += swSpikePass.Elapsed.TotalMilliseconds;
+
+            RebuildAquaBase();
+
+            // C) Diagonales tipo "W . / . W" sin soporte cardinal entre ellas.
+            System.Diagnostics.Stopwatch swDiagPass = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
+            for (int z = 0; z < h - 1; z++)
+            {
+                for (int x = 0; x < w - 1; x++)
+                {
+                    if (!IsAquaAt(x, z) || !IsAquaAt(x + 1, z + 1))
+                        continue;
+                    if (IsAquaAt(x + 1, z) || IsAquaAt(x, z + 1))
+                        continue;
+
+                    if (TryRemoveAquaCell(x + 1, z + 1))
+                    {
+                        removedDiag++;
+                        continue;
+                    }
+
+                    if (TryRemoveAquaCell(x, z))
+                        removedDiag++;
+                }
+            }
+
+            if (swDiagPass != null)
+                WaterGenPerfDiag.MsTopoDiagonalPass += swDiagPass.Elapsed.TotalMilliseconds;
+
+            swTotal.Stop();
+
+            if (config.debugWaterTopologyCleanup)
+            {
+                Debug.Log(
+                    $"[WaterCleanup] removedIslands={removedIslands} removedSpikes={removedSpikes} removedDiagonalArtifacts={removedDiag} " +
+                    $"preservedFord={preservedFord} preservedCenterline={preservedCenterline} ms={swTotal.Elapsed.TotalMilliseconds:F1}");
+            }
+        }
+
+        /// <summary>Auditoría no destructiva post-hidrología (solo logs).</summary>
+        static void AuditRiverTopology(GridSystem grid, MapGenConfig config)
+        {
+            if (grid == null || config == null)
+                return;
+            if (!config.debugLogs && !config.debugHydrologyNetwork)
+                return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int riverCount = grid.RiverCenterlinesCellSpace != null ? grid.RiverCenterlinesCellSpace.Count : 0;
+            int centerlineCells = 0;
+            var centerlinePacked = new HashSet<long>();
+            if (grid.RiverCenterlinesCellSpace != null)
+            {
+                for (int ri = 0; ri < grid.RiverCenterlinesCellSpace.Count; ri++)
+                {
+                    var line = grid.RiverCenterlinesCellSpace[ri];
+                    if (line == null)
+                        continue;
+                    for (int pi = 0; pi < line.Count; pi++)
+                    {
+                        int cx = Mathf.FloorToInt(line[pi].x);
+                        int cy = Mathf.FloorToInt(line[pi].y);
+                        long k = ((long)cx << 32) | (uint)cy;
+                        if (centerlinePacked.Add(k))
+                            centerlineCells++;
+                    }
+                }
+            }
+
+            int riverCells = 0;
+            int waterCells = 0;
+            int fordsCount = 0;
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    ref var c = ref grid.GetCell(x, z);
+                    if (c.type == CellType.River)
+                        riverCells++;
+                    else if (c.type == CellType.Water)
+                        waterCells++;
+                    if (c.riverFord)
+                        fordsCount++;
+                }
+            }
+
+            int lakeBodyPackedCount = grid.LakeBodyCellsPacked != null ? grid.LakeBodyCellsPacked.Count : 0;
+            int fordsNearCenterline = 0;
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (!grid.GetCell(x, z).riverFord)
+                        continue;
+                    bool near = false;
+                    for (int dz = -2; dz <= 2 && !near; dz++)
+                    {
+                        for (int dx = -2; dx <= 2; dx++)
+                        {
+                            long nk = ((long)(x + dx) << 32) | (uint)(z + dz);
+                            if (centerlinePacked.Contains(nk))
+                            {
+                                near = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (near)
+                        fordsNearCenterline++;
+                }
+            }
+
+            float maxHeightRise = 0f;
+            int heightRiseEvents = 0;
+            if (grid.RiverCenterlinesCellSpace != null)
+            {
+                for (int ri = 0; ri < grid.RiverCenterlinesCellSpace.Count; ri++)
+                {
+                    var line = grid.RiverCenterlinesCellSpace[ri];
+                    if (line == null || line.Count < 2)
+                        continue;
+                    float prevH = grid.GetCell(
+                        Mathf.Clamp(Mathf.FloorToInt(line[0].x), 0, w - 1),
+                        Mathf.Clamp(Mathf.FloorToInt(line[0].y), 0, h - 1)).height01;
+                    for (int pi = 1; pi < line.Count; pi++)
+                    {
+                        int cx = Mathf.Clamp(Mathf.FloorToInt(line[pi].x), 0, w - 1);
+                        int cy = Mathf.Clamp(Mathf.FloorToInt(line[pi].y), 0, h - 1);
+                        float h01 = grid.GetCell(cx, cy).height01;
+                        float rise = h01 - prevH;
+                        if (rise > 0.001f)
+                        {
+                            heightRiseEvents++;
+                            maxHeightRise = Mathf.Max(maxHeightRise, rise);
+                        }
+
+                        prevH = h01;
+                    }
+                }
+            }
+
+            var visited = new bool[w, h];
+            int disconnectedRiverLike = 0;
+            int smallDetached = 0;
+            int touchingCenterline = 0;
+            int touchingLakeBody = 0;
+            int invalidPoolCandidates = 0;
+            int validLakeComponents = 0;
+
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (visited[x, z])
+                        continue;
+                    ref var seed = ref grid.GetCell(x, z);
+                    if (seed.type != CellType.Water && seed.type != CellType.River)
+                        continue;
+
+                    int size = 0;
+                    bool touchesCl = false;
+                    bool touchesLake = false;
+                    bool allRiver = true;
+                    var q = new Queue<Vector2Int>();
+                    q.Enqueue(new Vector2Int(x, z));
+                    visited[x, z] = true;
+                    while (q.Count > 0)
+                    {
+                        var c = q.Dequeue();
+                        size++;
+                        ref var cell = ref grid.GetCell(c.x, c.y);
+                        if (cell.type != CellType.River)
+                            allRiver = false;
+                        long ck = ((long)c.x << 32) | (uint)c.y;
+                        if (centerlinePacked.Contains(ck))
+                            touchesCl = true;
+                        if (grid.LakeBodyCellsPacked != null && grid.LakeBodyCellsPacked.Contains(ck))
+                            touchesLake = true;
+
+                        foreach (var nb in grid.Neighbors4(c))
+                        {
+                            if (visited[nb.x, nb.y])
+                                continue;
+                            ref var nc = ref grid.GetCell(nb.x, nb.y);
+                            if (nc.type != CellType.Water && nc.type != CellType.River)
+                                continue;
+                            visited[nb.x, nb.y] = true;
+                            q.Enqueue(nb);
+                        }
+                    }
+
+                    if (touchesCl)
+                        touchingCenterline++;
+                    if (touchesLake)
+                    {
+                        touchingLakeBody++;
+                        validLakeComponents++;
+                    }
+                    else if (seed.type == CellType.Water && size < 12)
+                    {
+                        smallDetached++;
+                        invalidPoolCandidates++;
+                    }
+                    else if (allRiver && !touchesCl && size >= 2)
+                        disconnectedRiverLike++;
+                }
+            }
+
+            int maskCells = 0;
+            if (grid.RiverVisualSurfaceMask != null &&
+                grid.RiverVisualSurfaceMask.GetLength(0) == w &&
+                grid.RiverVisualSurfaceMask.GetLength(1) == h)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        if (grid.RiverVisualSurfaceMask[x, z])
+                            maskCells++;
+                    }
+                }
+            }
+
+            int suspectedTerrainMismatch = Mathf.Abs(maskCells - riverCells) > Mathf.Max(48, riverCells / 4) ? 1 : 0;
+            int valid = disconnectedRiverLike == 0 && invalidPoolCandidates <= smallDetached ? 1 : 0;
+
+            UnityEngine.Debug.Log(
+                $"[RiverTopologyAudit] riverCount={riverCount} centerlineCount={riverCount} centerlineCells={centerlineCells} " +
+                $"riverCells={riverCells} waterCells={waterCells} lakeCount={config.lakeCount} lakeBodyPackedCount={lakeBodyPackedCount} " +
+                $"disconnectedRiverLikeWaterCells={disconnectedRiverLike} smallDetachedWaterComponents={smallDetached} " +
+                $"validLakeComponents={validLakeComponents} invalidPoolCandidates={invalidPoolCandidates} " +
+                $"componentsTouchingCenterline={touchingCenterline} componentsTouchingLakeBody={touchingLakeBody} " +
+                $"fordsCount={fordsCount} fordsAlignedToCenterline={fordsNearCenterline} maxCenterlineHeightRise={maxHeightRise:F4} " +
+                $"heightRiseEvents={heightRiseEvents} visualMaskCells={maskCells} suspectedTerrainMismatch={suspectedTerrainMismatch} valid={valid}");
         }
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
@@ -9,6 +10,30 @@ namespace Project.Gameplay.Map.Generator
     public static class WaterMeshBuilder
     {
         private static Transform _waterRoot;
+        static int s_waterVisualLakeCellsSuppressed;
+        static int s_waterVisualLakeFordComponentsPreserved;
+        static int s_riverVisualStrayPoolCellsRemoved;
+        static int s_waterVisualPreservedRealLakeComponents;
+        static int s_waterVisualStrayNearRiverComponentsRemoved;
+        static int s_waterVisualTinyLakeCellsRemoved;
+        static int s_waterVisualFinalMaskCleanupCells;
+        static int s_waterVisualFinalMaskCleanupComponents;
+        static int s_waterVisualFinalMaskPreservedFord;
+        static int s_waterVisualFinalMaskPreservedRealLakes;
+        static int s_waterVisualFinalMaskPreservedRiverVisual;
+        static int s_waterVisualFinalCleanupNearRiverStrays;
+        static int s_waterVisualFinalCleanupComponentsScanned;
+        static int s_waterVisualRootCleanupDestroyedChildren;
+        static int s_waterVisualRootCleanupDestroyedOrphans;
+        static int s_lakeMSFinalCells;
+        static int s_waterMarchingSquaresCreated;
+        static int s_waterChunksCreated;
+        static int s_waterChunkFallbackAllowed;
+        static string s_waterChunkFallbackDisabledReason = "";
+        static int s_waterChunkCleanupDestroyedChunks;
+        static int s_waterChunkCleanupDestroyedMarchingSquares;
+        static int s_waterChunkCleanupDestroyedRiverSurface;
+        static int s_waterChunkCleanupDestroyedWaterPlane;
         // Solo para la fase actual de BuildWaterMeshes: centros de spawn (en celdas) para validación de conectividad.
         static List<Vector2Int> s_spawnCellsForConnectivity;
         public static List<Vector3> DebugRibbonPathPointsWorld { get; } = new List<Vector3>();
@@ -31,6 +56,329 @@ namespace Project.Gameplay.Map.Generator
         static float _riverVisualHalfMin;
         static float _riverVisualHalfMax;
 
+        /// <summary>Valores seguros si el clone runtime no trae campos nuevos (0 / sin serializar).</summary>
+        static void ApplyWaterMeshBuilderRuntimeDefaults(MapGenConfig config)
+        {
+            if (config == null)
+                return;
+            if (config.lakeShoreVisualWidth <= 0.01f)
+                config.lakeShoreVisualWidth = 7f;
+            if (config.riverShoreVisualWidth <= 0.01f)
+                config.riverShoreVisualWidth = 1.55f;
+            if (config.riverVisualRibbonFullWidthCellsMain <= 0.01f)
+                config.riverVisualRibbonFullWidthCellsMain = 2.75f;
+            if (config.riverVisualRibbonFullWidthCellsTributary <= 0.01f)
+                config.riverVisualRibbonFullWidthCellsTributary = 1.55f;
+            if (config.riverSurfaceMeshUvScale <= 1e-5f)
+                config.riverSurfaceMeshUvScale = 0.042f;
+            if (config.riverVisualMinSurfacePieceLengthCells <= 0)
+                config.riverVisualMinSurfacePieceLengthCells = 18;
+            if (config.riverVisualMinSurfacePieceAreaCells <= 0)
+                config.riverVisualMinSurfacePieceAreaCells = 12;
+            if (config.riverVisualMainCorridorKeepDistanceCells <= 0)
+                config.riverVisualMainCorridorKeepDistanceCells = 3;
+            if (config.riverVisualFordKeepDistanceCells <= 0)
+                config.riverVisualFordKeepDistanceCells = 5;
+            if (config.riverVisualMaskKeepFordDistanceCells <= 0)
+                config.riverVisualMaskKeepFordDistanceCells = config.riverVisualFordKeepDistanceCells;
+            if (config.riverVisualMaskRemoveDetachedPatchMaxCells <= 0)
+                config.riverVisualMaskRemoveDetachedPatchMaxCells = 60;
+            if (config.lakeVisualRealLakeMinCells <= 0)
+                config.lakeVisualRealLakeMinCells = 60;
+            if (config.lakeMSMinComponentCells <= 0)
+                config.lakeMSMinComponentCells = config.lakeVisualRealLakeMinCells;
+            if (config.lakeMSRemoveNearRiverDistanceCells <= 0)
+                config.lakeMSRemoveNearRiverDistanceCells = 5;
+            if (!config.riverVisualFinalCleanupEnabled && config.riverVisualMaskCleanupEnabled)
+                config.riverVisualFinalCleanupEnabled = true;
+            if (config.riverVisualFinalCleanupMaxPatchCells <= 0)
+                config.riverVisualFinalCleanupMaxPatchCells = 80;
+            if (config.riverVisualFinalCleanupNearRiverCells <= 0)
+                config.riverVisualFinalCleanupNearRiverCells = 5;
+            if (config.riverVisualFinalCleanupKeepFordDistanceCells <= 0)
+                config.riverVisualFinalCleanupKeepFordDistanceCells = config.riverVisualMaskKeepFordDistanceCells;
+        }
+
+        /// <summary>Diagnóstico compacto por malla/objeto de agua (solo debug).</summary>
+        public static void LogWaterVisualObject(
+            MapGenConfig config,
+            string name,
+            string kind,
+            int riverIndex,
+            int verts,
+            int tris,
+            Bounds bounds,
+            int intersectsRiverVisualMask,
+            int nearRiverVisualMaskCells,
+            int nearFord,
+            int isMainRiver,
+            int isTributary,
+            int culled,
+            string note = "")
+        {
+            if (config == null || (!config.debugLogs && !config.debugHydrologyNetwork))
+                return;
+            string noteSuffix = string.IsNullOrEmpty(note) ? "" : $" note={note}";
+            Debug.Log(
+                $"[WaterVisualObject] name={name} kind={kind} riverIndex={riverIndex} verts={verts} tris={tris} " +
+                $"boundsMin=({bounds.min.x:F1},{bounds.min.y:F1},{bounds.min.z:F1}) boundsMax=({bounds.max.x:F1},{bounds.max.y:F1},{bounds.max.z:F1}) " +
+                $"intersectsRiverVisualMask={intersectsRiverVisualMask} nearRiverVisualMaskCells={nearRiverVisualMaskCells} " +
+                $"nearFord={nearFord} isMainRiver={isMainRiver} isTributary={isTributary} culled={culled}{noteSuffix}");
+        }
+
+        /// <summary>Celdas de máscara visual del río que intersectan o rodean el AABB mundo del objeto.</summary>
+        public static void ComputeWaterVisualBoundsMaskStats(
+            GridSystem grid,
+            Bounds worldBounds,
+            int nearCellRadius,
+            out int intersectsRiverVisualMask,
+            out int nearRiverVisualMaskCells)
+        {
+            intersectsRiverVisualMask = 0;
+            nearRiverVisualMaskCells = 0;
+            bool[,] rivMask = grid?.RiverVisualSurfaceMask;
+            if (rivMask == null || grid.Width <= 0 || grid.Height <= 0)
+                return;
+
+            float cs = Mathf.Max(1e-4f, grid.CellSizeWorld);
+            Vector3 origin = grid.Origin;
+            int gw = grid.Width;
+            int gh = grid.Height;
+            int x0 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.min.x - origin.x) / cs), 0, gw - 1);
+            int x1 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.max.x - origin.x) / cs), 0, gw - 1);
+            int z0 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.min.z - origin.z) / cs), 0, gh - 1);
+            int z1 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.max.z - origin.z) / cs), 0, gh - 1);
+            if (x1 < x0)
+            {
+                int t = x0;
+                x0 = x1;
+                x1 = t;
+            }
+
+            if (z1 < z0)
+            {
+                int t = z0;
+                z0 = z1;
+                z1 = t;
+            }
+
+            int expand = Mathf.Max(0, nearCellRadius);
+            int ex0 = Mathf.Max(0, x0 - expand);
+            int ex1 = Mathf.Min(gw - 1, x1 + expand);
+            int ez0 = Mathf.Max(0, z0 - expand);
+            int ez1 = Mathf.Min(gh - 1, z1 + expand);
+            int insideMask = 0;
+            int ringMask = 0;
+            for (int z = ez0; z <= ez1; z++)
+            {
+                for (int x = ex0; x <= ex1; x++)
+                {
+                    if (!rivMask[x, z])
+                        continue;
+                    if (x >= x0 && x <= x1 && z >= z0 && z <= z1)
+                        insideMask++;
+                    else
+                        ringMask++;
+                }
+            }
+
+            intersectsRiverVisualMask = insideMask > 0 ? 1 : 0;
+            nearRiverVisualMaskCells = insideMask + ringMask;
+        }
+
+        public static int ComputeNearFordFromWorldBounds(GridSystem grid, Bounds worldBounds, int fordDistCells)
+        {
+            if (grid == null || fordDistCells <= 0)
+                return 0;
+            float cs = Mathf.Max(1e-4f, grid.CellSizeWorld);
+            Vector3 origin = grid.Origin;
+            int gw = grid.Width;
+            int gh = grid.Height;
+            int x0 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.min.x - origin.x) / cs), 0, gw - 1);
+            int x1 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.max.x - origin.x) / cs), 0, gw - 1);
+            int z0 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.min.z - origin.z) / cs), 0, gh - 1);
+            int z1 = Mathf.Clamp(Mathf.FloorToInt((worldBounds.max.z - origin.z) / cs), 0, gh - 1);
+            int stepX = Mathf.Max(1, (x1 - x0) / 6);
+            int stepZ = Mathf.Max(1, (z1 - z0) / 6);
+            for (int z = z0; z <= z1; z += stepZ)
+            {
+                for (int x = x0; x <= x1; x += stepX)
+                {
+                    if (GridCellNearFordRiverChebyshev(grid, x, z, fordDistCells))
+                        return 1;
+                }
+            }
+
+            return 0;
+        }
+
+        static bool IsWaterVisualOrphanName(string objectName)
+        {
+            if (string.IsNullOrEmpty(objectName))
+                return false;
+            if (objectName == "Water")
+                return true;
+            if (objectName == "WaterPlane" || objectName == "Water_MarchingSquares")
+                return true;
+            return objectName.StartsWith("Water_") ||
+                   objectName.StartsWith("WaterChunk_") ||
+                   objectName.StartsWith("RiverSurface_") ||
+                   objectName.StartsWith("Water_RiverSurface");
+        }
+
+        static void TallyWaterVisualOrphanDestroy(string objectName)
+        {
+            if (string.IsNullOrEmpty(objectName))
+                return;
+            if (objectName.StartsWith("WaterChunk_"))
+                s_waterChunkCleanupDestroyedChunks++;
+            else if (objectName == "Water_MarchingSquares")
+                s_waterChunkCleanupDestroyedMarchingSquares++;
+            else if (objectName.StartsWith("Water_RiverSurface") || objectName.StartsWith("RiverSurface_"))
+                s_waterChunkCleanupDestroyedRiverSurface++;
+            else if (objectName == "WaterPlane")
+                s_waterChunkCleanupDestroyedWaterPlane++;
+        }
+
+        static bool RiversRenderedBySurfaceMesh(MapGenConfig config)
+        {
+            return config != null &&
+                config.riverVisualUseContinuousMesh &&
+                config.riverVisualUseRiverSurfaceMeshStrip &&
+                !config.riverVisualRenderRiverAsMarchingSquaresCells;
+        }
+
+        static void LogWaterRenderMode(
+            bool renderRibbonMesh,
+            bool riversRenderedBySurface,
+            bool riverRibbonsOk,
+            bool marchingSquaresOk,
+            bool msIncludesRiverCells)
+        {
+            Debug.Log(
+                $"[WaterRenderMode] riversBySurfaceMesh={(renderRibbonMesh && riversRenderedBySurface && riverRibbonsOk ? 1 : 0)} " +
+                $"lakesByMarchingSquares={(marchingSquaresOk ? 1 : 0)} msIncludesRiver={(msIncludesRiverCells ? 1 : 0)} " +
+                $"waterMarchingSquaresCreated={s_waterMarchingSquaresCreated} lakeMSFinalCells={s_lakeMSFinalCells} " +
+                $"waterChunksCreated={s_waterChunksCreated} waterChunkFallbackAllowed={s_waterChunkFallbackAllowed} " +
+                $"waterChunkFallbackDisabledReason={s_waterChunkFallbackDisabledReason} " +
+                $"riverMeshCount={RiverSurfaceMeshBuilder.LastMeshCount} riverMeshVerts={RiverSurfaceMeshBuilder.LastVertexSum} " +
+                $"riverMeshTris={RiverSurfaceMeshBuilder.LastTriSum}");
+        }
+
+        static void LogWaterChunkFallbackAudit(
+            MapGenConfig config,
+            GridSystem grid,
+            bool riversRenderedBySurface,
+            bool marchingSquaresOk,
+            bool riverSurfaceOk,
+            bool willEnterChunkFallback,
+            int waterCellCount)
+        {
+            if (config == null)
+                return;
+            int lakeBody = grid?.LakeBodyCellsPacked != null ? grid.LakeBodyCellsPacked.Count : 0;
+            string surfaceMode = riversRenderedBySurface ? "RiverSurfaceMesh" : "legacy_or_ms";
+            Debug.Log(
+                $"[WaterChunkFallbackAudit] riverSurfaceMode={surfaceMode} lakeCount={config.lakeCount} " +
+                $"lakeBodyPackedCount={lakeBody} marchingSquaresOk={(marchingSquaresOk ? 1 : 0)} " +
+                $"riverSurfaceOk={(riverSurfaceOk ? 1 : 0)} willEnterChunkFallback={(willEnterChunkFallback ? 1 : 0)} " +
+                $"waterCellCount={waterCellCount}");
+        }
+
+        static void CollectWaterVisualOrphans(Transform node, List<GameObject> acc, Transform excludeRoot)
+        {
+            if (node == null)
+                return;
+            if (IsWaterVisualOrphanName(node.name))
+            {
+                if (excludeRoot != null && node == excludeRoot)
+                    return;
+                if (excludeRoot == null || !node.IsChildOf(excludeRoot))
+                {
+                    acc.Add(node.gameObject);
+                    return;
+                }
+            }
+
+            for (int i = 0; i < node.childCount; i++)
+                CollectWaterVisualOrphans(node.GetChild(i), acc, excludeRoot);
+        }
+
+        static void DestroyWaterVisualGameObject(GameObject go)
+        {
+            if (go == null)
+                return;
+            if (Application.isPlaying)
+                Object.Destroy(go);
+            else
+                Object.DestroyImmediate(go);
+        }
+
+        /// <summary>Destruye raíz Water previa y meshes huérfanos Water_* / RiverSurface_* en escena.</summary>
+        static void CleanupWaterVisualRootsAndOrphans(MapGenConfig config)
+        {
+            s_waterVisualRootCleanupDestroyedChildren = 0;
+            s_waterVisualRootCleanupDestroyedOrphans = 0;
+            s_waterChunkCleanupDestroyedChunks = 0;
+            s_waterChunkCleanupDestroyedMarchingSquares = 0;
+            s_waterChunkCleanupDestroyedRiverSurface = 0;
+            s_waterChunkCleanupDestroyedWaterPlane = 0;
+            string rootName = "none";
+            Transform oldRoot = _waterRoot;
+            if (oldRoot != null)
+            {
+                rootName = oldRoot.name;
+                s_waterVisualRootCleanupDestroyedChildren = oldRoot.childCount;
+                for (int i = 0; i < oldRoot.childCount; i++)
+                    TallyWaterVisualOrphanDestroy(oldRoot.GetChild(i).name);
+            }
+
+            var orphans = new List<GameObject>(16);
+            var scene = SceneManager.GetActiveScene();
+            if (scene.IsValid())
+            {
+                var roots = scene.GetRootGameObjects();
+                for (int i = 0; i < roots.Length; i++)
+                    CollectWaterVisualOrphans(roots[i].transform, orphans, oldRoot);
+            }
+
+            if (oldRoot != null)
+            {
+                DestroyWaterVisualGameObject(oldRoot.gameObject);
+                _waterRoot = null;
+            }
+
+            for (int i = 0; i < orphans.Count; i++)
+            {
+                GameObject go = orphans[i];
+                if (go == null)
+                    continue;
+                TallyWaterVisualOrphanDestroy(go.name);
+                DestroyWaterVisualGameObject(go);
+                s_waterVisualRootCleanupDestroyedOrphans++;
+            }
+
+            bool shouldLog = config != null &&
+                (config.debugLogs || config.debugHydrologyNetwork ||
+                 s_waterVisualRootCleanupDestroyedChildren > 0 ||
+                 s_waterVisualRootCleanupDestroyedOrphans > 0 ||
+                 s_waterChunkCleanupDestroyedChunks > 0 ||
+                 s_waterChunkCleanupDestroyedMarchingSquares > 0 ||
+                 s_waterChunkCleanupDestroyedRiverSurface > 0 ||
+                 s_waterChunkCleanupDestroyedWaterPlane > 0);
+            if (shouldLog)
+            {
+                Debug.Log(
+                    $"[WaterVisualRootCleanup] rootName={rootName} destroyedChildren={s_waterVisualRootCleanupDestroyedChildren} " +
+                    $"destroyedOrphans={s_waterVisualRootCleanupDestroyedOrphans}");
+                Debug.Log(
+                    $"[WaterChunkCleanup] destroyedChunks={s_waterChunkCleanupDestroyedChunks} " +
+                    $"destroyedMarchingSquares={s_waterChunkCleanupDestroyedMarchingSquares} " +
+                    $"destroyedRiverSurface={s_waterChunkCleanupDestroyedRiverSurface} " +
+                    $"destroyedWaterPlane={s_waterChunkCleanupDestroyedWaterPlane}");
+            }
+        }
+
         /// <summary>Parámetros: config.waterChunkSize, config.waterHeight01, config.waterSurfaceOffset. material puede ser null (fallback).</summary>
         public static GameObject BuildWaterMeshes(
             GridSystem grid,
@@ -41,6 +389,21 @@ namespace Project.Gameplay.Map.Generator
             List<Road> strategicRoads = null)
         {
             if (grid == null || config == null) return null;
+            ApplyWaterMeshBuilderRuntimeDefaults(config);
+            RiverSurfaceMeshBuilder.ResetStats();
+            s_waterVisualLakeCellsSuppressed = 0;
+            s_waterVisualLakeFordComponentsPreserved = 0;
+            s_riverVisualStrayPoolCellsRemoved = 0;
+            s_waterVisualPreservedRealLakeComponents = 0;
+            s_waterVisualStrayNearRiverComponentsRemoved = 0;
+            s_waterVisualTinyLakeCellsRemoved = 0;
+            s_waterVisualFinalMaskCleanupCells = 0;
+            s_waterVisualFinalMaskCleanupComponents = 0;
+            s_waterVisualFinalMaskPreservedFord = 0;
+            s_waterVisualFinalMaskPreservedRealLakes = 0;
+            s_waterVisualFinalMaskPreservedRiverVisual = 0;
+            s_waterVisualFinalCleanupNearRiverStrays = 0;
+            s_waterVisualFinalCleanupComponentsScanned = 0;
             s_spawnCellsForConnectivity = spawnCells;
             DebugWaterCrossingPositionsWorld.Clear();
             DebugRiverFordFootprintCentersWorld.Clear();
@@ -48,26 +411,27 @@ namespace Project.Gameplay.Map.Generator
             DebugRiverFordFailedCenterPositionsWorld.Clear();
             DebugLastWaterInteriorDistanceGrid = null;
 
-            if (_waterRoot != null)
-            {
-                if (Application.isPlaying) Object.Destroy(_waterRoot.gameObject);
-                else Object.DestroyImmediate(_waterRoot.gameObject);
-                _waterRoot = null;
-            }
+            CleanupWaterVisualRootsAndOrphans(config);
 
             int chunkSize = Mathf.Max(1, config.waterChunkSize);
             float terrainY = config.terrainHeightWorld > 0f ? config.terrainHeightWorld : 50f;
             // Offset Y pequeño para evitar z-fighting sin dejar el río visiblemente "suspendido".
             float y = grid.Origin.y + config.waterHeight01 * terrainY + Mathf.Max(config.waterSurfaceOffset, 0.02f);
-            float cellSize = grid.CellSizeWorld;
             int w = grid.Width;
             int h = grid.Height;
+            float cellSize = grid.CellSizeWorld;
+            if (config.riverVisualUseRiverSurfaceMeshStrip)
+                RiverSurfaceMeshBuilder.EnsureRiverVisualSurfaceCache(grid, config);
             int waterCellCount = 0;
+            int lakeGridCells = 0;
+            int riverGridCells = 0;
             for (int gx = 0; gx < w; gx++)
                 for (int gz = 0; gz < h; gz++)
                 {
                     var t = grid.GetCell(gx, gz).type;
                     if (t == CellType.Water || t == CellType.River) waterCellCount++;
+                    if (t == CellType.Water) lakeGridCells++;
+                    else if (t == CellType.River) riverGridCells++;
                 }
 
             // Siempre capa 0 (Default) para que la cámara muestre el agua sin tocar Culling Mask.
@@ -81,27 +445,132 @@ namespace Project.Gameplay.Map.Generator
             _waterRoot.localScale = Vector3.one;
             _waterRoot.gameObject.layer = waterLayer;
             _waterRoot.gameObject.SetActive(true);
-            bool renderRibbonMesh = config.debugRenderRiverRibbonMesh && config.riverVisualUseContinuousMesh;
+            bool renderRibbonMesh =
+                (config.riverVisualUseContinuousMesh && !config.riverVisualRenderRiverAsMarchingSquaresCells) ||
+                (config.debugRenderRiverRibbonMesh && config.riverVisualUseContinuousMesh);
+            bool riversRenderedBySurface = RiversRenderedBySurfaceMesh(config);
+            bool waterChunkFallbackAllowed = !riversRenderedBySurface;
+            s_waterChunksCreated = 0;
+            s_waterChunkFallbackAllowed = waterChunkFallbackAllowed ? 1 : 0;
+            s_waterChunkFallbackDisabledReason = riversRenderedBySurface ? "river_surface_mode" : "";
+            bool msIncludesRiverCells = !renderRibbonMesh;
+            int riverCenterlinesCount = grid.RiverCenterlinesCellSpace != null ? grid.RiverCenterlinesCellSpace.Count : 0;
+            Debug.Log(
+                $"[RiverRibbonRuntime] renderRiverAsMS={(config.riverVisualRenderRiverAsMarchingSquaresCells ? 1 : 0)} " +
+                $"useContinuousMesh={(config.riverVisualUseContinuousMesh ? 1 : 0)} debugRibbon={(config.debugRenderRiverRibbonMesh ? 1 : 0)} " +
+                $"mainFullWidth={config.riverVisualRibbonFullWidthCellsMain:F2} tributaryFullWidth={config.riverVisualRibbonFullWidthCellsTributary:F2} " +
+                $"riverShoreVisualWidth={config.riverShoreVisualWidth:F2} lakeShoreVisualWidth={config.lakeShoreVisualWidth:F2} " +
+                $"riverCenterlinesCount={riverCenterlinesCount}");
+            Debug.Log(
+                $"[WaterMeshMask] riverRibbonActive={(renderRibbonMesh ? 1 : 0)} msIncludesRiver={(msIncludesRiverCells ? 1 : 0)} " +
+                $"waterCells={lakeGridCells + riverGridCells} riverCells={riverGridCells} lakeCells={lakeGridCells}");
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (config.debugLogs)
-                Debug.Log($"[WaterMesh] mode={(renderRibbonMesh ? "MarchingSquaresPlusRibbonDebug" : "MarchingSquaresOnly")}");
+            {
+                string mode = !renderRibbonMesh
+                    ? "MarchingSquaresAllWater"
+                    : (config.riverVisualUseRiverSurfaceMeshStrip ? "LakesMS_RiverSurfaceStrip" : "LakesMS_RiverRibbonLegacy");
+                Debug.Log($"[WaterMesh] mode={mode}");
+            }
 #endif
-            // Marching squares: render principal del agua (ríos + lagos). Solo deja lagos cuando ribbon debug está explícitamente activo.
+            s_lakeMSFinalCells = 0;
+            s_waterMarchingSquaresCreated = 0;
+            // Marching squares: solo lagos reales cuando el río va por RiverSurfaceMesh.
             bool marchingSquaresOk = false;
             if (config.waterRoundedEdges)
                 marchingSquaresOk = BuildRoundedWaterMarchingSquares(
                     _waterRoot, grid, config, sharedWaterMat, y, cellSize, waterLayer, renderRibbonMesh,
                     strategicCities, strategicRoads);
+            s_waterMarchingSquaresCreated = marchingSquaresOk ? 1 : 0;
 
             bool riverRibbonsOk = false;
             if (renderRibbonMesh)
             {
-                float riverY = y + Mathf.Max(0f, config.riverRibbonVerticalLiftWorld);
-                riverRibbonsOk = BuildRiverRibbonMeshes(_waterRoot, grid, config, sharedWaterMat, riverY, cellSize, waterLayer);
+                float riverY = y + Mathf.Max(0f, config.riverRibbonVerticalLiftWorld) +
+                    Mathf.Max(0f, config.riverRibbonAntiZFightYOffsetWorld);
+                bool useSurfaceStrip = config.riverVisualUseRiverSurfaceMeshStrip;
+                if (useSurfaceStrip)
+                    riverY += Mathf.Max(0f, config.riverSurfaceMeshExtraYOffsetWorld);
+
+                if (useSurfaceStrip)
+                {
+                    riverRibbonsOk = RiverSurfaceMeshBuilder.BuildRiverSurfaces(
+                        _waterRoot,
+                        grid,
+                        config,
+                        sharedWaterMat,
+                        riverY,
+                        cellSize,
+                        waterLayer);
+                }
+                else
+                {
+                    riverRibbonsOk = BuildRiverRibbonMeshes(_waterRoot, grid, config, sharedWaterMat, riverY, cellSize, waterLayer);
+                }
+
+            }
+
+            bool willEnterChunkFallback = waterChunkFallbackAllowed && !marchingSquaresOk;
+            LogWaterChunkFallbackAudit(
+                config,
+                grid,
+                riversRenderedBySurface,
+                marchingSquaresOk,
+                riverRibbonsOk,
+                willEnterChunkFallback,
+                waterCellCount);
+
+            if (riversRenderedBySurface)
+            {
+                if (config.debugLogs || config.debugHydrologyNetwork)
+                {
+                    Debug.Log("[WaterChunkFallbackDisabled] reason=river_surface_mode chunksCreated=0");
+                    if (!marchingSquaresOk && config.lakeCount > 0)
+                    {
+                        int lakeBody = grid.LakeBodyCellsPacked != null ? grid.LakeBodyCellsPacked.Count : 0;
+                        if (lakeBody > 0)
+                        {
+                            Debug.LogWarning(
+                                "[WaterMesh] Lake MS no se generó en modo RiverSurfaceMesh; fallback WaterChunk desactivado.");
+                        }
+                    }
+                }
+
+                LogWaterRenderMode(renderRibbonMesh, riversRenderedBySurface, riverRibbonsOk, marchingSquaresOk, msIncludesRiverCells);
+                return _waterRoot != null ? _waterRoot.gameObject : null;
+            }
+
+            if (config.debugLogs || config.debugHydrologyNetwork)
+            {
+                var reason = new StringBuilder(48);
+                if (s_riverVisualStrayPoolCellsRemoved > 0)
+                    reason.Append("near_river_stray_pool;");
+                if (s_waterVisualTinyLakeCellsRemoved > 0)
+                    reason.Append("tiny_lake_ms;");
+                if (reason.Length == 0)
+                    reason.Append("none");
+                int removedRiverPieces =
+                    RiverSurfaceMeshBuilder.DetachedRiverSurfaceSkips +
+                    RiverSurfaceMeshBuilder.ShortRiverSurfaceSkips +
+                    RiverSurfaceMeshBuilder.RiverSurfaceFragmentCullCount;
+                Debug.Log(
+                    $"[WaterVisualPatchCleanup] removedRiverSurfacePieces={removedRiverPieces} " +
+                    $"riverSurfaceFragmentCull={RiverSurfaceMeshBuilder.RiverSurfaceFragmentCullCount} " +
+                    $"rootCleanupOrphans={s_waterVisualRootCleanupDestroyedOrphans} " +
+                    $"removedLakeMSPatches={s_waterVisualLakeCellsSuppressed} " +
+                    $"strayNearRiverComponents={s_waterVisualStrayNearRiverComponentsRemoved} " +
+                    $"preservedFordPatches={s_waterVisualLakeFordComponentsPreserved} " +
+                    $"preservedRealLakes={s_waterVisualPreservedRealLakeComponents} " +
+                    $"visualMaskCleanupCells={s_waterVisualFinalMaskCleanupCells} visualMaskCleanupComponents={s_waterVisualFinalMaskCleanupComponents} " +
+                    $"nearRiverStrays={s_waterVisualFinalCleanupNearRiverStrays} componentsScanned={s_waterVisualFinalCleanupComponentsScanned} " +
+                    $"reason={reason}");
             }
 
             if (marchingSquaresOk)
+            {
+                LogWaterRenderMode(renderRibbonMesh, riversRenderedBySurface, riverRibbonsOk, marchingSquaresOk, msIncludesRiverCells);
                 return _waterRoot.gameObject;
+            }
 
             // Post-proceso de máscara (rápido): suaviza Water/River -> bool mask para reducir dientes sin MS.
             bool[,] smoothMask = null;
@@ -225,6 +694,17 @@ namespace Project.Gameplay.Map.Generator
                 if (config.debugLogs)
                     Debug.Log($"Fase9 WaterMesh: {waterCellCount} celdas agua, {chunkCount} chunks, Y={y:F2}, material={matInfo}, totalVerts={totalVerts}, totalTris={totalTris}. Esperado ~{expectedTris} tris (2 por celda agua).");
             }
+
+            s_waterChunksCreated = chunkCount;
+            if (chunkCount > 0 && !marchingSquaresOk)
+            {
+                Debug.LogWarning(
+                    "[WaterMesh] Agua en modo CUADRÍCULA (fallback): marching squares no generó la malla principal. " +
+                    "Revisa en consola (más arriba) avisos que empiecen por «Fase9 WaterMesh (MS):». " +
+                    "Causas típicas: bbox de agua enorme (supera waterMsMaxCornerSamples), iso sin cruces (0 tris), o waterRoundedEdges desactivado en plantilla.");
+            }
+
+            LogWaterRenderMode(renderRibbonMesh, riversRenderedBySurface, riverRibbonsOk, marchingSquaresOk, msIncludesRiverCells);
             return _waterRoot != null ? _waterRoot.gameObject : null;
         }
 
@@ -309,8 +789,7 @@ namespace Project.Gameplay.Map.Generator
                 _riverVisualHalfMax = float.MinValue;
             }
 
-            float halfW = config.riverVisualMeshHalfWidth - Mathf.Max(0f, config.riverVisualBankInset);
-            halfW = Mathf.Max(0.08f, halfW);
+            float inset = Mathf.Max(0f, config.riverVisualBankInset);
 
             float sampleW = Mathf.Max(0.06f, config.riverVisualSampleSpacing);
             float csSafe = Mathf.Max(0.0001f, cellSize);
@@ -328,6 +807,15 @@ namespace Project.Gameplay.Map.Generator
                 var cellPath = grid.RiverCenterlinesCellSpace[riverIndex];
                 if (cellPath == null || cellPath.Count < 2)
                     continue;
+
+                float fullCellsW = riverIndex == 0
+                    ? config.riverVisualRibbonFullWidthCellsMain
+                    : (config.riverVisualRibbonFullWidthCellsTributary > 0.01f
+                        ? config.riverVisualRibbonFullWidthCellsTributary
+                        : config.riverVisualRibbonFullWidthCellsMain);
+                float halfW = fullCellsW > 0.01f
+                    ? Mathf.Max(0.08f, fullCellsW * 0.5f * cellSize - inset)
+                    : Mathf.Max(0.08f, config.riverVisualMeshHalfWidth - inset);
 
                 int sourcePoints = cellPath.Count;
                 var ribbonCell = new List<Vector2>(cellPath);
@@ -440,7 +928,23 @@ namespace Project.Gameplay.Map.Generator
 
                                 ApplyRibbonCenterlineLateralJitter(ribbonForMesh, waterY, config, riverIndex, sub);
 
-                                if (TryBuildRiverRibbonStripMesh(parent, ribbonForMesh, halfW, waterY, mat, waterLayer, cellSize, riverIndex, sub, config, catmullStepWorld, $"Water_River_{riverIndex}_{sub}"))
+                                string ribbonGoName = riverIndex == 0
+                                    ? $"Water_RiverRibbon_Main_{sub}"
+                                    : $"Water_RiverRibbon_Tributary_{riverIndex}_{sub}";
+                                if (TryBuildRiverRibbonStripMesh(
+                                        parent,
+                                        ribbonForMesh,
+                                        halfW,
+                                        waterY,
+                                        mat,
+                                        waterLayer,
+                                        cellSize,
+                                        riverIndex,
+                                        sub,
+                                        config,
+                                        catmullStepWorld,
+                                        ribbonGoName,
+                                        fullCellsW))
                                 {
                                     any = true;
                                     segmentCount++;
@@ -1025,7 +1529,20 @@ namespace Project.Gameplay.Map.Generator
         }
 
         /// <summary>Strip por segmento: tangente por arista, lateral estable (evita flip 180°) y semiancho opcionalmente modulado con ruido suave.</summary>
-        private static bool TryBuildRiverRibbonStripMesh(Transform parent, List<Vector3> pts, float halfWidthWorld, float waterY, Material mat, int waterLayer, float cellSize, int riverIndex, int segmentIndex, MapGenConfig config, float ribbonResampleStepWorld, string objectName)
+        private static bool TryBuildRiverRibbonStripMesh(
+            Transform parent,
+            List<Vector3> pts,
+            float halfWidthWorld,
+            float waterY,
+            Material mat,
+            int waterLayer,
+            float cellSize,
+            int riverIndex,
+            int segmentIndex,
+            MapGenConfig config,
+            float ribbonResampleStepWorld,
+            string objectName,
+            float ribbonFullWidthCellsForLog)
         {
             if (pts == null || pts.Count < 2)
                 return false;
@@ -1236,6 +1753,9 @@ namespace Project.Gameplay.Map.Generator
             mr.shadowCastingMode = ShadowCastingMode.Off;
             mr.receiveShadows = false;
             mr.renderingLayerMask = 1u;
+            Debug.Log(
+                $"[RiverRibbonMesh] riverId={riverIndex} class=MeshRenderer points={pts.Count} verts={verts.Count} tris={tris.Count / 3} " +
+                $"fullWidthCells={ribbonFullWidthCellsForLog:F2} yOffset={waterY:F3} material={(mat != null ? mat.name : "null")} enabled={mr.enabled}");
             return true;
         }
 
@@ -1396,8 +1916,19 @@ namespace Project.Gameplay.Map.Generator
             return Mathf.Clamp(acc / Mathf.Max(1e-4f, wAcc), 0.45f, 1.85f);
         }
 
-        private static void ApplyRiverLakeVisualBlendField(float[,] field, int sw, int sh, int sampleX0, int sampleZ0, int effectiveSubdiv, GridSystem grid, MapGenConfig config)
+        private static void ApplyRiverLakeVisualBlendField(
+            float[,] field,
+            int sw,
+            int sh,
+            int sampleX0,
+            int sampleZ0,
+            int effectiveSubdiv,
+            GridSystem grid,
+            MapGenConfig config,
+            bool marchingSquaresLakesOnlyRibbon)
         {
+            if (marchingSquaresLakesOnlyRibbon)
+                return;
             if (config == null || config.riverLakeVisualBlend <= 1e-5f) return;
             float blend = Mathf.Clamp01(config.riverLakeVisualBlend) * 0.5f;
             for (int z = 0; z < sh; z++)
@@ -1446,11 +1977,19 @@ namespace Project.Gameplay.Map.Generator
         {
             if (config == null || distGrid == null || Mathf.Abs(config.waterDepthColorStrength) < 1e-5f)
                 return;
-            float norm = Mathf.Max(1f, config.shoreVisualWidth);
+            float normLake = Mathf.Max(1f, config.lakeShoreVisualWidth > 0.01f ? config.lakeShoreVisualWidth : config.shoreVisualWidth);
+            float normRiver = Mathf.Max(1f, config.riverShoreVisualWidth > 0.01f ? config.riverShoreVisualWidth : config.shoreVisualWidth);
             float powK = Mathf.Max(0.35f, config.shoreVisualBlend);
             float str = Mathf.Clamp01(config.waterDepthColorStrength);
+            float cs = Mathf.Max(1e-5f, grid.CellSizeWorld);
+            int gw = grid.Width;
+            int gh = grid.Height;
             for (int i = 0; i < uvs.Count && i < verts.Count; i++)
             {
+                int gx = Mathf.Clamp(Mathf.FloorToInt((verts[i].x - grid.Origin.x) / cs), 0, gw - 1);
+                int gz = Mathf.Clamp(Mathf.FloorToInt((verts[i].z - grid.Origin.z) / cs), 0, gh - 1);
+                var ct = grid.GetCell(gx, gz).type;
+                float norm = ct == CellType.River ? normRiver : normLake;
                 float depth01 = SampleInteriorDistance01(verts[i], distGrid, grid, grid.CellSizeWorld, norm);
                 depth01 = Mathf.Pow(Mathf.Clamp01(depth01), 1f / powK);
                 depth01 = depth01 * depth01 * (3f - 2f * depth01); // smoothstep
@@ -3818,6 +4357,978 @@ namespace Project.Gameplay.Map.Generator
                 cols[i].isTrigger = true;
         }
 
+        /// <summary>
+        /// Solo visual MS lagos: elimina islas Water pequeñas y charcos cerca del río (no toca CellData).
+        /// </summary>
+        static bool ComponentWithinChebyshevOfAnyRiverCell(
+            List<Vector2Int> comp,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            int maxDist)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
+            int d0 = Mathf.Max(1, maxDist);
+            for (int ci = 0; ci < comp.Count; ci++)
+            {
+                int gx0 = rectMinX + comp[ci].x;
+                int gz0 = rectMinZ + comp[ci].y;
+                for (int dz = -d0; dz <= d0; dz++)
+                {
+                    for (int dx = -d0; dx <= d0; dx++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > d0)
+                            continue;
+                        int gx = gx0 + dx;
+                        int gy = gz0 + dz;
+                        if ((uint)gx < (uint)w && (uint)gy < (uint)h && grid.GetCell(gx, gy).type == CellType.River)
+                            return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        public static bool GridCellNearFordRiverChebyshev(GridSystem grid, int gx0, int gz0, int fordDistCells)
+        {
+            int d0 = Mathf.Max(1, fordDistCells);
+            int w = grid.Width;
+            int h = grid.Height;
+            for (int dz = -d0; dz <= d0; dz++)
+            {
+                for (int dx = -d0; dx <= d0; dx++)
+                {
+                    if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > d0)
+                        continue;
+                    int gx = gx0 + dx;
+                    int gz = gz0 + dz;
+                    if ((uint)gx >= (uint)w || (uint)gz >= (uint)h)
+                        continue;
+                    ref var c = ref grid.GetCell(gx, gz);
+                    if (c.type == CellType.River && c.riverFord)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static void ComputeLakeMsCoarseMaskDiagnostics(
+            bool[,] coarseMask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            MapGenConfig cfg,
+            out int connectedToMainRiver,
+            out int nearFord,
+            out int nearLake)
+        {
+            connectedToMainRiver = 0;
+            nearFord = 0;
+            nearLake = 0;
+            if (coarseMask == null || grid == null)
+                return;
+            int riverCheb = cfg != null ? Mathf.Clamp(cfg.riverVisualStrayPoolRiverChebyshevCells, 1, 12) : 4;
+            int fordD = cfg != null ? Mathf.Max(1, cfg.riverVisualFordKeepDistanceCells) : 5;
+            for (int lz = 0; lz < rectH; lz++)
+            {
+                for (int lx = 0; lx < rectW; lx++)
+                {
+                    if (!coarseMask[lx, lz])
+                        continue;
+                    int gx = rectMinX + lx;
+                    int gz = rectMinZ + lz;
+                    if (!grid.InBoundsCell(gx, gz) || grid.GetCell(gx, gz).type != CellType.Water)
+                        continue;
+                    nearLake = 1;
+                    if (GridCellNearFordRiverChebyshev(grid, gx, gz, fordD))
+                        nearFord = 1;
+                    for (int dz = -riverCheb; dz <= riverCheb; dz++)
+                    {
+                        for (int dx = -riverCheb; dx <= riverCheb; dx++)
+                        {
+                            if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > riverCheb)
+                                continue;
+                            int nx = gx + dx;
+                            int ny = gz + dz;
+                            if ((uint)nx < (uint)grid.Width && (uint)ny < (uint)grid.Height &&
+                                grid.GetCell(nx, ny).type == CellType.River)
+                            {
+                                connectedToMainRiver = 1;
+                                break;
+                            }
+                        }
+
+                        if (connectedToMainRiver != 0)
+                            break;
+                    }
+
+                    if (nearLake != 0 && nearFord != 0 && connectedToMainRiver != 0)
+                        return;
+                }
+            }
+        }
+
+        static bool FloodCoarseWaterOutsideComponentAtLeast(
+            Vector2Int seedRect,
+            HashSet<Vector2Int> compSet,
+            bool[,] coarseMask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            int minCount)
+        {
+            if ((uint)seedRect.x >= (uint)rectW || (uint)seedRect.y >= (uint)rectH)
+                return false;
+            if (compSet.Contains(seedRect) || !coarseMask[seedRect.x, seedRect.y])
+                return false;
+            int gxs = rectMinX + seedRect.x;
+            int gzs = rectMinZ + seedRect.y;
+            if (!grid.InBoundsCell(gxs, gzs) || grid.GetCell(gxs, gzs).type != CellType.Water)
+                return false;
+            var q = new Queue<Vector2Int>();
+            var vis = new HashSet<Vector2Int>();
+            q.Enqueue(seedRect);
+            vis.Add(seedRect);
+            int cnt = 0;
+            while (q.Count > 0)
+            {
+                var p = q.Dequeue();
+                cnt++;
+                if (cnt >= minCount)
+                    return true;
+                int gx = rectMinX + p.x;
+                int gz = rectMinZ + p.y;
+                foreach (var nb in grid.Neighbors4(gx, gz))
+                {
+                    int lx = nb.x - rectMinX;
+                    int lz = nb.y - rectMinZ;
+                    if ((uint)lx >= (uint)rectW || (uint)lz >= (uint)rectH)
+                        continue;
+                    if (!coarseMask[lx, lz] || grid.GetCell(nb.x, nb.y).type != CellType.Water)
+                        continue;
+                    var key = new Vector2Int(lx, lz);
+                    if (compSet.Contains(key) || vis.Contains(key))
+                        continue;
+                    vis.Add(key);
+                    q.Enqueue(key);
+                }
+            }
+
+            return cnt >= minCount;
+        }
+
+        static bool ComponentTouchesLargeWaterOutsideCoarse(
+            List<Vector2Int> comp,
+            HashSet<Vector2Int> compSet,
+            bool[,] coarseMask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            int preserveMinCells)
+        {
+            for (int i = 0; i < comp.Count; i++)
+            {
+                int gx = rectMinX + comp[i].x;
+                int gz = rectMinZ + comp[i].y;
+                foreach (var nb in grid.Neighbors4(gx, gz))
+                {
+                    int lx = nb.x - rectMinX;
+                    int lz = nb.y - rectMinZ;
+                    if ((uint)lx >= (uint)rectW || (uint)lz >= (uint)rectH)
+                        continue;
+                    var key = new Vector2Int(lx, lz);
+                    if (compSet.Contains(key))
+                        continue;
+                    if (!coarseMask[lx, lz] || grid.GetCell(nb.x, nb.y).type != CellType.Water)
+                        continue;
+                    if (FloodCoarseWaterOutsideComponentAtLeast(
+                            key,
+                            compSet,
+                            coarseMask,
+                            rectW,
+                            rectH,
+                            rectMinX,
+                            rectMinZ,
+                            grid,
+                            preserveMinCells))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static int SuppressSmallDetachedLakeCoarseMask(
+            bool[,] coarseMask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            int minCells,
+            MapGenConfig cfg,
+            out int fordSmallPatchesPreserved,
+            out int strayPoolCellsRemoved)
+        {
+            fordSmallPatchesPreserved = 0;
+            strayPoolCellsRemoved = 0;
+            if (coarseMask == null || grid == null || minCells <= 1)
+                return 0;
+
+            int preserveMin = cfg != null ? Mathf.Max(8, cfg.lakeVisualPreserveMinCells) : 40;
+            int strayMax = cfg != null ? Mathf.Clamp(cfg.riverVisualStrayPoolMaxCells, 4, 64) : 18;
+            int riverCheb = cfg != null ? Mathf.Clamp(cfg.riverVisualStrayPoolRiverChebyshevCells, 1, 12) : 4;
+            int fordKeep = cfg != null ? Mathf.Max(1, cfg.riverVisualFordKeepDistanceCells) : 5;
+
+            int removedCells = 0;
+            var visited = new bool[rectW, rectH];
+            var q = new Queue<Vector2Int>();
+
+            for (int lz = 0; lz < rectH; lz++)
+            {
+                for (int lx = 0; lx < rectW; lx++)
+                {
+                    if (!coarseMask[lx, lz] || visited[lx, lz])
+                        continue;
+                    int gx0 = rectMinX + lx;
+                    int gz0 = rectMinZ + lz;
+                    if (!grid.InBoundsCell(gx0, gz0) || grid.GetCell(gx0, gz0).type != CellType.Water)
+                        continue;
+
+                    q.Clear();
+                    var comp = new List<Vector2Int>(32);
+                    q.Enqueue(new Vector2Int(lx, lz));
+                    visited[lx, lz] = true;
+                    while (q.Count > 0)
+                    {
+                        var p = q.Dequeue();
+                        comp.Add(p);
+                        int ggx = rectMinX + p.x;
+                        int ggz = rectMinZ + p.y;
+                        foreach (var nb in grid.Neighbors4(ggx, ggz))
+                        {
+                            int nlx = nb.x - rectMinX;
+                            int nlz = nb.y - rectMinZ;
+                            if ((uint)nlx >= (uint)rectW || (uint)nlz >= (uint)rectH)
+                                continue;
+                            if (!coarseMask[nlx, nlz] || visited[nlx, nlz])
+                                continue;
+                            if (grid.GetCell(nb.x, nb.y).type != CellType.Water)
+                                continue;
+                            visited[nlx, nlz] = true;
+                            q.Enqueue(new Vector2Int(nlx, nlz));
+                        }
+                    }
+
+                    bool touchesFord = false;
+                    for (int ci = 0; ci < comp.Count; ci++)
+                    {
+                        int ggx = rectMinX + comp[ci].x;
+                        int ggz = rectMinZ + comp[ci].y;
+                        if (GridCellNearFordRiverChebyshev(grid, ggx, ggz, fordKeep))
+                        {
+                            touchesFord = true;
+                            break;
+                        }
+                    }
+
+                    if (touchesFord && comp.Count < minCells)
+                        fordSmallPatchesPreserved++;
+
+                    if (touchesFord)
+                        continue;
+
+                    if (comp.Count >= preserveMin)
+                    {
+                        s_waterVisualPreservedRealLakeComponents++;
+                        continue;
+                    }
+
+                    var compSet = new HashSet<Vector2Int>(comp);
+                    bool touchesBigLake = ComponentTouchesLargeWaterOutsideCoarse(
+                        comp,
+                        compSet,
+                        coarseMask,
+                        rectW,
+                        rectH,
+                        rectMinX,
+                        rectMinZ,
+                        grid,
+                        preserveMin);
+                    if (touchesBigLake)
+                    {
+                        s_waterVisualPreservedRealLakeComponents++;
+                        continue;
+                    }
+
+                    bool nearRiver = ComponentWithinChebyshevOfAnyRiverCell(comp, rectMinX, rectMinZ, grid, riverCheb);
+                    bool removeTiny = comp.Count < minCells;
+                    bool removeStray = nearRiver && comp.Count <= strayMax;
+                    if (!removeTiny && !removeStray)
+                        continue;
+
+                    if (removeStray)
+                    {
+                        strayPoolCellsRemoved += comp.Count;
+                        s_waterVisualStrayNearRiverComponentsRemoved++;
+                    }
+                    else if (removeTiny)
+                        s_waterVisualTinyLakeCellsRemoved += comp.Count;
+
+                    for (int i = 0; i < comp.Count; i++)
+                    {
+                        coarseMask[comp[i].x, comp[i].y] = false;
+                        removedCells++;
+                    }
+                }
+            }
+
+            return removedCells;
+        }
+
+        static long PackCellLongMask(int x, int z) => ((long)x << 32) | (uint)z;
+
+        static bool WaterComponentIntersectsRiverVisualMask(
+            List<Vector2Int> comp,
+            int rectMinX,
+            int rectMinZ,
+            bool[,] rivMask,
+            GridSystem grid)
+        {
+            for (int ci = 0; ci < comp.Count; ci++)
+            {
+                int ggx = rectMinX + comp[ci].x;
+                int ggz = rectMinZ + comp[ci].y;
+                if ((uint)ggx < (uint)grid.Width && (uint)ggz < (uint)grid.Height && rivMask[ggx, ggz])
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool WaterComponentNearRiverVisualMask(
+            List<Vector2Int> comp,
+            int rectMinX,
+            int rectMinZ,
+            bool[,] rivMask,
+            GridSystem grid,
+            int nearCells)
+        {
+            if (nearCells <= 0)
+                return false;
+            int gw = grid.Width;
+            int gh = grid.Height;
+            for (int ci = 0; ci < comp.Count; ci++)
+            {
+                int ggx = rectMinX + comp[ci].x;
+                int ggz = rectMinZ + comp[ci].y;
+                for (int dz = -nearCells; dz <= nearCells; dz++)
+                {
+                    for (int dx = -nearCells; dx <= nearCells; dx++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > nearCells)
+                            continue;
+                        int nx = ggx + dx;
+                        int nz = ggz + dz;
+                        if ((uint)nx < (uint)gw && (uint)nz < (uint)gh && rivMask[nx, nz])
+                            return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        static bool WaterComponentTouchesLakeBodyPacked(
+            List<Vector2Int> comp,
+            int rectMinX,
+            int rectMinZ,
+            HashSet<long> lakeBody)
+        {
+            if (lakeBody == null || lakeBody.Count == 0)
+                return false;
+            for (int ci = 0; ci < comp.Count; ci++)
+            {
+                int ggx = rectMinX + comp[ci].x;
+                int ggz = rectMinZ + comp[ci].y;
+                if (lakeBody.Contains(PackCellLongMask(ggx, ggz)))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static int CountRiverVisualMaskCells(bool[,] rivMask, int gw, int gh)
+        {
+            if (rivMask == null)
+                return 0;
+            int c = 0;
+            for (int z = 0; z < gh; z++)
+                for (int x = 0; x < gw; x++)
+                    if (rivMask[x, z])
+                        c++;
+            return c;
+        }
+
+        /// <summary>
+        /// Limpieza MS lagos: filtra charcos/tiras Water usando RiverVisualSurfaceMask como verdad visual del río.
+        /// </summary>
+        static int ApplyRiverVisualFinalLakeMaskCleanup(
+            bool[,] coarseMask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            MapGenConfig cfg)
+        {
+            bool enabled = cfg != null && (cfg.riverVisualFinalCleanupEnabled || cfg.riverVisualMaskCleanupEnabled);
+            if (!enabled || coarseMask == null || grid?.RiverVisualSurfaceMask == null)
+                return 0;
+
+            bool[,] rivMask = grid.RiverVisualSurfaceMask;
+            int fordDist = Mathf.Max(1, cfg.riverVisualFinalCleanupKeepFordDistanceCells);
+            if (fordDist <= 0)
+                fordDist = Mathf.Max(1, cfg.riverVisualMaskKeepFordDistanceCells);
+            int nearRiver = Mathf.Clamp(cfg.riverVisualFinalCleanupNearRiverCells, 1, 16);
+            int maxPatch = Mathf.Max(4, cfg.riverVisualFinalCleanupMaxPatchCells);
+            int minRealLake = Mathf.Max(8, cfg.lakeVisualRealLakeMinCells);
+            int preserveMin = Mathf.Max(8, cfg.lakeVisualPreserveMinCells);
+            var lakeBody = grid.LakeBodyCellsPacked;
+            int visualMaskCells = CountRiverVisualMaskCells(rivMask, grid.Width, grid.Height);
+
+            int removedCells = 0;
+            int removedComponents = 0;
+            int removedNearStrays = 0;
+            int presFord = 0;
+            int presReal = 0;
+            int componentsScanned = 0;
+            var visited = new bool[rectW, rectH];
+            var q = new Queue<Vector2Int>();
+            var reasons = new List<string>(4);
+
+            for (int lz = 0; lz < rectH; lz++)
+            {
+                for (int lx = 0; lx < rectW; lx++)
+                {
+                    if (!coarseMask[lx, lz] || visited[lx, lz])
+                        continue;
+                    int gx0 = rectMinX + lx;
+                    int gz0 = rectMinZ + lz;
+                    if (!grid.InBoundsCell(gx0, gz0) || grid.GetCell(gx0, gz0).type != CellType.Water)
+                        continue;
+
+                    q.Clear();
+                    var comp = new List<Vector2Int>(32);
+                    q.Enqueue(new Vector2Int(lx, lz));
+                    visited[lx, lz] = true;
+                    while (q.Count > 0)
+                    {
+                        var p = q.Dequeue();
+                        comp.Add(p);
+                        int ggx = rectMinX + p.x;
+                        int ggz = rectMinZ + p.y;
+                        foreach (var nb in grid.Neighbors4(ggx, ggz))
+                        {
+                            int nlx = nb.x - rectMinX;
+                            int nlz = nb.y - rectMinZ;
+                            if ((uint)nlx >= (uint)rectW || (uint)nlz >= (uint)rectH)
+                                continue;
+                            if (!coarseMask[nlx, nlz] || visited[nlx, nlz])
+                                continue;
+                            if (grid.GetCell(nb.x, nb.y).type != CellType.Water)
+                                continue;
+                            visited[nlx, nlz] = true;
+                            q.Enqueue(new Vector2Int(nlx, nlz));
+                        }
+                    }
+
+                    componentsScanned++;
+
+                    bool touchesFord = false;
+                    for (int ci = 0; ci < comp.Count; ci++)
+                    {
+                        int ggx = rectMinX + comp[ci].x;
+                        int ggz = rectMinZ + comp[ci].y;
+                        if (GridCellNearFordRiverChebyshev(grid, ggx, ggz, fordDist))
+                        {
+                            touchesFord = true;
+                            break;
+                        }
+                    }
+
+                    bool intersectsVisual = WaterComponentIntersectsRiverVisualMask(comp, rectMinX, rectMinZ, rivMask, grid);
+                    bool nearVisualNotOn = !intersectsVisual &&
+                        WaterComponentNearRiverVisualMask(comp, rectMinX, rectMinZ, rivMask, grid, nearRiver);
+                    bool touchesLakeBody = WaterComponentTouchesLakeBodyPacked(comp, rectMinX, rectMinZ, lakeBody);
+                    bool isLargeReal = comp.Count >= minRealLake;
+                    var compSet = new HashSet<Vector2Int>(comp);
+                    bool touchesBigLake = ComponentTouchesLargeWaterOutsideCoarse(
+                        comp,
+                        compSet,
+                        coarseMask,
+                        rectW,
+                        rectH,
+                        rectMinX,
+                        rectMinZ,
+                        grid,
+                        preserveMin);
+
+                    if (touchesFord)
+                    {
+                        presFord++;
+                        continue;
+                    }
+
+                    if (touchesLakeBody || isLargeReal || touchesBigLake)
+                    {
+                        presReal++;
+                        continue;
+                    }
+
+                    if (intersectsVisual)
+                        continue;
+
+                    bool removeSmallNoBody = comp.Count < maxPatch && !touchesLakeBody;
+                    bool removeNearStray = nearVisualNotOn;
+                    if (!removeSmallNoBody && !removeNearStray)
+                        continue;
+
+                    if (comp.Count > maxPatch * 80)
+                        continue;
+
+                    removedComponents++;
+                    if (removeNearStray)
+                        removedNearStrays++;
+                    for (int i = 0; i < comp.Count; i++)
+                    {
+                        coarseMask[comp[i].x, comp[i].y] = false;
+                        removedCells++;
+                    }
+                }
+            }
+
+            s_waterVisualFinalMaskCleanupCells += removedCells;
+            s_waterVisualFinalMaskCleanupComponents += removedComponents;
+            s_waterVisualFinalMaskPreservedFord += presFord;
+            s_waterVisualFinalMaskPreservedRealLakes += presReal;
+            s_waterVisualFinalCleanupNearRiverStrays += removedNearStrays;
+            s_waterVisualFinalCleanupComponentsScanned += componentsScanned;
+
+            if (cfg.debugLogs || cfg.debugHydrologyNetwork)
+            {
+                if (removedNearStrays > 0)
+                    reasons.Add("near_river_stray");
+                if (removedComponents - removedNearStrays > 0)
+                    reasons.Add("small_detached");
+                if (reasons.Count == 0)
+                    reasons.Add("none");
+                string reason = string.Join(";", reasons);
+                Debug.Log(
+                    $"[WaterVisualFinalCleanup] componentsScanned={componentsScanned} removedDetachedComponents={removedComponents} " +
+                    $"removedDetachedCells={removedCells} removedNearRiverStrays={removedNearStrays} " +
+                    $"preservedFordComponents={presFord} preservedRealLakes={presReal} visualMaskCells={visualMaskCells} reason={reason}");
+            }
+
+            return removedCells;
+        }
+
+        static int CountRawWaterAndRiverCells(GridSystem grid, out int riverCells)
+        {
+            riverCells = 0;
+            if (grid == null)
+                return 0;
+            int water = 0;
+            for (int gz = 0; gz < grid.Height; gz++)
+            {
+                for (int gx = 0; gx < grid.Width; gx++)
+                {
+                    var t = grid.GetCell(gx, gz).type;
+                    if (t == CellType.Water)
+                        water++;
+                    else if (t == CellType.River)
+                        riverCells++;
+                }
+            }
+
+            return water;
+        }
+
+        static int CountRiverVisualMaskCells(GridSystem grid)
+        {
+            bool[,] m = grid?.RiverVisualSurfaceMask;
+            if (m == null)
+                return 0;
+            int c = 0;
+            int gw = grid.Width;
+            int gh = grid.Height;
+            for (int z = 0; z < gh; z++)
+                for (int x = 0; x < gw; x++)
+                    if (m[x, z])
+                        c++;
+            return c;
+        }
+
+        static int CountTrueInCoarseMask(bool[,] mask, int rectW, int rectH)
+        {
+            if (mask == null)
+                return 0;
+            int c = 0;
+            for (int z = 0; z < rectH; z++)
+                for (int x = 0; x < rectW; x++)
+                    if (mask[x, z])
+                        c++;
+            return c;
+        }
+
+        static void LogLakeMSInputAudit(GridSystem grid, MapGenConfig config, bool marchingSquaresLakesOnly)
+        {
+            if (config == null)
+                return;
+            int rawWater = CountRawWaterAndRiverCells(grid, out int riverCells);
+            int lakeBodyCount = grid?.LakeBodyCellsPacked != null ? grid.LakeBodyCellsPacked.Count : 0;
+            int rivMaskCells = CountRiverVisualMaskCells(grid);
+            int candidateLake = lakeBodyCount;
+            bool willBuild = marchingSquaresLakesOnly &&
+                config.lakeCount > 0 &&
+                lakeBodyCount > 0 &&
+                config.waterRoundedEdges;
+            Debug.Log(
+                $"[LakeMSInputAudit] lakeCountConfig={config.lakeCount} lakeBodyPackedCount={lakeBodyCount} " +
+                $"rawWaterCells={rawWater} riverCells={riverCells} riverVisualMaskCells={rivMaskCells} " +
+                $"candidateLakeCells={candidateLake} willBuildMarchingSquares={(willBuild ? 1 : 0)}");
+        }
+
+        static void LogLakeMSDisabled(MapGenConfig config, string reason, int lakeBodyCount, int destroyedExisting)
+        {
+            if (config == null)
+                return;
+            Debug.Log(
+                $"[LakeMSDisabled] reason={reason} lakeCount={config.lakeCount} lakeBodyPackedCount={lakeBodyCount} " +
+                $"destroyedExisting={destroyedExisting}");
+        }
+
+        static int DestroyExistingWaterMarchingSquares(Transform parent)
+        {
+            int destroyed = 0;
+            if (parent == null)
+                return destroyed;
+            for (int i = parent.childCount - 1; i >= 0; i--)
+            {
+                Transform ch = parent.GetChild(i);
+                if (ch == null || ch.name != "Water_MarchingSquares")
+                    continue;
+                if (Application.isPlaying)
+                    Object.Destroy(ch.gameObject);
+                else
+                    Object.DestroyImmediate(ch.gameObject);
+                destroyed++;
+            }
+
+            return destroyed;
+        }
+
+        static bool CellNearRiverExclusion(GridSystem grid, int gx, int gz, int nearCells)
+        {
+            if (grid == null)
+                return false;
+            int gw = grid.Width;
+            int gh = grid.Height;
+            bool[,] rivMask = grid.RiverVisualSurfaceMask;
+            for (int dz = -nearCells; dz <= nearCells; dz++)
+            {
+                for (int dx = -nearCells; dx <= nearCells; dx++)
+                {
+                    if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > nearCells)
+                        continue;
+                    int nx = gx + dx;
+                    int nz = gz + dz;
+                    if ((uint)nx >= (uint)gw || (uint)nz >= (uint)gh)
+                        continue;
+                    if (grid.GetCell(nx, nz).type == CellType.River)
+                        return true;
+                    if (rivMask != null && rivMask[nx, nz])
+                        return true;
+                }
+            }
+
+            return grid.GetCell(gx, gz).type == CellType.River;
+        }
+
+        static int ExpandRealLakeMaskShore(
+            bool[,] mask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            MapGenConfig config)
+        {
+            if (mask == null || grid == null || config == null)
+                return 0;
+            int expandLayers = Mathf.Clamp(config.lakeMSShoreExpandCells, 0, 2);
+            if (expandLayers <= 0)
+                return 0;
+            int nearRiver = Mathf.Max(1, config.lakeMSRemoveNearRiverDistanceCells);
+            int added = 0;
+            for (int layer = 0; layer < expandLayers; layer++)
+            {
+                var toAdd = new List<Vector2Int>(rectW * rectH / 8);
+                for (int z = 0; z < rectH; z++)
+                {
+                    for (int x = 0; x < rectW; x++)
+                    {
+                        if (!mask[x, z])
+                            continue;
+                        int gx = rectMinX + x;
+                        int gz = rectMinZ + z;
+                        foreach (var nb in grid.Neighbors4(gx, gz))
+                        {
+                            int lx = nb.x - rectMinX;
+                            int lz = nb.y - rectMinZ;
+                            if ((uint)lx >= (uint)rectW || (uint)lz >= (uint)rectH)
+                                continue;
+                            if (mask[lx, lz])
+                                continue;
+                            if (CellNearRiverExclusion(grid, nb.x, nb.y, nearRiver))
+                                continue;
+                            toAdd.Add(new Vector2Int(lx, lz));
+                        }
+                    }
+                }
+
+                for (int i = 0; i < toAdd.Count; i++)
+                {
+                    if (!mask[toAdd[i].x, toAdd[i].y])
+                    {
+                        mask[toAdd[i].x, toAdd[i].y] = true;
+                        added++;
+                    }
+                }
+            }
+
+            return added;
+        }
+
+        static int CleanupLakeMSComponents(
+            bool[,] mask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            HashSet<long> lakeBody,
+            MapGenConfig config,
+            out int componentsScanned,
+            out int keptRealLakes,
+            out int removedSmall,
+            out int removedNearRiver,
+            out int removedNoLakeBody)
+        {
+            componentsScanned = keptRealLakes = removedSmall = removedNearRiver = removedNoLakeBody = 0;
+            if (mask == null || grid == null || config == null)
+                return 0;
+            int minCells = Mathf.Max(
+                Mathf.Max(8, config.lakeVisualRealLakeMinCells),
+                Mathf.Max(8, config.lakeMSMinComponentCells));
+            int nearRiver = Mathf.Max(1, config.lakeMSRemoveNearRiverDistanceCells);
+            var visited = new bool[rectW, rectH];
+            var q = new Queue<Vector2Int>();
+
+            for (int lz = 0; lz < rectH; lz++)
+            {
+                for (int lx = 0; lx < rectW; lx++)
+                {
+                    if (!mask[lx, lz] || visited[lx, lz])
+                        continue;
+                    q.Clear();
+                    var comp = new List<Vector2Int>(64);
+                    q.Enqueue(new Vector2Int(lx, lz));
+                    visited[lx, lz] = true;
+                    while (q.Count > 0)
+                    {
+                        var p = q.Dequeue();
+                        comp.Add(p);
+                        int ggx = rectMinX + p.x;
+                        int ggz = rectMinZ + p.y;
+                        foreach (var nb in grid.Neighbors4(ggx, ggz))
+                        {
+                            int nlx = nb.x - rectMinX;
+                            int nlz = nb.y - rectMinZ;
+                            if ((uint)nlx >= (uint)rectW || (uint)nlz >= (uint)rectH)
+                                continue;
+                            if (!mask[nlx, nlz] || visited[nlx, nlz])
+                                continue;
+                            visited[nlx, nlz] = true;
+                            q.Enqueue(new Vector2Int(nlx, nlz));
+                        }
+                    }
+
+                    componentsScanned++;
+                    bool touchesBody = false;
+                    bool nearRiverComp = false;
+                    for (int ci = 0; ci < comp.Count; ci++)
+                    {
+                        int ggx = rectMinX + comp[ci].x;
+                        int ggz = rectMinZ + comp[ci].y;
+                        if (lakeBody != null && lakeBody.Contains(PackCellLongMask(ggx, ggz)))
+                            touchesBody = true;
+                        if (CellNearRiverExclusion(grid, ggx, ggz, nearRiver))
+                            nearRiverComp = true;
+                    }
+
+                    bool remove = false;
+                    if (!touchesBody)
+                    {
+                        remove = true;
+                        removedNoLakeBody++;
+                    }
+                    else if (comp.Count < minCells)
+                    {
+                        remove = true;
+                        removedSmall++;
+                    }
+                    else if (nearRiverComp)
+                    {
+                        remove = true;
+                        removedNearRiver++;
+                    }
+
+                    if (remove)
+                    {
+                        for (int ci = 0; ci < comp.Count; ci++)
+                            mask[comp[ci].x, comp[ci].y] = false;
+                    }
+                    else
+                    {
+                        keptRealLakes++;
+                    }
+                }
+            }
+
+            return CountTrueInCoarseMask(mask, rectW, rectH);
+        }
+
+        static bool TryPrepareRealLakeMarchingSquaresMask(
+            GridSystem grid,
+            MapGenConfig config,
+            int blurPadCells,
+            out bool[,] coarseMask,
+            out int rectMinX,
+            out int rectMinZ,
+            out int rectW,
+            out int rectH,
+            out int candidateLakeCells,
+            out int expandedCells,
+            out int riverCellsExcluded,
+            out int riverMaskExcluded)
+        {
+            coarseMask = null;
+            rectMinX = rectMinZ = rectW = rectH = 0;
+            candidateLakeCells = expandedCells = riverCellsExcluded = riverMaskExcluded = 0;
+            if (grid == null || config == null)
+                return false;
+            var lakeBody = grid.LakeBodyCellsPacked;
+            if (config.lakeCount <= 0 || lakeBody == null || lakeBody.Count == 0)
+                return false;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int minX = w;
+            int minZ = h;
+            int maxX = -1;
+            int maxZ = -1;
+            foreach (long pk in lakeBody)
+            {
+                int gx = (int)(pk >> 32);
+                int gz = (int)(pk & 0xffffffffL);
+                if ((uint)gx >= (uint)w || (uint)gz >= (uint)h)
+                    continue;
+                candidateLakeCells++;
+                if (gx < minX)
+                    minX = gx;
+                if (gz < minZ)
+                    minZ = gz;
+                if (gx > maxX)
+                    maxX = gx;
+                if (gz > maxZ)
+                    maxZ = gz;
+            }
+
+            if (maxX < 0 || candidateLakeCells <= 0)
+                return false;
+
+            int pad = Mathf.Max(2, blurPadCells);
+            rectMinX = Mathf.Clamp(minX - pad, 0, w - 1);
+            rectMinZ = Mathf.Clamp(minZ - pad, 0, h - 1);
+            int rectMaxX = Mathf.Clamp(maxX + pad, 0, w - 1);
+            int rectMaxZ = Mathf.Clamp(maxZ + pad, 0, h - 1);
+            rectW = rectMaxX - rectMinX + 1;
+            rectH = rectMaxZ - rectMinZ + 1;
+            coarseMask = new bool[rectW, rectH];
+            foreach (long pk in lakeBody)
+            {
+                int gx = (int)(pk >> 32);
+                int gz = (int)(pk & 0xffffffffL);
+                if ((uint)gx >= (uint)w || (uint)gz >= (uint)h)
+                    continue;
+                int lx = gx - rectMinX;
+                int lz = gz - rectMinZ;
+                if (grid.GetCell(gx, gz).type == CellType.River)
+                {
+                    riverCellsExcluded++;
+                    continue;
+                }
+
+                bool[,] rivMask = grid.RiverVisualSurfaceMask;
+                if (rivMask != null && rivMask[gx, gz])
+                {
+                    riverMaskExcluded++;
+                    continue;
+                }
+
+                coarseMask[lx, lz] = true;
+            }
+
+            expandedCells = ExpandRealLakeMaskShore(coarseMask, rectW, rectH, rectMinX, rectMinZ, grid, config);
+            int finalCells = CleanupLakeMSComponents(
+                coarseMask,
+                rectW,
+                rectH,
+                rectMinX,
+                rectMinZ,
+                grid,
+                lakeBody,
+                config,
+                out int scanned,
+                out int kept,
+                out int remSmall,
+                out int remNearRiver,
+                out int remNoBody);
+            s_lakeMSFinalCells = finalCells;
+
+            if (config.debugLogs || config.debugHydrologyNetwork)
+            {
+                Debug.Log(
+                    $"[LakeMSMask] source=LakeBodyCellsPacked lakeBodyPackedCount={lakeBody.Count} candidateLakeCells={candidateLakeCells} " +
+                    $"expandedCells={expandedCells} riverCellsExcluded={riverCellsExcluded} riverMaskExcluded={riverMaskExcluded} finalCells={finalCells}");
+                Debug.Log(
+                    $"[LakeMSComponentCleanup] componentsScanned={scanned} keptRealLakes={kept} removedSmallComponents={remSmall} " +
+                    $"removedNearRiver={remNearRiver} removedNoLakeBodyIntersection={remNoBody} finalLakeCells={finalCells}");
+            }
+
+            return finalCells > 0;
+        }
+
         private static bool BuildRoundedWaterMarchingSquares(
             Transform parent,
             GridSystem grid,
@@ -3840,40 +5351,86 @@ namespace Project.Gameplay.Map.Generator
             float iso = Mathf.Clamp(config.waterIsoLevel, 0.05f, 0.95f);
 
             int effectiveSubdiv = subdiv;
-            // Optimización: generar MS solo en el bounding box del agua (con padding por blur),
-            // en vez de sobre TODO el mapa (ahorra cientos de miles de vértices si el agua es poca).
+            int padCells = Mathf.Max(2, blurRadius * Mathf.Max(1, blurIters) + 2);
+            bool[,] coarseMask = null;
+            int rectMinX;
+            int rectMinZ;
+            int rectW;
+            int rectH;
+
+            LogLakeMSInputAudit(grid, config, marchingSquaresLakesOnly);
+
+            if (marchingSquaresLakesOnly)
+            {
+                int destroyedExisting = DestroyExistingWaterMarchingSquares(parent);
+                int lakeBodyCount = grid.LakeBodyCellsPacked != null ? grid.LakeBodyCellsPacked.Count : 0;
+                if (config.lakeCount <= 0 || lakeBodyCount <= 0)
+                {
+                    LogLakeMSDisabled(
+                        config,
+                        config.lakeCount <= 0 ? "no_real_lakes" : "empty_lake_body_packed",
+                        lakeBodyCount,
+                        destroyedExisting);
+                    s_lakeMSFinalCells = 0;
+                    return false;
+                }
+
+                if (!TryPrepareRealLakeMarchingSquaresMask(
+                        grid,
+                        config,
+                        padCells,
+                        out coarseMask,
+                        out rectMinX,
+                        out rectMinZ,
+                        out rectW,
+                        out rectH,
+                        out _,
+                        out _,
+                        out _,
+                        out _))
+                {
+                    LogLakeMSDisabled(config, "no_valid_lake_components", lakeBodyCount, destroyedExisting);
+                    s_lakeMSFinalCells = 0;
+                    return false;
+                }
+
+                goto LakeMsMaskReady;
+            }
+
             int minX = w, minZ = h, maxX = -1, maxZ = -1;
             for (int gz = 0; gz < h; gz++)
             {
                 for (int gx = 0; gx < w; gx++)
                 {
                     var t = grid.GetCell(gx, gz).type;
-                    bool include = marchingSquaresLakesOnly ? (t == CellType.Water) : (t == CellType.Water || t == CellType.River);
-                    if (!include) continue;
-                    if (gx < minX) minX = gx;
-                    if (gz < minZ) minZ = gz;
-                    if (gx > maxX) maxX = gx;
-                    if (gz > maxZ) maxZ = gz;
+                    if (t != CellType.Water && t != CellType.River)
+                        continue;
+                    if (gx < minX)
+                        minX = gx;
+                    if (gz < minZ)
+                        minZ = gz;
+                    if (gx > maxX)
+                        maxX = gx;
+                    if (gz > maxZ)
+                        maxZ = gz;
                 }
             }
+
             if (maxX < 0 || maxZ < 0)
             {
-                if (config.debugLogs && !marchingSquaresLakesOnly)
+                if (config.debugLogs)
                     Debug.LogWarning("Fase9 WaterMesh (MS): no hay celdas de agua.");
                 return false;
             }
 
-            int padCells = Mathf.Max(2, blurRadius * Mathf.Max(1, blurIters) + 2);
-            int rectMinX = Mathf.Clamp(minX - padCells, 0, w - 1);
-            int rectMinZ = Mathf.Clamp(minZ - padCells, 0, h - 1);
+            rectMinX = Mathf.Clamp(minX - padCells, 0, w - 1);
+            rectMinZ = Mathf.Clamp(minZ - padCells, 0, h - 1);
             int rectMaxX = Mathf.Clamp(maxX + padCells, 0, w - 1);
             int rectMaxZ = Mathf.Clamp(maxZ + padCells, 0, h - 1);
-            int rectW = rectMaxX - rectMinX + 1;
-            int rectH = rectMaxZ - rectMinZ + 1;
+            rectW = rectMaxX - rectMinX + 1;
+            rectH = rectMaxZ - rectMinZ + 1;
 
-            // Máscara suavizada por celdas (rápido). Reduce esquinas aisladas antes del upsample+blur.
-            bool[,] coarseMask = null;
-            if (config.waterMaskPostProcess && config.waterMaskSmoothIterations > 0)
+            if (!marchingSquaresLakesOnly && config.waterMaskPostProcess && config.waterMaskSmoothIterations > 0)
             {
                 coarseMask = new bool[rectW, rectH];
                 for (int z = 0; z < rectH; z++)
@@ -3882,7 +5439,7 @@ namespace Project.Gameplay.Map.Generator
                         int gx = rectMinX + x;
                         int gz = rectMinZ + z;
                         var t = grid.GetCell(gx, gz).type;
-                        coarseMask[x, z] = marchingSquaresLakesOnly ? (t == CellType.Water) : (t == CellType.Water || t == CellType.River);
+                        coarseMask[x, z] = t == CellType.Water || t == CellType.River;
                     }
 
                 int iters = Mathf.Clamp(config.waterMaskSmoothIterations, 0, 8);
@@ -3916,6 +5473,26 @@ namespace Project.Gameplay.Map.Generator
                     }
                 }
 
+                if (config != null && config.lakeVisualMinPatchCells > 1)
+                {
+                    int fordPres;
+                    int stray;
+                    int rem = SuppressSmallDetachedLakeCoarseMask(
+                        coarseMask,
+                        rectW,
+                        rectH,
+                        rectMinX,
+                        rectMinZ,
+                        grid,
+                        config.lakeVisualMinPatchCells,
+                        config,
+                        out fordPres,
+                        out stray);
+                    s_waterVisualLakeCellsSuppressed += rem;
+                    s_waterVisualLakeFordComponentsPreserved += fordPres;
+                    s_riverVisualStrayPoolCellsRemoved += stray;
+                }
+
                 if (!marchingSquaresLakesOnly)
                 {
                     for (int z = 0; z < rectH; z++)
@@ -3929,6 +5506,7 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
+            LakeMsMaskReady:
             // Límite de seguridad (evita mallas gigantes / GC).
             // En vez de caer directamente a chunks, intentamos degradar calidad bajando subdiv (3→2→1).
             int maxSamples = config.waterMsMaxCornerSamples;
@@ -3988,7 +5566,9 @@ namespace Project.Gameplay.Map.Generator
                         inCoarse = coarseMask[mx, mz];
                     }
 
-                    if (t == CellType.Water)
+                    if (marchingSquaresLakesOnly)
+                        field[x, z] = inCoarse ? 1f : 0f;
+                    else if (t == CellType.Water)
                         field[x, z] = inCoarse ? 1f : 0f;
                     else
                         field[x, z] = 0f;
@@ -4011,7 +5591,20 @@ namespace Project.Gameplay.Map.Generator
                         int iz = sampleZ0 + zi;
                         int gx = Mathf.Clamp(ix / effectiveSubdiv, 0, w - 1);
                         int gz = Mathf.Clamp(iz / effectiveSubdiv, 0, h - 1);
-                        if (grid.GetCell(gx, gz).type != CellType.Water) continue;
+                        bool inLakeMask = true;
+                        if (coarseMask != null)
+                        {
+                            int mx = Mathf.Clamp(gx - rectMinX, 0, rectW - 1);
+                            int mz = Mathf.Clamp(gz - rectMinZ, 0, rectH - 1);
+                            inLakeMask = coarseMask[mx, mz];
+                        }
+                        else if (grid.GetCell(gx, gz).type != CellType.Water)
+                        {
+                            continue;
+                        }
+
+                        if (!inLakeMask)
+                            continue;
                         float worldXf = grid.Origin.x + (sampleX0 + xi) * step;
                         float n = (Mathf.PerlinNoise(ox + worldXf * sc, oz + worldZf * sc) - 0.5f) * 2f * amp;
                         field[xi, zi] = Mathf.Clamp01(field[xi, zi] + n);
@@ -4055,7 +5648,7 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
-            ApplyRiverLakeVisualBlendField(field, sw, sh, sampleX0, sampleZ0, effectiveSubdiv, grid, config);
+            ApplyRiverLakeVisualBlendField(field, sw, sh, sampleX0, sampleZ0, effectiveSubdiv, grid, config, marchingSquaresLakesOnly);
 
             // Blur para redondear la máscara (suaviza esquinas).
             if (blurIters > 0)
@@ -4083,6 +5676,22 @@ namespace Project.Gameplay.Map.Generator
                     // No forzar suelo en río: el perfil por submuestra + blur ya redondea; el mínimo plano devolvía bordes cuadrados.
                     if (t == CellType.Land && CellTouchesRiverCardinal(grid, gx, gz))
                         field[x, z] = Mathf.Min(field[x, z], landRiverClamp);
+                }
+            }
+
+            if (marchingSquaresLakesOnly)
+            {
+                for (int z = 0; z < sh; z++)
+                {
+                    int iz = sampleZ0 + z;
+                    int gz = Mathf.Clamp(iz / effectiveSubdiv, 0, h - 1);
+                    for (int x = 0; x < sw; x++)
+                    {
+                        int ix = sampleX0 + x;
+                        int gx = Mathf.Clamp(ix / effectiveSubdiv, 0, w - 1);
+                        if (grid.GetCell(gx, gz).type == CellType.River)
+                            field[x, z] = 0f;
+                    }
                 }
             }
 
@@ -4280,6 +5889,34 @@ namespace Project.Gameplay.Map.Generator
             mr.shadowCastingMode = ShadowCastingMode.Off;
             mr.receiveShadows = false;
             mr.renderingLayerMask = 1u;
+
+            if (marchingSquaresLakesOnly && coarseMask != null)
+            {
+                int nearRiverCells = Mathf.Max(1, config.riverVisualFinalCleanupNearRiverCells);
+                ComputeWaterVisualBoundsMaskStats(
+                    grid,
+                    mesh.bounds,
+                    nearRiverCells,
+                    out int msIntersectsMask,
+                    out int msNearMaskCells);
+                int fordD = Mathf.Max(1, config.riverVisualFordKeepDistanceCells);
+                int msNearFord = ComputeNearFordFromWorldBounds(grid, mesh.bounds, fordD);
+                int triCount = tris.Count / 3;
+                LogWaterVisualObject(
+                    config,
+                    go.name,
+                    "LakeMS",
+                    -1,
+                    verts.Count,
+                    triCount,
+                    mesh.bounds,
+                    msIntersectsMask,
+                    msNearMaskCells,
+                    msNearFord,
+                    0,
+                    0,
+                    mr.enabled ? 1 : 0);
+            }
 
             TryBuildCrossingAndShoreDecorations(
                 parent, grid, config, y, cellSize, waterLayer, interiorDistGrid, strategicCities, strategicRoads);

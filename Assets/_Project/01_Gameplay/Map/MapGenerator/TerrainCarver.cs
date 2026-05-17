@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace Project.Gameplay.Map.Generator
 {
-    /// <summary>Fase 7: aplana height01 en áreas de ciudad y en caminos (suavizado).</summary>
+    /// <summary>Fase 8 (post-ciudades/caminos): aplana height01 en áreas de ciudad y en caminos (suavizado).</summary>
     public static class TerrainCarver
     {
         /// <summary>Parámetros: cityRadiusCells. Reduce height01 variación dentro del radio de cada ciudad.</summary>
@@ -30,7 +30,7 @@ namespace Project.Gameplay.Map.Generator
                     }
             }
             if (config.debugLogs)
-                Debug.Log("Fase7 Carve: ciudades aplanadas.");
+                Debug.Log("Fase8 Carve: ciudades aplanadas.");
         }
 
         /// <summary>Parámetros: roadWidthCells, roadFlattenStrength. Suaviza height01 a lo largo de cada camino.</summary>
@@ -57,7 +57,7 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
             if (config.debugLogs)
-                Debug.Log("Fase7 Carve: caminos suavizados.");
+                Debug.Log("Fase8 Carve: caminos suavizados.");
         }
     }
 }

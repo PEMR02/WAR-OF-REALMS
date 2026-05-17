@@ -103,7 +103,7 @@ namespace Project.Gameplay.Map.Generation.Alpha
         public bool lakesEnabled = true;
         [Range(0, 12)] public int lakeCount = 2;
         public Vector2Int lakeSizeCellsRange = new(120, 800);
-        [Range(0.25f, 0.75f)] public float waterBaseHeightNormalized = 0.4f;
+        [Range(0.15f, 0.75f)] public float waterBaseHeightNormalized = 0.24f;
         [Range(-0.2f, 0.2f)] public float waterCoverageBias = 0f;
         [Range(0.5f, 3f)] public float shorelineBlend = 1.2f;
         public bool avoidSpawnFlooding = true;

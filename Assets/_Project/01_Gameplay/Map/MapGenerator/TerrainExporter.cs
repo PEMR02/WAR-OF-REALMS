@@ -28,6 +28,21 @@ namespace Project.Gameplay.Map.Generator
         {
             if (terrain == null || grid == null || config == null) return;
 
+            if (config.riverVisualUseRiverSurfaceMeshStrip &&
+                grid.RiverCenterlinesCellSpace != null &&
+                grid.RiverCenterlinesCellSpace.Count > 0)
+            {
+                if (!grid.RiverVisualSurfacesBuilt ||
+                    grid.RiverVisualSurfaceMask == null ||
+                    grid.RiverVisualSurfaceMask.GetLength(0) != grid.Width ||
+                    grid.RiverVisualSurfaceMask.GetLength(1) != grid.Height)
+                {
+                    RiverSurfaceMeshBuilder.EnsureRiverVisualSurfaceCache(grid, config);
+                    if (config.debugLogs || config.debugHydrologyNetwork)
+                        RiverSurfaceMeshBuilder.LogRiverVisualCacheUse("TerrainExporter", grid, -1);
+                }
+            }
+
             // Un Terrain en escena puede no tener TerrainData asignado (asset borrado o prefab sin datos).
             // Antes se hacía return aquí y el pipeline seguía llamando SampleHeight() → error en runtime.
             var data = terrain.terrainData;
@@ -87,6 +102,8 @@ namespace Project.Gameplay.Map.Generator
             float smoothStr = Mathf.Clamp01(config.terrainNormalSmoothingStrength);
             if (smoothPasses > 0 && smoothStr > 1e-5f)
                 ApplyHeightmapNeighborSmoothing(heights, res, smoothPasses, smoothStr);
+
+            ApplyRiverEndReachTerrainCarveToHeightmap(heights, res, grid, config);
 
             data.SetHeights(0, 0, heights);
 
@@ -245,10 +262,39 @@ namespace Project.Gameplay.Map.Generator
 
             int radius = Mathf.Max(0, config.shoreSmoothRadiusCells);
             float strength = Mathf.Clamp01(config.shoreSmoothStrength);
-            if (radius <= 0 || strength <= 0.0001f) return outH;
+            if (radius <= 0 || strength <= 0.0001f)
+            {
+                if (config.riverVisualUseRiverSurfaceMeshStrip && config.riverEndReachTerrainFixEnabled)
+                    ApplyRiverEndReachTerrainCarve(outH, grid, config);
+                return outH;
+            }
 
-            ApplyVisualShorelineSmoothing(outH, grid, waterH, radius, strength);
-            ApplyRiverTerrainChannelCarve(outH, grid, config);
+            ApplyVisualShorelineSmoothing(outH, grid, waterH, radius, strength, config);
+            bool stripRiverSurface = config != null && config.riverVisualUseRiverSurfaceMeshStrip;
+            if (stripRiverSurface && config.riverVisualTerrainCarveEnabled)
+            {
+                ApplyLogicalRiverCorridorTerrainCarve(outH, grid, config);
+                ApplyRiverBorderOutletTerrainCarve(outH, grid, config);
+            }
+            else if (config.riverVisualTerrainCarveEnabled)
+                ApplyRiverTerrainChannelCarve(outH, grid, config);
+
+            if (stripRiverSurface && config.riverEndReachTerrainFixEnabled)
+                ApplyRiverEndReachTerrainCarve(outH, grid, config);
+
+            if (config != null)
+            {
+                int rc = 0;
+                for (int zx = 0; zx < grid.Width; zx++)
+                    for (int zz = 0; zz < grid.Height; zz++)
+                        if (grid.GetCell(zx, zz).type == CellType.River)
+                            rc++;
+                bool strip = config.riverVisualUseRiverSurfaceMeshStrip;
+                Debug.Log(
+                    $"[RiverTerrainPaint] riverSurfaceMeshActive={(strip ? 1 : 0)} riverPaintedAsWater={(strip ? 0 : 1)} " +
+                    $"riverPaintedAsBed=1 riverCells={rc}");
+            }
+
             return outH;
         }
 
@@ -267,7 +313,7 @@ namespace Project.Gameplay.Map.Generator
         /// Deformación puramente visual sobre el snapshot lógico antes de muestrear el Terrain.
         /// No altera el grid ni la jugabilidad; solo suaviza el encuentro tierra/agua.
         /// </summary>
-        static void ApplyVisualShorelineSmoothing(float[,] outH, GridSystem grid, float waterH, int radius, float strength)
+        static void ApplyVisualShorelineSmoothing(float[,] outH, GridSystem grid, float waterH, int radius, float strength, MapGenConfig config)
         {
             int w = grid.Width;
             int h = grid.Height;
@@ -280,17 +326,21 @@ namespace Project.Gameplay.Map.Generator
             var qx = new Queue<int>();
             var qz = new Queue<int>();
 
+            bool stripRiverSurface = config != null && config.riverVisualUseRiverSurfaceMeshStrip;
+
             for (int x = 0; x < w; x++)
             {
                 for (int z = 0; z < h; z++)
                 {
                     var t = grid.GetCell(x, z).type;
-                    if (t == CellType.Water || t == CellType.River)
+                    bool seedWater = t == CellType.Water;
+                    bool seedRiver = t == CellType.River && !stripRiverSurface;
+                    if (seedWater || seedRiver)
                     {
                         dist[x, z] = 0;
                         qx.Enqueue(x);
                         qz.Enqueue(z);
-                        // Lago = nivel superficial; río = lecho ya bajado en Fase4 (HeightGenerator).
+                        // Lago = nivel superficial; río = lecho ya bajado en ApplyHydrologySurfaceHeights (post-hidrología).
                         outH[x, z] = grid.GetCell(x, z).height01;
                     }
                 }
@@ -433,6 +483,1127 @@ namespace Project.Gameplay.Map.Generator
             {
                 double avg = sumCarve / carved;
                 Debug.Log($"[RiverVisual] Tallada cauce: profundidadCfg={depthW:F2}u falloff={falloff} curva={curve:F2} fordMul={fordMul:F2} | celdas={carved} carve01_medio={(float)avg:F4}");
+            }
+        }
+
+        /// <summary>Talla cauce desde celdas River lógicas + radio riverWidthRadiusCells (no usa RiverVisualSurfaceMask).</summary>
+        static void ApplyLogicalRiverCorridorTerrainCarve(float[,] outH, GridSystem grid, MapGenConfig config)
+        {
+            if (config == null || grid == null || !config.riverVisualTerrainCarveEnabled)
+                return;
+
+            float depthW = config.riverTerrainCarveDepthWorld;
+            if (depthW < 1e-4f)
+                return;
+
+            int radius = Mathf.Clamp(config.riverWidthRadiusCells, 0, 6);
+            float terrainY = config.terrainHeightWorld > 0f ? config.terrainHeightWorld : 50f;
+            float depth01 = Mathf.Clamp(depthW, 0f, 3f) / terrainY;
+            int falloff = Mathf.Clamp(config.riverTerrainCarveFalloffCells, 1, 32);
+            float curve = Mathf.Clamp(config.riverTerrainCarveCenterCurve, 0.35f, 3.5f);
+            float fordMul = Mathf.Clamp(config.riverTerrainCarveFordMul, 0.08f, 1f);
+            int extra = Mathf.Clamp(config.riverVisualTerrainCarveExtraCells, 0, 4);
+            int bankFall = Mathf.Clamp(config.riverVisualTerrainBankFalloffCells, 0, 8);
+            float centerMul = Mathf.Clamp(config.riverVisualTerrainCenterDepthMul, 1f, 1.5f);
+            float bankSoft = Mathf.Clamp(config.riverVisualTerrainBankSoftness, 0.35f, 1f);
+            int maxD = falloff + extra + bankFall + radius;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            var corridor = new bool[w, h];
+            int riverCells = 0;
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    if (grid.GetCell(x, z).type != CellType.River)
+                        continue;
+                    riverCells++;
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        for (int dx = -radius; dx <= radius; dx++)
+                        {
+                            if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > radius)
+                                continue;
+                            int nx = x + dx;
+                            int nz = z + dz;
+                            if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                                continue;
+                            corridor[nx, nz] = true;
+                        }
+                    }
+                }
+            }
+
+            var dBank = new int[w, h];
+            for (int x = 0; x < w; x++)
+                for (int z = 0; z < h; z++)
+                    dBank[x, z] = int.MaxValue;
+
+            var qx = new Queue<int>();
+            var qz = new Queue<int>();
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    if (grid.GetCell(x, z).type != CellType.River)
+                        continue;
+                    dBank[x, z] = 0;
+                    qx.Enqueue(x);
+                    qz.Enqueue(z);
+                }
+            }
+
+            while (qx.Count > 0)
+            {
+                int x = qx.Dequeue();
+                int z = qz.Dequeue();
+                int d = dBank[x, z];
+                if (d >= maxD)
+                    continue;
+                void TryNb(int nx, int nz)
+                {
+                    if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                        return;
+                    ref var c = ref grid.GetCell(nx, nz);
+                    if (c.type == CellType.Water && !corridor[nx, nz])
+                        return;
+                    if (c.type != CellType.Land && c.type != CellType.River && !(c.type == CellType.Water && corridor[nx, nz]))
+                        return;
+                    if (d + 1 >= dBank[nx, nz])
+                        return;
+                    dBank[nx, nz] = d + 1;
+                    qx.Enqueue(nx);
+                    qz.Enqueue(nz);
+                }
+
+                TryNb(x - 1, z);
+                TryNb(x + 1, z);
+                TryNb(x, z - 1);
+                TryNb(x, z + 1);
+            }
+
+            int carved = 0;
+            int bankCells = 0;
+            int corridorCoreCells = 0;
+            double sumCarve = 0.0;
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    if (dBank[x, z] > maxD)
+                        continue;
+                    ref var c = ref grid.GetCell(x, z);
+                    if (c.type == CellType.Water && !corridor[x, z])
+                        continue;
+                    bool isRiverCore = c.type == CellType.River;
+                    float u = Mathf.Clamp01(dBank[x, z] / (float)Mathf.Max(1, maxD));
+                    float profile = Mathf.Pow(1f - u, curve);
+                    if (isRiverCore)
+                    {
+                        profile = Mathf.Pow(profile, 1f / centerMul);
+                        corridorCoreCells++;
+                    }
+                    else
+                        profile *= bankSoft;
+                    float carve = depth01 * profile;
+                    if (c.riverFord)
+                        carve *= fordMul;
+                    if (carve < 1e-8f)
+                        continue;
+                    outH[x, z] = Mathf.Clamp01(outH[x, z] - carve);
+                    carved++;
+                    sumCarve += carve;
+                    if (!isRiverCore)
+                        bankCells++;
+                }
+            }
+
+            if (carved > 0 && (config.debugLogs || config.debugHydrologyNetwork || config.debugRiverVisualStats))
+            {
+                double avg = sumCarve / carved;
+                Debug.Log(
+                    $"[RiverTerrainCarveSource] source=LogicalRiverCells usedSurfaceMask=0 riverCells={riverCells} " +
+                    $"corridorRadiusCells={radius} carvedCells={carved} bankCells={bankCells} corridorCoreCells={corridorCoreCells} " +
+                    $"carve01_medio={(float)avg:F4}");
+            }
+        }
+
+        static int MinChebyshevDistToMapBorder(int x, int z, int w, int h) =>
+            Mathf.Min(Mathf.Min(x, w - 1 - x), Mathf.Min(z, h - 1 - z));
+
+        static bool IsMapBorderCell(int x, int z, int w, int h) =>
+            MinChebyshevDistToMapBorder(x, z, w, h) == 0;
+
+        static void AuditRiverOutletTerrain(
+            MapGenConfig config,
+            int riverId,
+            string endpointLabel,
+            bool atBorder,
+            Vector2Int endpointCell,
+            Vector2 outletDir,
+            float[,] outH,
+            GridSystem grid,
+            int radiusCells,
+            int lengthCells,
+            float waterH,
+            float maxAboveWater,
+            out int sampledCells,
+            out float maxAbove,
+            out float avgAbove,
+            out int carvedNear,
+            out int bankNear,
+            out int needsOutletFix)
+        {
+            sampledCells = carvedNear = bankNear = 0;
+            maxAbove = avgAbove = 0f;
+            needsOutletFix = 0;
+            if (!atBorder || outH == null || grid == null)
+                return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            float sumAbove = 0f;
+            int steps = Mathf.Max(1, lengthCells);
+            var centers = new List<Vector2Int>(steps);
+            var ep = new Vector2(endpointCell.x, endpointCell.y);
+            for (int s = 0; s < steps; s++)
+            {
+                Vector2 p = ep - outletDir * s;
+                centers.Add(new Vector2Int(Mathf.Clamp(Mathf.RoundToInt(p.x), 0, w - 1), Mathf.Clamp(Mathf.RoundToInt(p.y), 0, h - 1)));
+            }
+
+            float ceiling = waterH + maxAboveWater;
+            for (int ci = 0; ci < centers.Count; ci++)
+            {
+                var c0 = centers[ci];
+                for (int dz = -radiusCells; dz <= radiusCells; dz++)
+                {
+                    for (int dx = -radiusCells; dx <= radiusCells; dx++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > radiusCells)
+                            continue;
+                        int x = c0.x + dx;
+                        int z = c0.y + dz;
+                        if ((uint)x >= (uint)w || (uint)z >= (uint)h)
+                            continue;
+                        sampledCells++;
+                        float above = outH[x, z] - waterH;
+                        if (above > maxAbove)
+                            maxAbove = above;
+                        sumAbove += above;
+                        ref var cell = ref grid.GetCell(x, z);
+                        if (cell.type == CellType.River)
+                            carvedNear++;
+                        else if (cell.type == CellType.Land)
+                            bankNear++;
+                        if (outH[x, z] > ceiling + 1e-5f)
+                            needsOutletFix = 1;
+                    }
+                }
+            }
+
+            if (sampledCells > 0)
+                avgAbove = sumAbove / sampledCells;
+        }
+
+        static void LogRiverOutletTerrainAudit(
+            MapGenConfig config,
+            int riverId,
+            string endpoint,
+            bool atBorder,
+            Vector2Int endpointCell,
+            Vector2 outletDir,
+            int sampledCells,
+            float maxTerrainAboveWater01,
+            float avgTerrainAboveWater01,
+            int carvedCellsNearOutlet,
+            int bankCellsNearOutlet,
+            bool reachesBorder,
+            int needsOutletFix)
+        {
+            if (config == null || !config.riverOutletTerrainFixDebugLogs)
+                return;
+            if (!config.debugLogs && !config.debugHydrologyNetwork && needsOutletFix == 0)
+                return;
+            Debug.Log(
+                $"[RiverOutletTerrainAudit] riverId={riverId} endpoint={endpoint} atBorder={(atBorder ? 1 : 0)} " +
+                $"endpointCell=({endpointCell.x},{endpointCell.y}) outletDir=({outletDir.x:F2},{outletDir.y:F2}) sampledCells={sampledCells} " +
+                $"maxTerrainAboveWater01={maxTerrainAboveWater01:F4} avgTerrainAboveWater01={avgTerrainAboveWater01:F4} " +
+                $"carvedCellsNearOutlet={carvedCellsNearOutlet} bankCellsNearOutlet={bankCellsNearOutlet} " +
+                $"reachesBorder={(reachesBorder ? 1 : 0)} needsOutletFix={needsOutletFix}");
+        }
+
+        static void LogRiverOutletTerrainFix(
+            MapGenConfig config,
+            int riverId,
+            string endpoint,
+            bool applied,
+            Vector2Int endpointCell,
+            bool atBorder,
+            int outletLengthCells,
+            int radiusCells,
+            int cellsLowered,
+            float maxBeforeAboveWater01,
+            float maxAfterAboveWater01,
+            bool reachesBorder)
+        {
+            if (config == null || !config.riverOutletTerrainFixDebugLogs)
+                return;
+            if (!config.debugLogs && !config.debugHydrologyNetwork && !applied)
+                return;
+            Debug.Log(
+                $"[RiverOutletTerrainFix] riverId={riverId} endpoint={endpoint} applied={(applied ? 1 : 0)} " +
+                $"endpointCell=({endpointCell.x},{endpointCell.y}) atBorder={(atBorder ? 1 : 0)} outletLengthCells={outletLengthCells} " +
+                $"radiusCells={radiusCells} cellsLowered={cellsLowered} maxBeforeAboveWater01={maxBeforeAboveWater01:F4} " +
+                $"maxAfterAboveWater01={maxAfterAboveWater01:F4} reachesBorder={(reachesBorder ? 1 : 0)}");
+        }
+
+        static void LogRiverBorderCarveConsistency(
+            MapGenConfig config,
+            int riverId,
+            bool startMeshAtBorder,
+            bool endMeshAtBorder,
+            bool startTerrainOk,
+            bool endTerrainOk)
+        {
+            if (config == null || !config.riverOutletTerrainFixDebugLogs)
+                return;
+            if (!config.debugLogs && !config.debugHydrologyNetwork)
+                return;
+            int ok = (!startMeshAtBorder || startTerrainOk) && (!endMeshAtBorder || endTerrainOk) ? 1 : 0;
+            Debug.Log(
+                $"[RiverBorderCarveConsistency] riverId={riverId} startMeshAtBorder={(startMeshAtBorder ? 1 : 0)} " +
+                $"endMeshAtBorder={(endMeshAtBorder ? 1 : 0)} startOk={(startTerrainOk ? 1 : 0)} endOk={(endTerrainOk ? 1 : 0)} ok={ok}");
+        }
+
+        static void LowerOutletTerrainAtCell(
+            float[,] outH,
+            GridSystem grid,
+            int x,
+            int z,
+            int cheb,
+            int radiusCells,
+            int bankFall,
+            float waterH,
+            float ceiling,
+            float bedExtra,
+            ref int cellsLowered,
+            ref float maxAfter)
+        {
+            if ((uint)x >= (uint)grid.Width || (uint)z >= (uint)grid.Height)
+                return;
+            ref var cell = ref grid.GetCell(x, z);
+            if (cell.riverFord)
+                return;
+
+            float distNorm = cheb / (float)Mathf.Max(1, radiusCells);
+            float centerW = 1f - Mathf.SmoothStep(0f, 1f, distNorm);
+            float bankW = Mathf.SmoothStep(0f, 1f, (float)cheb / Mathf.Max(1, radiusCells + bankFall));
+            float target = ceiling - centerW * bedExtra;
+            target = Mathf.Lerp(target, ceiling, bankW * 0.65f);
+
+            float before = outH[x, z];
+            if (before > target + 1e-6f)
+                cellsLowered++;
+            outH[x, z] = Mathf.Min(before, target);
+            maxAfter = Mathf.Max(maxAfter, outH[x, z] - waterH);
+        }
+
+        static void StampOutletCorridorDisk(
+            float[,] outH,
+            GridSystem grid,
+            Vector2 centerCell,
+            int radiusCells,
+            int bankFall,
+            float waterH,
+            float ceiling,
+            float bedExtra,
+            ref int cellsLowered,
+            ref float maxAfter)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
+            int sx = Mathf.Clamp(Mathf.RoundToInt(centerCell.x), 0, w - 1);
+            int sz = Mathf.Clamp(Mathf.RoundToInt(centerCell.y), 0, h - 1);
+            for (int dz = -radiusCells; dz <= radiusCells; dz++)
+            {
+                for (int dx = -radiusCells; dx <= radiusCells; dx++)
+                {
+                    int cheb = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz));
+                    if (cheb > radiusCells)
+                        continue;
+                    LowerOutletTerrainAtCell(
+                        outH,
+                        grid,
+                        sx + dx,
+                        sz + dz,
+                        cheb,
+                        radiusCells,
+                        bankFall,
+                        waterH,
+                        ceiling,
+                        bedExtra,
+                        ref cellsLowered,
+                        ref maxAfter);
+                }
+            }
+        }
+
+        /// <summary>Rebaja terreno bajo entradas/salidas en borde real (post-tallado lógico, solo heightmap visual).</summary>
+        static void ApplyRiverBorderOutletTerrainCarve(float[,] outH, GridSystem grid, MapGenConfig config)
+        {
+            if (config == null || grid == null || outH == null || !config.riverOutletTerrainFixEnabled)
+                return;
+            if (grid.RiverCenterlinesCellSpace == null || grid.RiverCenterlinesCellSpace.Count == 0)
+                return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            float waterH = config.waterHeight01;
+            float maxAbove = Mathf.Clamp(config.riverOutletTerrainFixMaxHeightAboveWater01, 0f, 0.02f);
+            float ceiling = waterH + maxAbove;
+            float bedExtra = Mathf.Clamp(config.riverBedDepthBelowWater01, 0f, 0.14f);
+            int lengthCells = Mathf.Clamp(config.riverOutletTerrainFixLengthCells, 4, 20);
+            int bankFall = Mathf.Clamp(config.riverOutletTerrainFixBankFalloffCells, 1, 8);
+            float radiusMul = Mathf.Clamp(config.riverOutletTerrainFixRadiusMul, 0.8f, 2f);
+            float halfWidthCells = config.riverVisualRibbonFullWidthCellsMain > 0.01f
+                ? config.riverVisualRibbonFullWidthCellsMain * 0.5f
+                : Mathf.Max(0.5f, config.riverVisualMeshHalfWidth / Mathf.Max(0.01f, grid.CellSizeWorld));
+            int radiusCells = Mathf.Max(1, Mathf.CeilToInt(halfWidthCells * radiusMul));
+
+            for (int riverId = 0; riverId < grid.RiverCenterlinesCellSpace.Count; riverId++)
+            {
+                var line = grid.RiverCenterlinesCellSpace[riverId];
+                if (line == null || line.Count < 2)
+                    continue;
+
+                bool startMeshAtBorder = false;
+                bool endMeshAtBorder = false;
+                bool startTerrainOk = false;
+                bool endTerrainOk = false;
+
+                void ProcessEndpoint(bool isStart)
+                {
+                    int i0 = isStart ? 0 : line.Count - 1;
+                    int i1 = isStart ? 1 : line.Count - 2;
+                    Vector2 p0 = line[i0];
+                    Vector2 p1 = line[i1];
+                    int cx = Mathf.Clamp(Mathf.RoundToInt(p0.x), 0, w - 1);
+                    int cz = Mathf.Clamp(Mathf.RoundToInt(p0.y), 0, h - 1);
+                    bool atBorder = IsMapBorderCell(cx, cz, w, h);
+                    if (config.riverOutletTerrainFixOnlyAtMapBorder && !atBorder)
+                        return;
+
+                    Vector2 outward = p0 - p1;
+                    if (outward.sqrMagnitude < 1e-6f)
+                        outward = isStart ? Vector2.left : Vector2.right;
+                    else
+                        outward.Normalize();
+                    Vector2 inward = -outward;
+
+                    string ep = isStart ? "start" : "end";
+                    if (isStart)
+                        startMeshAtBorder = atBorder;
+                    else
+                        endMeshAtBorder = atBorder;
+
+                    AuditRiverOutletTerrain(
+                        config,
+                        riverId,
+                        ep,
+                        atBorder,
+                        new Vector2Int(cx, cz),
+                        outward,
+                        outH,
+                        grid,
+                        radiusCells,
+                        lengthCells,
+                        waterH,
+                        maxAbove,
+                        out int sampled,
+                        out float maxBefore,
+                        out float avgBefore,
+                        out int carvedNear,
+                        out int bankNear,
+                        out int needsFix);
+
+                    LogRiverOutletTerrainAudit(
+                        config,
+                        riverId,
+                        ep,
+                        atBorder,
+                        new Vector2Int(cx, cz),
+                        outward,
+                        sampled,
+                        maxBefore,
+                        avgBefore,
+                        carvedNear,
+                        bankNear,
+                        atBorder,
+                        needsFix);
+
+                    if (!atBorder)
+                        return;
+
+                    int cellsLowered = 0;
+                    float maxAfter = 0f;
+                    for (int step = 0; step < lengthCells; step++)
+                    {
+                        Vector2 hub = p0 - inward * step;
+                        StampOutletCorridorDisk(
+                            outH,
+                            grid,
+                            hub,
+                            radiusCells,
+                            bankFall,
+                            waterH,
+                            ceiling,
+                            bedExtra,
+                            ref cellsLowered,
+                            ref maxAfter);
+                    }
+
+                    Vector2 borderTan = new Vector2(-outward.y, outward.x);
+                    int tangentSpan = Mathf.Max(radiusCells, lengthCells / 2);
+                    for (int t = -tangentSpan; t <= tangentSpan; t++)
+                    {
+                        Vector2 along = new Vector2(cx, cz) + borderTan * t;
+                        StampOutletCorridorDisk(
+                            outH,
+                            grid,
+                            along,
+                            radiusCells,
+                            bankFall,
+                            waterH,
+                            ceiling,
+                            bedExtra,
+                            ref cellsLowered,
+                            ref maxAfter);
+                    }
+
+                    bool terrainOk = maxAfter <= maxAbove + 1e-4f;
+                    if (isStart)
+                        startTerrainOk = terrainOk;
+                    else
+                        endTerrainOk = terrainOk;
+
+                    LogRiverOutletTerrainFix(
+                        config,
+                        riverId,
+                        ep,
+                        cellsLowered > 0 || needsFix == 1,
+                        new Vector2Int(cx, cz),
+                        atBorder,
+                        lengthCells,
+                        radiusCells,
+                        cellsLowered,
+                        maxBefore,
+                        maxAfter,
+                        atBorder);
+                }
+
+                ProcessEndpoint(isStart: true);
+                ProcessEndpoint(isStart: false);
+
+                LogRiverBorderCarveConsistency(
+                    config,
+                    riverId,
+                    startMeshAtBorder,
+                    endMeshAtBorder,
+                    startTerrainOk,
+                    endTerrainOk);
+            }
+        }
+
+        struct RiverEndReachTerrainParams
+        {
+            public int reachLengthCells;
+            public int radiusCells;
+            public int bankFall;
+            public float waterH;
+            public float ceiling;
+            public float bedExtra;
+            public float visualHalfWidthCells;
+            public int logicalRadiusCells;
+            public float meshWidthMul;
+            public float endpointWidthMul;
+            public bool usesVisualWidth;
+        }
+
+        static RiverEndReachTerrainParams BuildRiverEndReachTerrainParams(MapGenConfig config, GridSystem grid)
+        {
+            float cellSize = Mathf.Max(0.01f, grid.CellSizeWorld);
+            float normalMul = Mathf.Clamp(config.riverSurfaceVisualNormalWidthMul, 1.25f, 3f);
+            float endpointMul = Mathf.Clamp(config.riverSurfaceBorderEndpointWidthMul, 1.5f, 3f);
+            float visualHalfWidthCells;
+            if (config.riverEndReachTerrainFixUseVisualWidth)
+            {
+                float oldBaseHalfWorld = config.riverVisualRibbonFullWidthCellsMain > 0.01f
+                    ? config.riverVisualRibbonFullWidthCellsMain * 0.5f * cellSize
+                    : config.riverVisualMeshHalfWidth;
+                visualHalfWidthCells = (oldBaseHalfWorld / cellSize) * normalMul;
+            }
+            else
+            {
+                visualHalfWidthCells = config.riverVisualRibbonFullWidthCellsMain > 0.01f
+                    ? config.riverVisualRibbonFullWidthCellsMain * 0.5f
+                    : config.riverVisualMeshHalfWidth / cellSize;
+            }
+
+            int logicalRadius = Mathf.Max(1, config.riverWidthRadiusCells);
+            float radiusMul = Mathf.Clamp(config.riverEndReachTerrainFixRadiusMul, 0.8f, 2f);
+            int radiusCells = Mathf.Max(
+                logicalRadius,
+                Mathf.CeilToInt(visualHalfWidthCells * radiusMul));
+
+            int outletLen = Mathf.Clamp(config.riverOutletTerrainFixLengthCells, 4, 20);
+            int reachLen = Mathf.Max(12, outletLen, config.riverEndReachTerrainFixLengthCells);
+            reachLen = Mathf.Clamp(reachLen, 12, 48);
+
+            float maxAbove = Mathf.Clamp(
+                config.riverEndReachTerrainFixMaxHeightAboveWater01 > 1e-6f
+                    ? config.riverEndReachTerrainFixMaxHeightAboveWater01
+                    : config.riverOutletTerrainFixMaxHeightAboveWater01,
+                0f,
+                0.02f);
+
+            return new RiverEndReachTerrainParams
+            {
+                reachLengthCells = reachLen,
+                radiusCells = radiusCells,
+                bankFall = Mathf.Clamp(config.riverOutletTerrainFixBankFalloffCells, 1, 8),
+                waterH = config.waterHeight01,
+                ceiling = config.waterHeight01 + maxAbove,
+                bedExtra = Mathf.Clamp(config.riverBedDepthBelowWater01, 0f, 0.14f),
+                visualHalfWidthCells = visualHalfWidthCells,
+                logicalRadiusCells = logicalRadius,
+                meshWidthMul = normalMul,
+                endpointWidthMul = endpointMul,
+                usesVisualWidth = config.riverEndReachTerrainFixUseVisualWidth
+            };
+        }
+
+        static void BuildReachPolylineSamples(
+            IReadOnlyList<Vector2> line,
+            int reachLengthCells,
+            bool fromStart,
+            List<Vector2> samples)
+        {
+            samples.Clear();
+            if (line == null || line.Count < 2)
+                return;
+
+            int count = Mathf.Min(reachLengthCells, line.Count);
+            int iBegin = fromStart ? 0 : line.Count - count;
+            int iEnd = fromStart ? count - 1 : line.Count - 1;
+            samples.Add(line[iBegin]);
+            for (int i = iBegin; i < iEnd; i++)
+            {
+                Vector2 a = line[i];
+                Vector2 b = line[i + 1];
+                float segLen = Vector2.Distance(a, b);
+                int steps = Mathf.Max(1, Mathf.CeilToInt(segLen / 0.35f));
+                for (int s = 1; s <= steps; s++)
+                {
+                    float t = s / (float)steps;
+                    samples.Add(Vector2.Lerp(a, b, t));
+                }
+            }
+        }
+
+        static float MinDistanceToPolylineCells(Vector2 p, IReadOnlyList<Vector2> polyline)
+        {
+            if (polyline == null || polyline.Count == 0)
+                return float.MaxValue;
+            if (polyline.Count == 1)
+                return Vector2.Distance(p, polyline[0]);
+
+            float best = float.MaxValue;
+            for (int i = 0; i < polyline.Count - 1; i++)
+            {
+                Vector2 a = polyline[i];
+                Vector2 b = polyline[i + 1];
+                Vector2 ab = b - a;
+                float abLenSq = ab.sqrMagnitude;
+                float t = abLenSq < 1e-6f ? 0f : Mathf.Clamp01(Vector2.Dot(p - a, ab) / abLenSq);
+                Vector2 closest = a + ab * t;
+                best = Mathf.Min(best, Vector2.Distance(p, closest));
+            }
+
+            return best;
+        }
+
+        static void AuditRiverEndReachTerrain(
+            float[,] outH,
+            GridSystem grid,
+            IReadOnlyList<Vector2> line,
+            IReadOnlyList<Vector2> reachSamples,
+            RiverEndReachTerrainParams p,
+            Vector2Int anchorCell,
+            bool fromStart,
+            out int sampleCount,
+            out float maxAboveWater,
+            out float avgAboveWater,
+            out int cellsAboveWater,
+            out Vector2Int worstCell,
+            out int worstDistFromEndCells)
+        {
+            sampleCount = reachSamples != null ? reachSamples.Count : 0;
+            maxAboveWater = 0f;
+            avgAboveWater = 0f;
+            cellsAboveWater = 0;
+            worstCell = Vector2Int.zero;
+            worstDistFromEndCells = 0;
+            if (outH == null || grid == null || reachSamples == null || reachSamples.Count == 0)
+                return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int r = p.radiusCells + p.bankFall;
+            float sum = 0f;
+            int n = 0;
+
+            int minX = w - 1;
+            int maxX = 0;
+            int minZ = h - 1;
+            int maxZ = 0;
+            for (int i = 0; i < reachSamples.Count; i++)
+            {
+                Vector2 c = reachSamples[i];
+                minX = Mathf.Min(minX, Mathf.FloorToInt(c.x) - r);
+                maxX = Mathf.Max(maxX, Mathf.CeilToInt(c.x) + r);
+                minZ = Mathf.Min(minZ, Mathf.FloorToInt(c.y) - r);
+                maxZ = Mathf.Max(maxZ, Mathf.CeilToInt(c.y) + r);
+            }
+
+            minX = Mathf.Clamp(minX, 0, w - 1);
+            maxX = Mathf.Clamp(maxX, 0, w - 1);
+            minZ = Mathf.Clamp(minZ, 0, h - 1);
+            maxZ = Mathf.Clamp(maxZ, 0, h - 1);
+
+            for (int x = minX; x <= maxX; x++)
+            {
+                for (int z = minZ; z <= maxZ; z++)
+                {
+                    float distAxis = MinDistanceToPolylineCells(new Vector2(x + 0.5f, z + 0.5f), reachSamples);
+                    if (distAxis > p.radiusCells + p.bankFall)
+                        continue;
+
+                    float above = outH[x, z] - p.waterH;
+                    if (above <= p.ceiling - p.waterH + 1e-5f)
+                        continue;
+
+                    cellsAboveWater++;
+                    sum += above;
+                    n++;
+
+                    int distAnchor = Mathf.Max(Mathf.Abs(x - anchorCell.x), Mathf.Abs(z - anchorCell.y));
+                    if (above > maxAboveWater + 1e-6f)
+                    {
+                        maxAboveWater = above;
+                        worstCell = new Vector2Int(x, z);
+                        worstDistFromEndCells = distAnchor;
+                    }
+                    else
+                    {
+                        maxAboveWater = Mathf.Max(maxAboveWater, above);
+                    }
+                }
+            }
+
+            if (n > 0)
+                avgAboveWater = sum / n;
+        }
+
+        static void StampRiverEndReachCorridor(
+            float[,] outH,
+            GridSystem grid,
+            IReadOnlyList<Vector2> reachSamples,
+            RiverEndReachTerrainParams p,
+            ref int cellsLowered,
+            ref int skippedFordCells,
+            ref float maxAfter)
+        {
+            if (reachSamples == null)
+                return;
+
+            for (int si = 0; si < reachSamples.Count; si++)
+            {
+                float tAlong = reachSamples.Count <= 1
+                    ? 1f
+                    : si / (float)(reachSamples.Count - 1);
+                int localRadius = Mathf.CeilToInt(
+                    p.radiusCells * Mathf.Lerp(1f, Mathf.Clamp(p.endpointWidthMul, 1f, 3f), tAlong));
+
+                Vector2 hub = reachSamples[si];
+                int sx = Mathf.Clamp(Mathf.RoundToInt(hub.x), 0, grid.Width - 1);
+                int sz = Mathf.Clamp(Mathf.RoundToInt(hub.y), 0, grid.Height - 1);
+                for (int dz = -localRadius; dz <= localRadius; dz++)
+                {
+                    for (int dx = -localRadius; dx <= localRadius; dx++)
+                    {
+                        int x = sx + dx;
+                        int z = sz + dz;
+                        if ((uint)x >= (uint)grid.Width || (uint)z >= (uint)grid.Height)
+                            continue;
+                        int cheb = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz));
+                        if (cheb > localRadius)
+                            continue;
+
+                        ref var cell = ref grid.GetCell(x, z);
+                        if (cell.riverFord)
+                        {
+                            skippedFordCells++;
+                            continue;
+                        }
+
+                        float distNorm = cheb / (float)Mathf.Max(1, localRadius);
+                        float centerW = 1f - Mathf.SmoothStep(0f, 1f, distNorm);
+                        float bankW = Mathf.SmoothStep(0f, 1f, (float)cheb / Mathf.Max(1, localRadius + p.bankFall));
+                        float target = p.ceiling - centerW * p.bedExtra;
+                        target = Mathf.Lerp(target, p.ceiling, bankW * 0.65f);
+
+                        float before = outH[x, z];
+                        if (before > target + 1e-6f)
+                            cellsLowered++;
+                        outH[x, z] = Mathf.Min(before, target);
+                        maxAfter = Mathf.Max(maxAfter, outH[x, z] - p.waterH);
+                    }
+                }
+            }
+        }
+
+        static void ApplyRiverEndReachTerrainCarve(float[,] outH, GridSystem grid, MapGenConfig config)
+        {
+            if (config == null || grid == null || outH == null || !config.riverEndReachTerrainFixEnabled)
+                return;
+            if (grid.RiverCenterlinesCellSpace == null || grid.RiverCenterlinesCellSpace.Count == 0)
+                return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            var reachParams = BuildRiverEndReachTerrainParams(config, grid);
+            var reachSamples = new List<Vector2>(reachParams.reachLengthCells * 4);
+            var startSamples = new List<Vector2>(reachParams.reachLengthCells * 4);
+
+            for (int riverId = 0; riverId < grid.RiverCenterlinesCellSpace.Count; riverId++)
+            {
+                var line = grid.RiverCenterlinesCellSpace[riverId];
+                if (line == null || line.Count < 2)
+                    continue;
+
+                Vector2 endPt = line[line.Count - 1];
+                int endCx = Mathf.Clamp(Mathf.RoundToInt(endPt.x), 0, w - 1);
+                int endCz = Mathf.Clamp(Mathf.RoundToInt(endPt.y), 0, h - 1);
+                bool endAtBorder = IsMapBorderCell(endCx, endCz, w, h);
+                if (!endAtBorder)
+                    continue;
+
+                BuildReachPolylineSamples(line, reachParams.reachLengthCells, fromStart: false, reachSamples);
+
+                AuditRiverEndReachTerrain(
+                    outH,
+                    grid,
+                    line,
+                    reachSamples,
+                    reachParams,
+                    new Vector2Int(endCx, endCz),
+                    fromStart: false,
+                    out int sampleCount,
+                    out float maxBefore,
+                    out float avgBefore,
+                    out int cellsAboveBefore,
+                    out Vector2Int worstCell,
+                    out int worstDistFromEnd);
+
+                if (config.riverEndReachTerrainFixDebugLogs || config.debugLogs || config.debugHydrologyNetwork)
+                {
+                    Debug.Log(
+                        $"[RiverEndReachTerrainAudit] riverId={riverId} endAtBorder=1 endCell=({endCx},{endCz}) " +
+                        $"waterHeight01={reachParams.waterH:F4} sampleCount={sampleCount} reachLengthCells={reachParams.reachLengthCells} " +
+                        $"visualHalfWidthCells={reachParams.visualHalfWidthCells:F3} logicalRadiusCells={reachParams.logicalRadiusCells} " +
+                        $"maxTerrainAboveWaterBefore={maxBefore:F4} avgTerrainAboveWaterBefore={avgBefore:F4} worstCell=({worstCell.x},{worstCell.y}) " +
+                        $"worstDistFromEndCells={worstDistFromEnd} terrainCellsAboveWaterBefore={cellsAboveBefore} " +
+                        $"meshWidthMul={reachParams.meshWidthMul:F3} usesVisualWidth={(reachParams.usesVisualWidth ? 1 : 0)}");
+                }
+
+                int cellsLowered = 0;
+                int skippedFord = 0;
+                float maxAfter = 0f;
+                int startIndex = Mathf.Max(0, line.Count - reachParams.reachLengthCells);
+                int endIndex = line.Count - 1;
+
+                StampRiverEndReachCorridor(
+                    outH,
+                    grid,
+                    reachSamples,
+                    reachParams,
+                    ref cellsLowered,
+                    ref skippedFord,
+                    ref maxAfter);
+
+                bool applied = cellsLowered > 0 || cellsAboveBefore > 0;
+                float maxAboveAllowed = reachParams.ceiling - reachParams.waterH;
+                bool ok = maxAfter <= maxAboveAllowed + 1e-4f;
+
+                if (config.riverEndReachTerrainFixDebugLogs || config.debugLogs || config.debugHydrologyNetwork)
+                {
+                    Debug.Log(
+                        $"[RiverEndReachTerrainFix] riverId={riverId} applied={(applied ? 1 : 0)} cellsLowered={cellsLowered} " +
+                        $"reachLengthCells={reachParams.reachLengthCells} radiusCells={reachParams.radiusCells} " +
+                        $"maxBeforeAboveWater01={maxBefore:F4} maxAfterAboveWater01={maxAfter:F4} worstDistFromEndCells={worstDistFromEnd} " +
+                        $"startIndex={startIndex} endIndex={endIndex} skippedFordCells={skippedFord} ok={(ok ? 1 : 0)}");
+                }
+
+                Vector2 startPt = line[0];
+                int startCx = Mathf.Clamp(Mathf.RoundToInt(startPt.x), 0, w - 1);
+                int startCz = Mathf.Clamp(Mathf.RoundToInt(startPt.y), 0, h - 1);
+
+                BuildReachPolylineSamples(line, reachParams.reachLengthCells, fromStart: true, startSamples);
+                AuditRiverEndReachTerrain(
+                    outH,
+                    grid,
+                    line,
+                    startSamples,
+                    reachParams,
+                    new Vector2Int(startCx, startCz),
+                    fromStart: true,
+                    out _,
+                    out float startMaxAbove,
+                    out _,
+                    out _,
+                    out _,
+                    out _);
+
+                if (config.riverEndReachTerrainFixDebugLogs || config.debugLogs || config.debugHydrologyNetwork)
+                {
+                    bool startReachOk = startMaxAbove <= maxAboveAllowed + 1e-4f;
+                    Debug.Log(
+                        $"[RiverStartEndTerrainCompare] startMaxAboveWater={startMaxAbove:F4} endMaxAboveWater={maxAfter:F4} " +
+                        $"startCellsLowered=0 endCellsLowered={cellsLowered} startReachOk={(startReachOk ? 1 : 0)} endReachOk={(ok ? 1 : 0)}");
+                }
+            }
+        }
+
+        static void ApplyRiverEndReachTerrainCarveToHeightmap(
+            float[,] heights,
+            int hmRes,
+            GridSystem grid,
+            MapGenConfig config)
+        {
+            if (config == null || grid == null || heights == null || hmRes < 2 || !config.riverEndReachTerrainFixEnabled)
+                return;
+            if (grid.RiverCenterlinesCellSpace == null || grid.RiverCenterlinesCellSpace.Count == 0)
+                return;
+
+            int gw = grid.Width;
+            int gh = grid.Height;
+            var reachParams = BuildRiverEndReachTerrainParams(config, grid);
+            var reachSamples = new List<Vector2>(reachParams.reachLengthCells * 4);
+
+            for (int riverId = 0; riverId < grid.RiverCenterlinesCellSpace.Count; riverId++)
+            {
+                var line = grid.RiverCenterlinesCellSpace[riverId];
+                if (line == null || line.Count < 2)
+                    continue;
+
+                Vector2 endPt = line[line.Count - 1];
+                int endCx = Mathf.Clamp(Mathf.RoundToInt(endPt.x), 0, gw - 1);
+                int endCz = Mathf.Clamp(Mathf.RoundToInt(endPt.y), 0, gh - 1);
+                if (!IsMapBorderCell(endCx, endCz, gw, gh))
+                    continue;
+
+                BuildReachPolylineSamples(line, reachParams.reachLengthCells, fromStart: false, reachSamples);
+                int r = reachParams.radiusCells + reachParams.bankFall;
+                int minX = gw - 1;
+                int maxX = 0;
+                int minZ = gh - 1;
+                int maxZ = 0;
+                for (int i = 0; i < reachSamples.Count; i++)
+                {
+                    Vector2 c = reachSamples[i];
+                    minX = Mathf.Min(minX, Mathf.FloorToInt(c.x) - r);
+                    maxX = Mathf.Max(maxX, Mathf.CeilToInt(c.x) + r);
+                    minZ = Mathf.Min(minZ, Mathf.FloorToInt(c.y) - r);
+                    maxZ = Mathf.Max(maxZ, Mathf.CeilToInt(c.y) + r);
+                }
+
+                minX = Mathf.Clamp(minX, 0, gw - 1);
+                maxX = Mathf.Clamp(maxX, 0, gw - 1);
+                minZ = Mathf.Clamp(minZ, 0, gh - 1);
+                maxZ = Mathf.Clamp(maxZ, 0, gh - 1);
+
+                int cellsLowered = 0;
+                float maxAfter = 0f;
+                for (int x = minX; x <= maxX; x++)
+                {
+                    for (int z = minZ; z <= maxZ; z++)
+                    {
+                        if (grid.GetCell(x, z).riverFord)
+                            continue;
+
+                        float distAxis = MinDistanceToPolylineCells(new Vector2(x + 0.5f, z + 0.5f), reachSamples);
+                        if (distAxis > reachParams.radiusCells + reachParams.bankFall)
+                            continue;
+
+                        int cheb = Mathf.RoundToInt(distAxis);
+                        float distNorm = cheb / (float)Mathf.Max(1, reachParams.radiusCells);
+                        float centerW = 1f - Mathf.SmoothStep(0f, 1f, distNorm);
+                        float bankW = Mathf.SmoothStep(
+                            0f,
+                            1f,
+                            distAxis / Mathf.Max(1, reachParams.radiusCells + reachParams.bankFall));
+                        float target = reachParams.ceiling - centerW * reachParams.bedExtra;
+                        target = Mathf.Lerp(target, reachParams.ceiling, bankW * 0.65f);
+
+                        float u = gw <= 1 ? 0f : (float)x / (gw - 1);
+                        float v = gh <= 1 ? 0f : (float)z / (gh - 1);
+                        int hx0 = Mathf.Clamp(Mathf.FloorToInt(u * (hmRes - 1)), 0, hmRes - 1);
+                        int hy0 = Mathf.Clamp(Mathf.FloorToInt(v * (hmRes - 1)), 0, hmRes - 1);
+                        int hx1 = Mathf.Min(hx0 + 1, hmRes - 1);
+                        int hy1 = Mathf.Min(hy0 + 1, hmRes - 1);
+
+                        void LowerHm(int hy, int hx)
+                        {
+                            float before = heights[hy, hx];
+                            if (before > target + 1e-6f)
+                                cellsLowered++;
+                            heights[hy, hx] = Mathf.Min(before, target);
+                            maxAfter = Mathf.Max(maxAfter, heights[hy, hx] - reachParams.waterH);
+                        }
+
+                        LowerHm(hy0, hx0);
+                        if (hx1 != hx0)
+                            LowerHm(hy0, hx1);
+                        if (hy1 != hy0)
+                            LowerHm(hy1, hx0);
+                        if (hx1 != hx0 && hy1 != hy0)
+                            LowerHm(hy1, hx1);
+                    }
+                }
+
+                if (config.riverEndReachTerrainFixDebugLogs || config.debugLogs || config.debugHydrologyNetwork)
+                {
+                    float maxAboveAllowed = reachParams.ceiling - reachParams.waterH;
+                    bool ok = maxAfter <= maxAboveAllowed + 1e-4f;
+                    Debug.Log(
+                        $"[RiverEndReachTerrainFix] riverId={riverId} phase=heightmap_post_smooth applied=1 cellsLowered={cellsLowered} " +
+                        $"reachLengthCells={reachParams.reachLengthCells} radiusCells={reachParams.radiusCells} " +
+                        $"maxAfterAboveWater01={maxAfter:F4} ok={(ok ? 1 : 0)}");
+                }
+            }
+        }
+
+        static void ApplyRiverVisualTerrainChannelCarve(float[,] outH, GridSystem grid, MapGenConfig config)
+        {
+            if (config == null || grid == null || grid.RiverVisualSurfaceMask == null || !config.riverVisualTerrainCarveEnabled)
+                return;
+            bool[,] m = grid.RiverVisualSurfaceMask;
+            float depthW = config.riverTerrainCarveDepthWorld;
+            if (depthW < 1e-4f)
+                return;
+            float terrainY = config.terrainHeightWorld > 0f ? config.terrainHeightWorld : 50f;
+            float depth01 = Mathf.Clamp(depthW, 0f, 3f) / terrainY;
+            int falloff = Mathf.Clamp(config.riverTerrainCarveFalloffCells, 1, 32);
+            float curve = Mathf.Clamp(config.riverTerrainCarveCenterCurve, 0.35f, 3.5f);
+            float fordMul = Mathf.Clamp(config.riverTerrainCarveFordMul, 0.08f, 1f);
+            int extra = Mathf.Clamp(config.riverVisualTerrainCarveExtraCells, 0, 4);
+            int bankFall = Mathf.Clamp(config.riverVisualTerrainBankFalloffCells, 0, 8);
+            float centerMul = Mathf.Clamp(config.riverVisualTerrainCenterDepthMul, 1f, 1.5f);
+            float bankSoft = Mathf.Clamp(config.riverVisualTerrainBankSoftness, 0.35f, 1f);
+            int maxD = falloff + extra + bankFall;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            var dBank = new int[w, h];
+            for (int x = 0; x < w; x++)
+                for (int z = 0; z < h; z++)
+                    dBank[x, z] = int.MaxValue;
+
+            var qx = new Queue<int>();
+            var qz = new Queue<int>();
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    if (!m[x, z])
+                        continue;
+                    dBank[x, z] = 0;
+                    qx.Enqueue(x);
+                    qz.Enqueue(z);
+                }
+            }
+
+            while (qx.Count > 0)
+            {
+                int x = qx.Dequeue();
+                int z = qz.Dequeue();
+                int d = dBank[x, z];
+                if (d >= maxD)
+                    continue;
+                void TryNb(int nx, int nz)
+                {
+                    if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                        return;
+                    ref var c = ref grid.GetCell(nx, nz);
+                    if (c.type == CellType.Water && !m[nx, nz])
+                        return;
+                    if (c.type != CellType.Land && c.type != CellType.River && !(c.type == CellType.Water && m[nx, nz]))
+                        return;
+                    if (d + 1 >= dBank[nx, nz])
+                        return;
+                    dBank[nx, nz] = d + 1;
+                    qx.Enqueue(nx);
+                    qz.Enqueue(nz);
+                }
+
+                TryNb(x - 1, z);
+                TryNb(x + 1, z);
+                TryNb(x, z - 1);
+                TryNb(x, z + 1);
+            }
+
+            int carved = 0;
+            int bankCells = 0;
+            int maskCells = 0;
+            double sumCarve = 0.0;
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    if (dBank[x, z] > maxD)
+                        continue;
+                    ref var c = ref grid.GetCell(x, z);
+                    if (c.type == CellType.Water && !m[x, z])
+                        continue;
+                    float u = Mathf.Clamp01(dBank[x, z] / (float)Mathf.Max(1, maxD));
+                    float profile = Mathf.Pow(1f - u, curve);
+                    if (m[x, z])
+                        profile = Mathf.Pow(profile, 1f / centerMul);
+                    else
+                        profile *= bankSoft;
+                    float carve = depth01 * profile;
+                    if (c.riverFord)
+                        carve *= fordMul;
+                    if (carve < 1e-8f)
+                        continue;
+                    outH[x, z] = Mathf.Clamp01(outH[x, z] - carve);
+                    carved++;
+                    sumCarve += carve;
+                    if (m[x, z])
+                        maskCells++;
+                    else
+                        bankCells++;
+                }
+            }
+
+            if (carved > 0 && (config.debugLogs || config.debugHydrologyNetwork || config.debugRiverVisualStats))
+            {
+                double avg = sumCarve / carved;
+                Debug.Log(
+                    $"[RiverVisualTerrainSync] riverMaskCells={maskCells} carvedCells={carved} bankCells={bankCells} " +
+                    $"centerDepthMul={centerMul:F2} bankSoftness={bankSoft:F2} usedSurfaceMask=1 carve01_medio={(float)avg:F4}");
             }
         }
 
@@ -608,11 +1779,11 @@ namespace Project.Gameplay.Map.Generator
             float rangeH = maxH - minH;
             if (rangeH < 0.001f) rangeH = 1f;
 
-            int[,] shoreDist = useSand ? BuildShoreDistanceGrid(grid, sandShoreCells + 1) : null;
+            int[,] shoreDist = useSand ? BuildShoreDistanceGrid(grid, sandShoreCells + 1, config) : null;
             int moistureMaxDist = 1;
             if (useWet)
                 moistureMaxDist = Mathf.Clamp(Mathf.CeilToInt(config.terrainMoistureRadius) + 4, 1, 512);
-            int[,] moistureDist = useWet ? BuildShoreDistanceGrid(grid, moistureMaxDist) : null;
+            int[,] moistureDist = useWet ? BuildShoreDistanceGrid(grid, moistureMaxDist, config) : null;
 
             int gw = grid != null ? grid.Width : 0;
             int gh = grid != null ? grid.Height : 0;
@@ -875,7 +2046,7 @@ namespace Project.Gameplay.Map.Generator
             return Mathf.Lerp(Mathf.Lerp(b00, b10, tx), Mathf.Lerp(b01, b11, tx), tz);
         }
 
-        static int[,] BuildShoreDistanceGrid(GridSystem grid, int maxDist)
+        static int[,] BuildShoreDistanceGrid(GridSystem grid, int maxDist, MapGenConfig config)
         {
             int w = grid.Width;
             int h = grid.Height;
@@ -886,14 +2057,19 @@ namespace Project.Gameplay.Map.Generator
 
             var qx = new Queue<int>();
             var qz = new Queue<int>();
+            bool stripRiverSurface = config != null && config.riverVisualUseRiverSurfaceMeshStrip;
             for (int x = 0; x < w; x++)
                 for (int z = 0; z < h; z++)
-                    if (grid.GetCell(x, z).type == CellType.Water || grid.GetCell(x, z).type == CellType.River)
+                {
+                    var t = grid.GetCell(x, z).type;
+                    bool seed = t == CellType.Water || (t == CellType.River && !stripRiverSurface);
+                    if (seed)
                     {
                         dist[x, z] = 0;
                         qx.Enqueue(x);
                         qz.Enqueue(z);
                     }
+                }
 
             while (qx.Count > 0)
             {

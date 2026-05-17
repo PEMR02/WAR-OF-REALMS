@@ -5,7 +5,8 @@ namespace Project.Gameplay.Map.Generator
 {
     /// <summary>
     /// Alpha: relieve macro automático (picos y cuencas) sobre el heightmap lógico del grid.
-    /// No expone geometría manual; solo parámetros agregados desde <see cref="MapGenConfig"/>.
+    /// Si macroBasinCount=0 y el macro está desactivado, <see cref="HeightGenerator"/> aplica cuencas hidrológicas
+    /// de respaldo en el paso base antes de la hidrología.
     /// </summary>
     public static class MacroTerrainSculptor
     {

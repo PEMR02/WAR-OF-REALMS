@@ -61,6 +61,9 @@ namespace Project.Gameplay.Map.Generator
 
             _dbg = debugLogs || c.debugLogs;
 
+            if (_dbg || c.debugHydrologyNetwork || c.debugRiverHydrologyPerf)
+                Debug.Log($"[WaterHeightRuntime] waterHeight01={c.waterHeight01:F4}");
+
             for (int retry = 0; retry < c.maxRetries; retry++)
             {
                 int seed = c.seed + retry;
@@ -76,43 +79,65 @@ namespace Project.Gameplay.Map.Generator
                 LogPhaseStart("Fase1 GridBase");
                 RunPhase1_GridBase(c);
                 LogPhaseEnd("Fase1 GridBase");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_grid_base");
 
                 LogPhaseStart("Fase2 Regiones");
                 RegionGenerator.GenerateRegions(_grid, c, _rng);
                 LogPhaseEnd("Fase2 Regiones");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_regions");
 
-                LogPhaseStart("Fase3 Agua");
-                WaterGenerator.GenerateWater(_grid, c, _rng);
-                LogPhaseEnd("Fase3 Agua");
+                // Pipeline alturas/hidrología: primero height01 de tierra (ruido + macro) para que el muestreo downhill
+                // del agua vea relieve real; luego tipado acuático, campo de distancia a agua, superficie cauce/lago,
+                // refinamiento (picos/spawn) y por último ciudades/caminos + carve (sin mover SimpleRiverPathGenerator).
+                LogPhaseStart("Fase3 BaseHeightGeneration");
+                HeightGenerator.GenerateBaseTerrainHeights(_grid, c, _rng);
+                LogPhaseEnd("Fase3 BaseHeightGeneration");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_base_noise_heights");
+                MapTerrainReliefDiagnostics.TryLogTerrainRelief(_grid, c, "after_base_noise_heights");
 
-                LogPhaseStart("Fase3b WaterDistance");
-                WaterDistanceField.Build(_grid);
-                LogPhaseEnd("Fase3b WaterDistance");
-
-                LogPhaseStart("Fase4 Heights");
-                HeightGenerator.GenerateHeights(_grid, c, _rng);
-                LogPhaseEnd("Fase4 Heights");
-
-                LogPhaseStart("Fase4b MacroRelief (alpha)");
+                LogPhaseStart("Fase3b MacroRelief (alpha)");
                 MacroTerrainSculptor.Apply(_grid, c, _rng, c.alphaTerrainFeatureRecord);
-                HeightGenerator.ApplySpawnFriendlyPeakSuppression(_grid, c);
-                HeightGenerator.RecalculateLandSlopes(_grid, c);
-                LogPhaseEnd("Fase4b MacroRelief (alpha)");
+                LogPhaseEnd("Fase3b MacroRelief (alpha)");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_macro_pre_water");
+                MapTerrainReliefDiagnostics.TryLogTerrainRelief(_grid, c, "after_macro_pre_water");
 
-                LogPhaseStart("Fase5 Ciudades");
+                LogPhaseStart("Fase4 Agua / hidrología");
+                WaterGenerator.GenerateWater(_grid, c, _rng);
+                LogPhaseEnd("Fase4 Agua / hidrología");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_water_hydro");
+
+                LogPhaseStart("Fase4b WaterDistance");
+                WaterDistanceField.Build(_grid);
+                LogPhaseEnd("Fase4b WaterDistance");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_water_distance");
+
+                LogPhaseStart("Fase4c HydrologySurfaceHeights");
+                HeightGenerator.ApplyHydrologySurfaceHeights(_grid, c);
+                LogPhaseEnd("Fase4c HydrologySurfaceHeights");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_hydro_surface_heights");
+
+                LogPhaseStart("Fase5 Refinamiento terreno (post-hidrología)");
+                HeightGenerator.GenerateFinalTerrainPass(_grid, c);
+                LogPhaseEnd("Fase5 Refinamiento terreno (post-hidrología)");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_macro_smooth_normalize");
+                MapTerrainReliefDiagnostics.TryLogTerrainRelief(_grid, c, "after_macro_smooth_normalize");
+
+                LogPhaseStart("Fase6 Ciudades");
                 _cities = CityGenerator.GenerateCities(_grid, c, _rng);
-                LogPhaseEnd("Fase5 Ciudades", $"# ciudades={_cities.Count}");
+                LogPhaseEnd("Fase6 Ciudades", $"# ciudades={_cities.Count}");
 
-                LogPhaseStart("Fase6 Caminos");
+                LogPhaseStart("Fase7 Caminos");
                 _roads = RoadNetworkGenerator.BuildRoads(_grid, _cities, c);
-                LogPhaseEnd("Fase6 Caminos", $"# caminos={_roads.Count}");
+                LogPhaseEnd("Fase7 Caminos", $"# caminos={_roads.Count}");
 
-                LogPhaseStart("Fase7 Carve");
+                LogPhaseStart("Fase8 Carve");
                 TerrainCarver.ApplyCityFlatten(_grid, _cities, c);
                 TerrainCarver.ApplyRoadFlatten(_grid, _roads, c);
-                LogPhaseEnd("Fase7 Carve");
+                HeightGenerator.RecalculateLandSlopes(_grid, c);
+                LogPhaseEnd("Fase8 Carve");
+                MapHeightPhaseDiagnostics.TryLogHeightPhase(_grid, c, "after_city_road_flatten");
 
-                LogPhaseStart("Fase7c RegionClassification");
+                LogPhaseStart("Fase8c RegionClassification");
                 if (c.alphaRegionRules != null)
                 {
                     _grid.SemanticRegions = RegionClassifier.Classify(_grid, c.alphaRegionRules);
@@ -127,7 +152,7 @@ namespace Project.Gameplay.Map.Generator
                 }
                 else
                     _grid.SemanticRegions = null;
-                LogPhaseEnd("Fase7c RegionClassification");
+                LogPhaseEnd("Fase8c RegionClassification");
 
                 LogPhaseStart("Fase8 Recursos");
                 ResourceGenerator.PlaceResources(_grid, _cities, c, _rng);
@@ -283,6 +308,26 @@ namespace Project.Gameplay.Map.Generator
                             Gizmos.color = col;
                             Gizmos.DrawCube(p, new Vector3(s, 0.02f, s));
                         }
+                    }
+                }
+            }
+
+            if (c.debugDrawWaterFusionMask && WaterGenerator.DebugLastRiverFusionBlurField != null)
+            {
+                var blur = WaterGenerator.DebugLastRiverFusionBlurField;
+                int wF = _grid.Width;
+                int hF = _grid.Height;
+                float s = Mathf.Max(0.06f, cs * 0.2f);
+                for (int z = 0; z < hF; z++)
+                {
+                    for (int x = 0; x < wF; x++)
+                    {
+                        float v = Mathf.Clamp01(blur[x, z]);
+                        if (v < 0.015f)
+                            continue;
+                        Vector3 p = new Vector3(o.x + (x + 0.5f) * cs, y + 0.03f, o.z + (z + 0.5f) * cs);
+                        Gizmos.color = new Color(0.12f, 0.42f, 0.92f, Mathf.Lerp(0.08f, 0.42f, v));
+                        Gizmos.DrawCube(p, new Vector3(s, 0.015f, s));
                     }
                 }
             }

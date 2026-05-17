@@ -101,7 +101,29 @@ namespace Project.Gameplay.Map.Generation
                 result.TerrainFeatures = null;
             }
 
+            if (cfg != null &&
+                (cfg.debugHydrologyNetwork || cfg.debugRiverHydrologyPerf || cfg.debugLogs))
+            {
+                var ctxPrev = result.RuntimeContext;
+                string scaleLegacy =
+                    $"legacyWillApply={(ctxPrev != null && ctxPrev.applyLegacyRiverWidthScale ? "Sí" : "No")};" +
+                    $"legacyK={(ctxPrev != null ? ctxPrev.legacyRiverWidthScale.ToString("F3") : "na")}";
+                UnityEngine.Debug.Log(
+                    $"[RiverWidthTrace] stage=after_match_compile riverWidthRadiusCells={cfg.riverWidthRadiusCells} " +
+                    $"riverWidthScale=No aplicado aún ({scaleLegacy}) matchWaterRw={Mathf.Clamp(match.water.riverWidthRadiusCells, 0, 6)}");
+            }
+
             result.RuntimeContext.ApplyToCompiledMapGen(cfg);
+
+            if (cfg != null &&
+                (cfg.debugHydrologyNetwork || cfg.debugRiverHydrologyPerf || cfg.debugLogs))
+            {
+                var ctx = result.RuntimeContext;
+                UnityEngine.Debug.Log(
+                    $"[RiverWidthTrace] stage=after_runtime_context riverWidthRadiusCells={cfg.riverWidthRadiusCells} " +
+                    $"riverWidthScale={(ctx != null && ctx.legacyRiverWidthScaleAppliedToCompiledConfig ? "Sí" : "No")} " +
+                    $"legacyK={(ctx != null ? ctx.legacyRiverWidthScale.ToString("F3") : "na")}");
+            }
 
             ApplyDefaultMacroReliefIfMissing(match, cfg);
 
@@ -187,6 +209,9 @@ namespace Project.Gameplay.Map.Generation
             target.debugTerrainGrassDry = template.debugTerrainGrassDry;
             target.debugRiverVisualStats = template.debugRiverVisualStats;
             target.debugLogs = template.debugLogs;
+            target.debugHydrologyNetwork = template.debugHydrologyNetwork;
+            target.debugRiverHydrologyPerf = template.debugRiverHydrologyPerf;
+            target.debugWaterGeneratePerfDiagnostics = template.debugWaterGeneratePerfDiagnostics;
             // Gizmos agua / vados: deben seguir la plantilla técnica tras compilar Match (runtime clone).
             target.debugDrawWaterMaskGizmos = template.debugDrawWaterMaskGizmos;
             target.debugDrawWaterShoreDepthGizmos = template.debugDrawWaterShoreDepthGizmos;
@@ -353,12 +378,28 @@ namespace Project.Gameplay.Map.Generation
         {
             var tree = rt.Resources?.treePrefab != null ? rt.Resources.treePrefab.name : "null";
             string mode = rt.UsedHighLevelAlphaConfig ? "ALPHA" : "Legacy";
+            var cfg = rt.CompiledMapGen;
+            string mapGenAssetName = cfg != null ? cfg.name : "?";
+            string mapGenOrigin;
+            if (rt.TechnicalProfile?.technicalTemplate != null)
+                mapGenOrigin = $"technicalTemplate (profile '{rt.TechnicalProfileName}', asset '{mapGenAssetName}')";
+            else if (rt.UsedSceneLegacyDefinitiveTemplate)
+                mapGenOrigin = $"definitiveMapGenConfig escena (asset '{mapGenAssetName}')";
+            else
+                mapGenOrigin = $"MapGenConfigFactory baseline (runtime.name='{mapGenAssetName}')";
+
+            bool dbgNet = cfg != null && cfg.debugHydrologyNetwork;
+            bool dbgRiverPerf = cfg != null && cfg.debugRiverHydrologyPerf;
+            bool dbgWaterPerf = cfg != null && cfg.debugWaterGeneratePerfDiagnostics;
             Debug.Log(
                 "[MapGen] === Compilación runtime ===\n" +
                 $"  Modo: {mode}\n" +
                 $"  MatchConfig: {rt.SourceMatchName}\n" +
                 $"  Perfil técnico: {rt.TechnicalProfileName}\n" +
                 $"  Plantilla escena legacy: {(rt.UsedSceneLegacyDefinitiveTemplate ? "Sí (deprecated)" : "No")}\n" +
+                $"  MapGenConfig origen: {mapGenOrigin}\n" +
+                $"  Hydrology / debug flags: debugHydrologyNetwork={dbgNet} " +
+                $"debugRiverHydrologyPerf={dbgRiverPerf} debugWaterGeneratePerfDiagnostics={dbgWaterPerf}\n" +
                 $"  Overrides runtime: hidrología={(rt.RuntimeContext != null && rt.RuntimeContext.sceneHydrologyWasAppliedToMatch ? "Sí" : "No")}, " +
                 $"macroLobby={(rt.RuntimeContext != null && rt.RuntimeContext.lobbyMacroWasAppliedToMatch ? "Sí" : "No")}, " +
                 $"riverWidthScale={(rt.RuntimeContext != null && rt.RuntimeContext.legacyRiverWidthScaleAppliedToCompiledConfig ? "Sí" : "No")}\n" +

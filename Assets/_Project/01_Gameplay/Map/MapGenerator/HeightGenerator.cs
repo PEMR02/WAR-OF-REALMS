@@ -2,11 +2,30 @@ using UnityEngine;
 
 namespace Project.Gameplay.Map.Generator
 {
-    /// <summary>Fase 4: genera height01 coherente con regiones; agua plana a waterHeight01; calcula slopeDeg.</summary>
+    /// <summary>
+    /// Alturas lógicas: paso base (ruido + relieve jugable en tierra) antes de hidrología;
+    /// superficie de cauce/lago tras tipar celdas; refinamiento post-cuenca (supresión de picos + slopes).
+    /// </summary>
     public static class HeightGenerator
     {
-        /// <summary>Parámetros: regionId/biomeId (ya en grid), config.waterHeight01. Escribe height01 y slopeDeg.</summary>
-        public static void GenerateHeights(GridSystem grid, MapGenConfig config, IRng rng)
+        // Micro-relieve e hidrología base (pre-agua): amplitudes conservadoras; ver validación [TerrainRelief].
+        const float HydroMicroReliefFreqMul = 5f;
+        const float HydroMicroReliefAmp = 0.07f;
+        const float HillMaskEdgeFloor = 0.72f;
+
+        const int FallbackBasinCountMin = 2;
+        const int FallbackBasinCountMaxExclusive = 5;
+        const int FallbackBasinRadiusMin = 9;
+        const int FallbackBasinRadiusMaxExclusive = 21;
+        const float FallbackBasinDepthMin = 0.018f;
+        const float FallbackBasinDepthMax = 0.038f;
+
+        /// <summary>
+        /// Pre-hidrología: solo celdas no acuáticas. Ruido fractal, valles/mesetas respecto a waterHeight01 de config
+        /// (sin celdas Water/River aún; <see cref="GridSystem.DistanceToWaterCells"/> suele ser null ⇒ factor llanura neutro).
+        /// No aplica aplanado de ciudades/caminos ni carve (Fase posterior en <see cref="TerrainCarver"/>).
+        /// </summary>
+        public static void GenerateBaseTerrainHeights(GridSystem grid, MapGenConfig config, IRng rng)
         {
             if (grid == null || config == null || rng == null) return;
 
@@ -23,21 +42,8 @@ namespace Project.Gameplay.Map.Generator
                 for (int z = 0; z < h; z++)
                 {
                     ref var cell = ref grid.GetCell(x, z);
-                    if (cell.type == CellType.Water)
-                    {
-                        cell.height01 = waterH;
-                        cell.slopeDeg = 0f;
+                    if (cell.type == CellType.Water || cell.type == CellType.River)
                         continue;
-                    }
-                    if (cell.type == CellType.River)
-                    {
-                        float depth = cell.riverFord
-                            ? Mathf.Clamp(config.riverFordDepthBelowWater01, 0.002f, 0.12f)
-                            : Mathf.Clamp(config.riverBedDepthBelowWater01, 0.004f, 0.18f);
-                        cell.height01 = Mathf.Clamp01(waterH - depth);
-                        cell.slopeDeg = 0f;
-                        continue;
-                    }
 
                     float nx = (x + seedOff) * baseScale;
                     float nz = (z + seedOff * 2) * baseScale;
@@ -56,7 +62,7 @@ namespace Project.Gameplay.Map.Generator
                         ridged * Mathf.Lerp(0.18f, 0.42f, config.macroHillDensity) +
                         regionBias * 0.18f);
                     hillMask *= Mathf.Lerp(0.42f, 1f, waterDist01);
-                    hillMask *= Mathf.Lerp(0.46f, 1f, edge01);
+                    hillMask *= Mathf.Lerp(HillMaskEdgeFloor, 1f, edge01);
 
                     float slopeBand = Mathf.Lerp(0.12f, 0.28f, hillMask);
                     float summitBand = Mathf.Lerp(0.04f, 0.18f, ridged * waterDist01);
@@ -69,6 +75,15 @@ namespace Project.Gameplay.Map.Generator
                         baseH = waterH + (baseH - waterH) * macroHillMul * roughness;
                     }
 
+                    float hydroDetail =
+                        Mathf.PerlinNoise(nx * HydroMicroReliefFreqMul + 19.71f, nz * HydroMicroReliefFreqMul + 13.27f) - 0.5f;
+                    baseH += hydroDetail * HydroMicroReliefAmp;
+
+                    float contX01 = w > 1 ? x / (float)(w - 1) : 0f;
+                    float contZ01 = h > 1 ? z / (float)(h - 1) : 0f;
+                    float continentalSlope = ((1f - contX01) + (1f - contZ01)) * 0.06f;
+                    baseH += continentalSlope;
+
                     // Cerca de agua y bordes de spawn potenciales, capamos el relieve agresivo
                     // para dejar mejores mesetas jugables antes del macro sculpting.
                     float spawnFriendlyCap = Mathf.Lerp(0.48f, 1f, edge01 * waterDist01);
@@ -78,13 +93,63 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
+            if (!config.macroTerrainEnabled || config.macroBasinCount <= 0)
+                ApplyFallbackHydrologyBasins(grid, config, rng);
+
             RecalculateLandSlopes(grid, config);
 
             if (config.debugLogs)
-                Debug.Log($"Fase4 Heights: listo. Agua plana a {waterH:F2}. Slope calculado.");
+                Debug.Log($"Base terrain heights: listo (pre-hidrología). Referencia agua config={waterH:F2}. Slopes Land.");
         }
 
-        /// <summary>Recalcula pendiente en tierra (no agua/río). Tras <see cref="MacroTerrainSculptor"/>.</summary>
+        /// <summary>
+        /// Tras colocar ríos/lagos: ajusta height01 solo en <see cref="CellType.Water"/> y <see cref="CellType.River"/>.
+        /// No modifica alturas de tierra (Land/Mountain).
+        /// </summary>
+        public static void ApplyHydrologySurfaceHeights(GridSystem grid, MapGenConfig config)
+        {
+            if (grid == null || config == null) return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            float waterH = config.waterHeight01;
+
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    ref var cell = ref grid.GetCell(x, z);
+                    if (cell.type == CellType.Water)
+                    {
+                        cell.height01 = waterH;
+                        cell.slopeDeg = 0f;
+                    }
+                    else if (cell.type == CellType.River)
+                    {
+                        float depth = cell.riverFord
+                            ? Mathf.Clamp(config.riverFordDepthBelowWater01, 0.002f, 0.12f)
+                            : Mathf.Clamp(config.riverBedDepthBelowWater01, 0.004f, 0.18f);
+                        cell.height01 = Mathf.Clamp01(waterH - depth);
+                        cell.slopeDeg = 0f;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Post-hidrología (con distancia a agua válida): recorta picos en márgenes y recalcula pendientes en tierra.
+        /// Carve ciudad/camino permanece en <see cref="TerrainCarver"/> tras colocar ciudades y red vial.
+        /// </summary>
+        public static void GenerateFinalTerrainPass(GridSystem grid, MapGenConfig config)
+        {
+            if (grid == null || config == null) return;
+            ApplySpawnFriendlyPeakSuppression(grid, config);
+            RecalculateLandSlopes(grid, config);
+            if (config.debugLogs)
+                Debug.Log("Final terrain pass (post-hidrología): supresión de picos + slopes Land.");
+        }
+
+        /// <summary>Recalcula pendiente en tierra (no agua/río). Tras cambios de height01 (macro, refine, carve).</summary>
         public static void RecalculateLandSlopes(GridSystem grid, MapGenConfig config)
         {
             if (grid == null) return;
@@ -139,6 +204,55 @@ namespace Project.Gameplay.Map.Generator
                         continue;
 
                     cell.height01 = Mathf.Lerp(localCap, cell.height01, allow01 * allow01);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Cuencas radiales suaves cuando el alpha macro no coloca cuencas (macro off o macroBasinCount=0).
+        /// No crea agua; solo tendencia de altura para downhill antes de <see cref="WaterGenerator.GenerateWater"/>.
+        /// </summary>
+        static void ApplyFallbackHydrologyBasins(GridSystem grid, MapGenConfig config, IRng rng)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
+            int margin = Mathf.Clamp(config.macroMountainSpawnAvoidanceMarginCells, 4, Mathf.Max(4, Mathf.Min(w, h) / 2));
+            int basinCount = rng.NextInt(FallbackBasinCountMin, FallbackBasinCountMaxExclusive);
+
+            for (int b = 0; b < basinCount; b++)
+            {
+                for (int attempt = 0; attempt < 36; attempt++)
+                {
+                    int cx = rng.NextInt(margin, w - margin);
+                    int cz = rng.NextInt(margin, h - margin);
+                    ref var cell = ref grid.GetCell(cx, cz);
+                    if (cell.type != CellType.Land)
+                        continue;
+
+                    int rad = rng.NextInt(FallbackBasinRadiusMin, FallbackBasinRadiusMaxExclusive);
+                    float depth = Mathf.Lerp(FallbackBasinDepthMin, FallbackBasinDepthMax, rng.NextFloat());
+                    ApplyRadialLandHeight01Delta(grid, cx, cz, rad, -depth, onlyLand: true);
+                    break;
+                }
+            }
+        }
+
+        static void ApplyRadialLandHeight01Delta(GridSystem grid, int cx, int cz, int radius, float delta01, bool onlyLand)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
+            for (int x = Mathf.Max(0, cx - radius); x < Mathf.Min(w, cx + radius + 1); x++)
+            {
+                for (int z = Mathf.Max(0, cz - radius); z < Mathf.Min(h, cz + radius + 1); z++)
+                {
+                    ref var cell = ref grid.GetCell(x, z);
+                    if (onlyLand && cell.type != CellType.Land)
+                        continue;
+                    int dx = x - cx;
+                    int dz = z - cz;
+                    float t = 1f - Mathf.Clamp01(Mathf.Sqrt(dx * dx + dz * dz) / Mathf.Max(1f, radius));
+                    float falloff = Mathf.Pow(t, 0.82f);
+                    cell.height01 = Mathf.Clamp01(cell.height01 + delta01 * falloff);
                 }
             }
         }

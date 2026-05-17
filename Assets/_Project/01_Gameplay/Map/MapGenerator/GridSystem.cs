@@ -21,6 +21,32 @@ namespace Project.Gameplay.Map.Generator
         /// <summary>Ejes en mundo al momento de Fase3 (opcional). La malla ribbon deriva de <see cref="RiverCenterlinesCellSpace"/> al construir agua.</summary>
         public List<List<Vector3>> RiverCenterlinesWorld { get; set; }
 
+        /// <summary>
+        /// Corredor visual final del río (W×H): raster de la cinta surface mesh (centerline + halfWidth).
+        /// Solo render MS / tallado de terreno; no modifica <see cref="CellData"/>.
+        /// </summary>
+        public bool[,] RiverVisualSurfaceMask { get; set; }
+
+        /// <summary>
+        /// Cache por río: centerline visual final, halfWidths y anclas (desde camino funcional).
+        /// Construido una vez por <see cref="RiverSurfaceMeshBuilder.EnsureRiverVisualSurfaceCache"/>.
+        /// </summary>
+        public List<RiverVisualSurfaceData> RiverVisualSurfaces { get; set; }
+
+        /// <summary>True si <see cref="RiverVisualSurfaces"/> y <see cref="RiverVisualSurfaceMask"/> corresponden a la generación actual.</summary>
+        public bool RiverVisualSurfacesBuilt { get; set; }
+
+        /// <summary>Invalida cache visual (p. ej. antes de regenerar mapa).</summary>
+        public void ClearRiverVisualSurfaceCache()
+        {
+            RiverVisualSurfacesBuilt = false;
+            RiverVisualSurfaces = null;
+            RiverVisualSurfaceMask = null;
+        }
+
+        /// <summary>Metadatos hidrológicos (PR0+): paralelos a <see cref="RiverCenterlinesCellSpace"/>; no alteran gameplay por sí solos.</summary>
+        public HydrologyNetworkGraph HydrologyNetwork { get; set; }
+
         /// <summary>Debug: polilínea macro por río (espacio celda). Solo si MapGenConfig.debugDrawRiverPathInScene.</summary>
         public List<List<Vector2>> RiverPathDebugMacro { get; set; }
         /// <summary>Debug: centerline suavizada antes del raster (espacio celda).</summary>
@@ -31,6 +57,14 @@ namespace Project.Gameplay.Map.Generator
         /// Sirve para BFS orgánico río→lago sin propagar por todo el cauce.
         /// </summary>
         public HashSet<long> LakeBodyCellsPacked { get; set; }
+
+        public List<Vector2Int> PlannedLakeSinkCandidates { get; set; }
+
+        /// <summary>Patrón de extremos del río principal colocado (Fase4); usado para alinear lago con Highland→Lago.</summary>
+        public RiverMainPattern? HydrologyMainRiverPattern { get; set; }
+
+        /// <summary>Celda Land meta del río principal (LakeSink, borde, etc.); prioriza semilla de lago cerca de la boca.</summary>
+        public Vector2Int? HydrologyMainRiverTerminusCell { get; set; }
 
         /// <summary>Distancia Chebyshev a la celda de agua/río más cercana (alpha / recursos). Null hasta que WaterDistanceField la rellene.</summary>
         public int[,] DistanceToWaterCells { get; set; }

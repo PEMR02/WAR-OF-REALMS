@@ -18,15 +18,17 @@ MonoBehaviour:
   origin: {x: 0, y: 0, z: 0}
   seed: 12345
   maxRetries: 5
-  debugLogs: 0
+  debugLogs: 1
+  debugRiverHydrologyPerf: 1
+  debugHydrologyNetwork: 1
   debugTerrainMoisture: 0
-  debugTerrainMacro: 0
+  debugTerrainMacro: 1
   debugTerrainGrassDry: 0
   regionCount: 8
   regionNoiseScale: 0.02
-  waterHeight01: 0.2
-  riverCount: 1
-  lakeCount: 9
+  waterHeight01: 0.24
+  riverCount: 5
+  lakeCount: 4
   maxLakeCells: 300
   riverTowardExitStepChance: 0.72
   riverMeanderLengthMultiplier: 2.05
@@ -93,6 +95,9 @@ MonoBehaviour:
   allowFallbackCrossing: 1
   riverPlacementMaxAttemptsPerRiver: 40
   riverCorridorRejectEarlyAbort: 12
+  maxTotalRiverBuildAttempts: 0
+  riverDebugUnlimitedBuildAttempts: 0
+  riverEarlyRejectConsecutiveToBreakStrictPass: 7
   riverLogPlacementFailureSummary: 1
   riverLogSuccessfulPlacementMetrics: 0
   riverRibbonHalfWidthMinMul: 0.66
@@ -182,6 +187,13 @@ MonoBehaviour:
   riverFusionBlurPasses: 3
   riverShoreWalkableWidthCells: 1
   debugDrawWaterMaskGizmos: 0
+  debugDrawWaterFusionMask: 0
+  riverFusionContinuityDebug: 1
+  enableWaterTopologyCleanup: 1
+  waterTopologyRemoveIslandThresholdCells: 4
+  debugWaterTopologyCleanup: 1
+  debugDrawWaterTopologyCleanupGizmo: 1
+  debugWaterGeneratePerfDiagnostics: 1
   waterEdgeSmoothness: 0.7
   waterEdgeNoiseAmplitude: 0.08
   waterEdgeNoiseScale: 0.18
@@ -222,6 +234,7 @@ MonoBehaviour:
   riverFordMaxPerSegment: 1
   riverFordMaxSegmentLengthCells: 80
   riverFordMinSubSegmentLengthCells: 20
+  riverFordMinWalkableBlobCells: 4
   waterCrossingDecorationPrefab: {fileID: 595073020859021925, guid: 48435e0ae3fee3940a6a544ed57e9123, type: 3}
   waterCrossingDecorationPrefabs: []
   waterEnableShoreProps: 0

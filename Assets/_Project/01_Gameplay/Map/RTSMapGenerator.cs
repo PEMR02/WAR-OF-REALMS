@@ -510,7 +510,7 @@ namespace Project.Gameplay.Map
             target.resources.placement.globalMineralClusterRadiusCells = globalMineralClusterRadiusCells;
             target.water.baseHeightNormalized = waterHeightRelative >= 0f && waterHeightRelative <= 1f
                 ? waterHeightRelative
-                : 0.4f;
+                : 0.24f;
             target.climate.paintTerrainByHeight = paintTerrainByHeight;
             target.climate.grassLayer = grassLayer;
             target.climate.dirtLayer = dirtLayer;
@@ -612,7 +612,7 @@ namespace Project.Gameplay.Map
                 m.hydrology.lakeCount = lakeCount;
                 float lobbyWater01 = waterHeightRelative >= 0f && waterHeightRelative <= 1f
                     ? waterHeightRelative
-                    : 0.4f;
+                    : Mathf.Clamp01(m.hydrology.waterBaseHeightNormalized);
                 m.hydrology.waterBaseHeightNormalized = lobbyWater01;
                 // En el pipeline definitivo la autoridad es baseHeightNormalized.
                 // Dejamos waterHeightRelative fuera de [0,1] para evitar que parezca "doble fuente".

@@ -2,6 +2,13 @@ using UnityEngine;
 
 namespace Project.Gameplay.Map.Generator
 {
+    /// <summary>Extremos de la malla de superficie de río (solo visual).</summary>
+    public enum RiverSurfaceCapMode
+    {
+        Bevel = 0,
+        Round = 1
+    }
+
     /// <summary>Configuración del Generador Definitivo de Mapas. Fuente única de parámetros (sin valores mágicos).</summary>
     [CreateAssetMenu(fileName = "MapGenConfig", menuName = "Map Generator/MapGenConfig", order = 0)]
     public class MapGenConfig : ScriptableObject
@@ -24,6 +31,10 @@ namespace Project.Gameplay.Map.Generator
         [Header("Debug / Logs")]
         [Tooltip("Si está activo, el Generador Definitivo imprime logs detallados por fase. Recomendado OFF para optimizar y limpiar consola.")]
         public bool debugLogs = false;
+        [Tooltip("Logs [RiverPerf], [RiverEarlyReject], [RiverBuildPerf], [WaterPerfSummary] para hidrología (Fase4 ríos).")]
+        public bool debugRiverHydrologyPerf = false;
+        [Tooltip("Logs [HydrologyGraph], [RiverHierarchy], [RiverPlacementV2] (grafo hidrológico PR0–PR2).")]
+        public bool debugHydrologyNetwork = false;
         [Tooltip("Tras exportar terreno: plano(s) encima del mapa con la máscara de humedad (escala de grises).")]
         public bool debugTerrainMoisture = false;
         [Tooltip("Tras exportar terreno: plano con el ruido macro usado en el splat (antes del reparto grass/dirt).")]
@@ -37,11 +48,67 @@ namespace Project.Gameplay.Map.Generator
         public float regionNoiseScale = 0.02f;
 
         [Header("Agua (ríos y lagos en grid)")]
-        [Range(0f, 1f)] public float waterHeight01 = 0.25f;
+        [Range(0f, 1f)] public float waterHeight01 = 0.24f;
         public int riverCount = 3;
         public int lakeCount = 2;
         [Tooltip("Máximo de celdas por lago (flood fill).")]
-        public int maxLakeCells = 200;
+        public int maxLakeCells = 240;
+        [Tooltip("Si hay ríos colocados, no sembrar lago más cerca que N (Chebyshev) de la centerline del río principal.")]
+        public bool lakeValidateSeparationFromMainRiver = true;
+        [Range(4, 24)] public int lakeMinChebyshevDistanceFromMainRiverCells = 10;
+        [Tooltip("Logs [LakeRiverSeparation] al colocar lagos.")]
+        public bool debugLakeRiverSeparationLog = false;
+
+        [Header("Río principal — anclas y patrones (hidrología)")]
+        [Tooltip("Si true, el fallback borde↔borde sigue disponible tras intentar anclas interiores.")]
+        public bool riverMainAllowBorderToBorder = true;
+        [Tooltip("Peso relativo del fallback borde↔borde (bajo = pocos ríos solo-borde).")]
+        [Range(0f, 1f)] public float riverMainBorderToBorderWeight = 0.12f;
+        [Range(0f, 1f)] public float riverMainInteriorSourceWeight = 0.6f;
+        [Range(0f, 1f)] public float riverMainLakeSinkWeight = 0.2f;
+        [Tooltip("Si true, se permiten patrones con origen en borde real (BorderToLake, BorderToInteriorBasin, etc.).")]
+        public bool riverMainAllowBorderStart = true;
+        [Tooltip("Peso relativo de patrones con inicio en borde (no incluye BorderToBorder; ver riverMainBorderToBorderWeight).")]
+        [Range(0f, 1f)] public float riverMainBorderStartWeight = 0.2f;
+        [Tooltip("Distancia mínima Chebyshev al borde para fuentes interiores (alta/montaña/cuenca).")]
+        [Range(4, 160)] public int riverMainMinSourceDistanceFromBorderCells = 24;
+        [Tooltip("Distancia máxima al borde para clasificar fuentes interiores (anillo).")]
+        [Range(8, 200)] public int riverMainMaxSourceDistanceFromBorderCells = 96;
+        [Tooltip("Inset desde el borde físico al elegir BorderExit. 0 = celda de borde real (x==0, y==0, etc.).")]
+        [Range(0, 48)] public int riverMainBorderExitInsetCells = 0;
+        [Tooltip("Máximo de celdas que TryExtendPathTowardTrueMapEdge puede añadir tras A*. 0 = desactivar extensión BFS al borde.")]
+        [Range(0, 32)] public int riverMainMaxBorderPathExtensionCells = 0;
+        [Tooltip("0 = automático: redondeo(min(W,H)×0.45).")]
+        public int riverMainMinPathCells = 0;
+        [Tooltip("0 = automático: redondeo((W+H)×1.25).")]
+        public int riverMainMaxPathCells = 0;
+        [Tooltip("Si lakeCount==0, priorizar patrón BorderToBorder para evitar fuentes muy interiores.")]
+        public bool riverMainPreferBorderToBorderWhenNoLake = true;
+        [Tooltip("Ruta principal: pathCells / diag(mapa) mínimo antes de aceptar (solo main).")]
+        [Range(0.25f, 0.75f)] public float riverMainMinPathToMapDiagRatio = 0.55f;
+        [Tooltip("Si lakeCount==0 y la fuente queda lejos del borde, reintentar otro par/patrón.")]
+        public bool riverMainRetryIfSourceTooFarFromBorder = true;
+        [Tooltip("Chebyshev máximo del origen al borde cuando lakeCount==0.")]
+        [Range(0, 24)] public int riverMainMaxSourceDistanceFromBorderWhenNoLakeCells = 6;
+        [Tooltip("Emitir [RiverRouteLengthAudit] y [RiverEndpointPolicy] en ruta principal.")]
+        public bool riverMainEndpointAuditEnabled = true;
+
+        [Header("Río principal — forma de ruta (grid, A*)")]
+        [Tooltip("Si straightnessRatio supera este valor, la ruta se considera demasiado recta y puede forzarse reshape orgánico.")]
+        [Range(0.45f, 0.92f)] public float riverMainMaxAcceptedStraightnessRatio = 0.64f;
+        [Tooltip("Máximo de celdas consecutivas en la misma dirección aceptado sin reshape orgánico.")]
+        [Range(4, 64)] public int riverMainMaxStraightRunCells = 18;
+        [Tooltip("Si true: rutas demasiado rectas intentan reshape por cuencas / waypoints antes de aceptar la ruta directa.")]
+        public bool riverMainForceOrganicReshape = true;
+        [Tooltip("Tiempo extra máximo (ms) para intentos de reshape orgánico del río principal.")]
+        [Range(10f, 200f)] public float riverMainOrganicReshapeBudgetMs = 80f;
+        [Tooltip("Si max(W,H) ≥ este valor, en reshape orgánico se intenta primero con 2 waypoints (luego 1).")]
+        [Range(96, 512)] public int riverMainOrganicLargeMapMinCells = 192;
+        [Tooltip("En A* del río principal: tras esta corrida recta acumulada, sumar coste extra suave por celda adicional.")]
+        [Range(3, 24)] public int riverMainStraightRunCostStartCells = 8;
+        [Tooltip("Multiplicador del coste extra por celda recta por encima del umbral (río principal).")]
+        [Range(0.02f, 0.35f)] public float riverMainStraightRunCostMul = 0.08f;
+
         [Tooltip("Reservado (compatibilidad con assets); el trazado orgánico usa Bezier. Ignorado en la generación actual.")]
         [Range(0.55f, 0.92f)] public float riverTowardExitStepChance = 0.72f;
         [Tooltip("Reservado (compatibilidad con assets); ignorado en la generación actual.")]
@@ -96,14 +163,197 @@ namespace Project.Gameplay.Map.Generator
         [Header("Río — malla continua (ribbon, solo visual)")]
         [Tooltip("Si true: el río es una malla ribbon sobre el Bezier; el marching squares solo cubre lagos (Water). Si false: el MS incluye celdas River como antes.")]
         public bool riverVisualUseContinuousMesh = true;
-        [Tooltip("Mitad del ancho del cauce en mundo (ribbon); base RTS. Variación: Perlin + riverRibbonWidthVariation.")]
+        [Tooltip("Si true: Marching Squares incluye celdas River (modo cuadriculado). Si false y riverVisualUseContinuousMesh: el cauce va por ribbon y MS solo lagos. Default false = ribbon activo en configs antiguas sin el campo.")]
+        public bool riverVisualRenderRiverAsMarchingSquaresCells = false;
+        [Tooltip("Mitad del ancho del cauce en mundo (ribbon); base RTS. Variación: Perlin + riverRibbonWidthVariation. Si riverVisualRibbonFullWidthCellsMain > 0, el ancho principal se toma de celdas.")]
         [Range(0.12f, 16f)] public float riverVisualMeshHalfWidth = 2.15f;
+        [Tooltip("Ancho visual completo del ribbon del río principal en celdas (~2.2–3.2). 0 = usar solo riverVisualMeshHalfWidth en mundo.")]
+        [Range(0f, 4f)] public float riverVisualRibbonFullWidthCellsMain = 2.75f;
+        [Tooltip("Ancho visual completo del tributario en celdas (~1.2–2.0). 0 = igual que main / fallback a riverVisualMeshHalfWidth.")]
+        [Range(0f, 3f)] public float riverVisualRibbonFullWidthCellsTributary = 1.55f;
         [Tooltip("Separación entre muestras del eje del río en unidades mundo (más bajo = curva más suave).")]
         [Range(0.06f, 4f)] public float riverVisualSampleSpacing = 0.4f;
         [Tooltip("Reduce el ancho del ribbon respecto al nominal para evitar solape con orillas o lagos.")]
         [Range(0f, 3f)] public float riverVisualBankInset = 0f;
+        [Tooltip("Solo malla surface: no generar tributario si tiene menos de N celdas únicas y no toca el corredor del río principal.")]
+        [Range(2, 64)] public int riverVisualMinDetachedPatchCells = 8;
+        [Tooltip("Radio Chebyshev (celdas) alrededor del eje del río principal para considerar conectado un tributario.")]
+        [Range(1, 8)] public int riverVisualMainRiverCorridorCells = 2;
+        [Tooltip("Ribbon surface: longitud mínima de la centerline (suma de tramos en celdas) para renderizar tributario; 0 = usar default runtime.")]
+        [Range(0, 256)] public int riverVisualMinSurfacePieceLengthCells = 18;
+        [Tooltip("Ribbon surface: mínimo de celdas únicas ocupadas por el tributario; 0 = usar default runtime.")]
+        [Range(0, 256)] public int riverVisualMinSurfacePieceAreaCells = 12;
+        [Tooltip("Ribbon/MS cleanup: radio Chebyshev al eje del río principal para considerar corredor (protege tributarios conectados).")]
+        [Range(1, 16)] public int riverVisualMainCorridorKeepDistanceCells = 3;
+        [Tooltip("Protección visual alrededor de celdas River con vado (Chebyshev); no suprimir ni recortar ribbon cerca del vado.")]
+        [Range(1, 24)] public int riverVisualFordKeepDistanceCells = 5;
+        [Tooltip("Solo MS de lagos: suprimir en la máscara coarse componentes Water aisladas con menos de N celdas (no modifica CellData).")]
+        [Range(1, 200)] public int lakeVisualMinPatchCells = 20;
+        [Tooltip("Componentes Water con al menos estas celdas no se tratan como charco errante (preservación MS visual).")]
+        [Range(8, 256)] public int lakeVisualPreserveMinCells = 40;
+        [Tooltip("Charcos Water cerca del río (Chebyshev a River) con a lo sumo N celdas: suprimir en máscara MS (solo visual).")]
+        [Range(4, 48)] public int riverVisualStrayPoolMaxCells = 18;
+        [Tooltip("Distancia Chebyshev a cualquier celda River para considerar 'cerca del corredor del río' en limpieza MS.")]
+        [Range(1, 10)] public int riverVisualStrayPoolRiverChebyshevCells = 4;
         [Tooltip("Solo ribbon de río: sube la malla en Y (mundo) para alinearla con la orilla; el lecho del terreno suele quedar más bajo que el nivel de agua global.")]
         [Range(0f, 2.5f)] public float riverRibbonVerticalLiftWorld = 0.34f;
+        [Tooltip("Extra Y mundo sobre el agua MS para evitar z-fighting del ribbon (delgado).")]
+        [Range(0f, 0.25f)] public float riverRibbonAntiZFightYOffsetWorld = 0.035f;
+        [Tooltip("Si true: río visual por cinta simple (RiverSurfaceMeshBuilder). Si false: ribbon legacy (Catmull/Laplacian en WaterMeshBuilder).")]
+        public bool riverVisualUseRiverSurfaceMeshStrip = true;
+
+        [Header("Río — máscara visual final (surface mesh, sin gameplay)")]
+        [Tooltip("Cache único mesh+máscara+terreno desde RiverCenterlinesCellSpace (no recalcular por consumidor).")]
+        public bool riverVisualSurfaceCacheEnabled = true;
+        [Tooltip("Máx. desviación (celdas) de la centerline visual respecto al camino funcional.")]
+        [Range(0.2f, 2f)] public float riverVisualMaxPathDeviationCells = 0.85f;
+        [Tooltip("Margen Chebyshev al cull de triángulos fuera de RiverVisualSurfaceMask.")]
+        [Range(0, 3)] public int riverVisualTriangleCullMaskMarginCells = 1;
+        [Tooltip("Radio extra en celdas al rasterizar la cinta (centerline + halfWidth) sobre RiverVisualSurfaceMask.")]
+        [Range(0f, 1.5f)] public float riverVisualRasterMaskExtraCellMargin = 0.35f;
+        [Tooltip("Si true: antes del MS de lagos, elimina charcos que no tocan la máscara visual, vado ni lago real.")]
+        public bool riverVisualMaskCleanupEnabled = true;
+        [Range(1, 24)] public int riverVisualMaskKeepFordDistanceCells = 5;
+        [Tooltip("Techo de celdas por componente para seguir evaluando borrado (seguridad; el borrado real depende de preservación).")]
+        [Range(4, 512)] public int riverVisualMaskRemoveDetachedPatchMaxCells = 60;
+        [Tooltip("Componentes Water con al menos estas celdas = lago real (no borrar solo por falta de máscara si tocan cuerpo de lago).")]
+        [Range(8, 2000)] public int lakeVisualRealLakeMinCells = 60;
+        [Tooltip("Mínimo de celdas por componente para crear mesh Lake MS.")]
+        [Range(8, 2000)] public int lakeMSMinComponentCells = 60;
+        [Tooltip("Elimina componentes MS a esta distancia Chebyshev de River o RiverVisualSurfaceMask.")]
+        [Range(1, 16)] public int lakeMSRemoveNearRiverDistanceCells = 5;
+        [Tooltip("Expansión visual de orilla del lago (celdas), solo si no toca río/máscara de río.")]
+        [Range(0, 2)] public int lakeMSShoreExpandCells = 1;
+
+        [Tooltip("Limpieza MS final por RiverVisualSurfaceMask (charcos laterales / tiras sueltas).")]
+        public bool riverVisualFinalCleanupEnabled = true;
+        [Range(4, 512)] public int riverVisualFinalCleanupMaxPatchCells = 80;
+        [Range(1, 16)] public int riverVisualFinalCleanupNearRiverCells = 5;
+        [Range(1, 24)] public int riverVisualFinalCleanupKeepFordDistanceCells = 5;
+
+        [Header("Río — salida visual al borde del mapa (surface mesh)")]
+        [Tooltip("Extensión en borde: max(legacy, clamp(mul×anchoTotal, 1.5×ancho, 3×ancho)) en mundo. 0 = solo riverSurfaceExtendBorderExitVisualCells.")]
+        [Range(0f, 4f)] public float riverSurfaceExtendBeyondMapWidthMul = 2f;
+        [Tooltip("Si true: extremos en borde del mapa sin caps/bevel (corte plano).")]
+        public bool riverSurfaceDisableBorderCaps = true;
+
+        [Header("Río — tallado terreno alineado a máscara visual")]
+        [Tooltip("Si true y hay máscara visual: tallar cauce usando RiverVisualSurfaceMask (no solo celdas River).")]
+        public bool riverVisualTerrainCarveEnabled = true;
+        [Range(0, 4)] public int riverVisualTerrainCarveExtraCells = 1;
+        [Range(0, 8)] public int riverVisualTerrainBankFalloffCells = 3;
+        [Range(1f, 1.5f)] public float riverVisualTerrainCenterDepthMul = 1.15f;
+        [Range(0.35f, 1f)] public float riverVisualTerrainBankSoftness = 0.65f;
+
+        [Tooltip("Escala V de UV en la superficie de río (distancia acumulada * escala).")]
+        [Range(0.005f, 0.2f)] public float riverSurfaceMeshUvScale = 0.042f;
+        [Tooltip("Y extra mundo solo para malla de superficie simple (subir si z-fight con terreno).")]
+        [Range(0f, 0.25f)] public float riverSurfaceMeshExtraYOffsetWorld = 0.12f;
+        [Tooltip("Debug: material plano azul semitransparente (sin foam/normal/scroll) para aislar artefactos del shader.")]
+        public bool riverSurfaceDebugFlatMaterial = false;
+
+        [Header("Río — superficie mesh (centerline orgánica, solo visual)")]
+        [Tooltip("Pases de Chaikin (0–2) sobre la centerline en espacio celda. Se omite si genera autointersección.")]
+        [Range(0, 2)] public int riverSurfaceChaikinPasses = 1;
+        [Tooltip("Espaciado objetivo entre puntos al remuestrear por longitud de arco (en celdas).")]
+        [Range(0.35f, 2.5f)] public float riverSurfaceSampleSpacingCells = 1f;
+        [Tooltip("Techo de puntos visuales = ceil(celdas del path × este ratio).")]
+        [Range(1.05f, 2f)] public float riverSurfaceMaxVisualPointRatio = 1.35f;
+        [Tooltip("Pases de suavizado solo sobre vértices left/right (no mueve extremos).")]
+        [Range(0, 3)] public int riverSurfaceEdgeSmoothPasses = 1;
+        [Tooltip("Fuerza del suavizado de bordes (0 = sin efecto). Recomendado 0.25–0.35.")]
+        [Range(0f, 1f)] public float riverSurfaceEdgeSmoothStrength = 0.25f;
+        [Tooltip("Amplitud relativa del ruido de ancho en río principal (≈1±amp). Recomendado 0.06–0.10 solo visual.")]
+        [Range(0f, 0.25f)] public float riverSurfaceWidthNoiseAmpMain = 0.09f;
+        [Tooltip("Amplitud relativa del ruido de ancho en tributarios.")]
+        [Range(0f, 0.2f)] public float riverSurfaceWidthNoiseAmpTributary = 0.06f;
+        [Tooltip("Escala del Perlin a lo largo de la distancia acumulada en mundo (m⁻¹ aprox.).")]
+        [Range(0.005f, 0.2f)] public float riverSurfaceWidthNoiseScale = 0.035f;
+        [Tooltip("Forma del tapón en inicio/fin del cauce (el builder fuerza Bevel para evitar cuñas redondas grandes).")]
+        public RiverSurfaceCapMode riverSurfaceCapMode = RiverSurfaceCapMode.Bevel;
+        [Tooltip("Segmentos a lo largo del arco cuadrático del tapón redondo (pocos tris).")]
+        [Range(2, 8)] public int riverSurfaceRoundCapSegments = 4;
+        [Tooltip("Longitud del bisel en celdas (modo Bevel); en runtime se clampa a 0.25–0.65 y al ancho/celda.")]
+        [Range(0.25f, 0.65f)] public float riverSurfaceBevelCapLengthCells = 0.45f;
+        [Tooltip("Si true: el tributario no recibe tapón en el extremo de confluencia (solo inicio).")]
+        public bool riverSurfaceSkipTributaryConfluenceCap = true;
+        [Tooltip("Profundidad del bulbo del tapón redondo en fracción del ancho medio.")]
+        [Range(0.35f, 1.4f)] public float riverSurfaceRoundCapBulgeMul = 0.95f;
+        [Tooltip("Ángulo entre tramos consecutivos (grados) por encima del cual se inserta un punto de suavizado.")]
+        [Range(25f, 120f)] public float riverSurfaceSharpBendAngleDeg = 70f;
+
+        [Header("Río — superficie mesh (borde real / meandro solo visual)")]
+        [Tooltip("Extensión extra del centerline en celdas más allá del borde del mapa (solo visual, BorderExit).")]
+        [Range(0f, 1.5f)] public float riverSurfaceExtendBorderExitVisualCells = 0.75f;
+        [Tooltip("Si true: en el borde real del mapa se acorta u omite el cap biselado para que el cauce parezca continuar fuera.")]
+        public bool riverSurfaceSkipCapAtMapBorder = true;
+        [Tooltip("Si true: en borde de mapa el corte es plano (sin tapón biselado puntiagudo).")]
+        public bool riverSurfaceFlatMapBorderCut = true;
+        [Tooltip("Desde este ángulo (°) cerca del inicio/fin se acorta el bisel del cap (menos agresivo en curvas fuertes).")]
+        [Range(28f, 95f)] public float riverSurfaceBendCapRelaxAngleDeg = 52f;
+        [Tooltip("Variación suave de ancho solo río principal (fracción máxima ±). 0 = desactivar arco.")]
+        [Range(0f, 0.12f)] public float riverSurfaceMainArcWidthVarMaxFrac = 0.09f;
+        [Tooltip("Frecuencia de la variación de ancho a lo largo del arco (mundo⁻¹). Más bajo = ondulación más lenta.")]
+        [Range(0.003f, 0.06f)] public float riverSurfaceMainArcWidthVarInvLengthWorld = 0.012f;
+        [Tooltip("Si true: aplica variación de ancho tipo seno suave al río principal (solo visual).")]
+        public bool riverSurfaceMainArcWidthVarEnabled = true;
+        [Tooltip("Meandro sinusoidal leve sobre la centerline en mundo (no altera pathCells ni grid).")]
+        public bool riverSurfaceVisualMeanderEnabled = true;
+        [Range(0f, 0.6f)] public float riverSurfaceVisualMeanderAmplitudeCells = 0.22f;
+        [Range(2f, 48f)] public float riverSurfaceVisualMeanderFrequencyCells = 14f;
+        [Range(0.02f, 0.35f)] public float riverSurfaceVisualMeanderEndFade01 = 0.10f;
+        [Tooltip("Separación objetivo entre puntos de la centerline visual (celdas).")]
+        [Range(0.75f, 1.25f)] public float riverSurfaceVisualSpacingCells = 1f;
+        [Tooltip("Extensión máxima en borde (celdas) antes del clip jugable.")]
+        [Range(0f, 0.5f)] public float riverSurfaceBorderExtendMaxCells = 0f;
+        [Tooltip("Material plano debug para inspeccionar la cinta (no activar en build final).")]
+        public bool riverSurfaceDebugShowWire = false;
+        [Tooltip("Unlit plano transparente para diagnosticar artefactos de shader (no cambia geometría).")]
+        public bool riverSurfaceDebugForceUnlitFlat = false;
+        [Tooltip("Dibuja centerline lógica vs visual (solo editor/debug).")]
+        public bool riverSurfaceDebugDrawCenterline = false;
+        [Tooltip("Dibuja bordes left/right del ribbon (solo editor/debug).")]
+        public bool riverSurfaceDebugDrawEdges = false;
+        [Tooltip("Dibuja normales de join en codos (solo editor/debug).")]
+        public bool riverSurfaceDebugDrawJoinNormals = false;
+        [Tooltip("Desviación máxima (celdas) del suavizado respecto al path lógico.")]
+        [Range(0.2f, 1.2f)] public float riverSurfaceMaxSmoothDeviationCells = 0.5f;
+
+        [Header("Río — spline visual sobre path lógico")]
+        [Tooltip("Centerline visual Catmull-Rom centrípeta sobre RiverCenterlinesCellSpace (no altera gameplay).")]
+        public bool riverSurfaceUseSplineVisualCenterline = true;
+        [Range(0.15f, 1.5f)] public float riverSurfaceSplineSampleSpacingCells = 0.4f;
+        [Range(0.1f, 2f)] public float riverSurfaceSplineMaxDeviationCells = 1.35f;
+        [Tooltip("Ángulo máximo (°) entre muestras consecutivas antes de insertar punto intermedio.")]
+        [Range(12f, 45f)] public float riverSurfaceSplineMaxAngleStepDeg = 28f;
+        [Range(0f, 2f)] public float riverSurfaceSplineEndpointLockCells = 1f;
+        [Range(0f, 4f)] public float riverSurfaceSplineFordLockRadiusCells = 2f;
+        [Range(0f, 1f)] public float riverSurfaceSplineTension = 0.5f;
+        [Range(0f, 0.35f)] public float riverSurfaceBankNoiseAmpCells = 0.18f;
+        [Range(4f, 40f)] public float riverSurfaceBankNoiseLengthCells = 22f;
+        [Range(0f, 0.2f)] public float riverSurfaceWidthOrganicVarFrac = 0.14f;
+        [Tooltip("Legacy (ignorado): usar riverSurfaceVisualNormalWidthMul / riverSurfaceVisualMaxWidthMul.")]
+        [Range(1f, 1f)] public float riverSurfaceMinWidthMul = 1f;
+        [Tooltip("Legacy (ignorado): usar riverSurfaceVisualNormalWidthMul / riverSurfaceVisualMaxWidthMul.")]
+        [Range(1f, 1f)] public float riverSurfaceMaxWidthMul = 1f;
+        [Tooltip("Ancho normal/promedio del ribbon = base × este factor (mínimo local = base).")]
+        [Range(1.5f, 3f)] public float riverSurfaceVisualNormalWidthMul = 2f;
+        [Tooltip("Ancho máximo del ribbon = base × este factor.")]
+        [Range(2f, 4f)] public float riverSurfaceVisualMaxWidthMul = 3f;
+        [Tooltip("En vados: no bajar de base × este factor.")]
+        [Range(1f, 1.25f)] public float riverSurfaceFordMinWidthMul = 1f;
+        [Range(1f, 1.35f)] public float riverSurfaceFordMaxWidthMul = 1.2f;
+        [Tooltip("Celdas de taper gradual en extremos interiores (sin cap bevel).")]
+        [Range(3, 12)] public int riverSurfaceInteriorEndpointTaperCells = 5;
+        [Tooltip("Factor mínimo en taper interior; 1 = no punta (ancho mínimo = base).")]
+        [Range(1f, 1.25f)] public float riverSurfaceInteriorEndpointMinWidthMul = 1f;
+        [Tooltip("Fracción del ancho hacia el centro (borde interior de orilla).")]
+        [Range(0.4f, 0.75f)] public float riverSurfaceInnerBankWidthFrac = 0.58f;
+        [Tooltip("Si true: no extender centerline visual hacia fuera del mapa.")]
+        public bool riverSurfaceDisableBorderExtension = true;
+        [Tooltip("Alias explícito: corte plano en borde del mapa (usa riverSurfaceFlatMapBorderCut si false).")]
+        public bool riverSurfaceFlatCutAtMapBorder = true;
+
         [Tooltip("Si true: logs [RiverRibbonDebug] (puntos, bounds, maxSegment, saltos anormales). Quitar o desactivar tras depurar.")]
         public bool debugRiverRibbonGeometry = false;
         [Tooltip("Debug explícito: permite crear malla visible de River Ribbon. OFF por defecto para usar solo Marching Squares como render principal.")]
@@ -120,6 +370,31 @@ namespace Project.Gameplay.Map.Generator
         [Range(0.45f, 3.5f)] public float riverTerrainCarveCenterCurve = 1.35f;
         [Tooltip("En celdas de vado, factor aplicado a la tallada (cauce menos hondo).")]
         [Range(0.08f, 1f)] public float riverTerrainCarveFordMul = 0.32f;
+
+        [Header("Río — desembocadura en borde del mapa (solo terrain export)")]
+        [Tooltip("Rebaja terreno bajo la salida/entrada del río en celda de borde real (sin tocar mesh ni ruta).")]
+        public bool riverOutletTerrainFixEnabled = true;
+        [Range(4, 20)] public int riverOutletTerrainFixLengthCells = 10;
+        [Range(0.8f, 2f)] public float riverOutletTerrainFixRadiusMul = 1.15f;
+        [Range(1, 8)] public int riverOutletTerrainFixBankFalloffCells = 3;
+        [Range(0f, 0.02f)] public float riverOutletTerrainFixMaxHeightAboveWater01 = 0.006f;
+        public bool riverOutletTerrainFixOnlyAtMapBorder = true;
+        public bool riverOutletTerrainFixDebugLogs = true;
+
+        [Header("Río — último tramo en borde (terrain export, ancho visual)")]
+        [Tooltip("Talla el último tramo del río en borde con radio basado en ancho visual del ribbon (no solo celdas lógicas).")]
+        public bool riverEndReachTerrainFixEnabled = true;
+        [Range(12, 48)] public int riverEndReachTerrainFixLengthCells = 24;
+        [Range(0.8f, 2f)] public float riverEndReachTerrainFixRadiusMul = 1.25f;
+        public bool riverEndReachTerrainFixUseVisualWidth = true;
+        [Range(0f, 0.02f)] public float riverEndReachTerrainFixMaxHeightAboveWater01 = 0.006f;
+        public bool riverEndReachTerrainFixDebugLogs = true;
+
+        [Header("Río — extremos en borde (mesh, tangente estable)")]
+        [Tooltip("Puntos fantasma fuera del mapa (celdas) para calcular tangente en start/end de borde; el mesh se clippea al área jugable.")]
+        [Range(0f, 6f)] public float riverSurfaceBorderGhostCells = 2.5f;
+        [Tooltip("Ancho mínimo en extremo de borde = baseHalfWidth × este factor (igual start/end).")]
+        [Range(1.5f, 3f)] public float riverSurfaceBorderEndpointWidthMul = 2f;
 
         [Header("Río — borde orgánico (ribbon)")]
         [Tooltip("Jitter lateral en mundo sobre la polilínea antes del strip (evita línea perfecta).")]
@@ -192,6 +467,12 @@ namespace Project.Gameplay.Map.Generator
         [Range(4, 96)] public int riverPlacementMaxAttemptsPerRiver = 40;
         [Tooltip("Tras tantos rechazos seguidos por cruce de corredor (evitar cruces), deja de intentar ese río (evita 40× trabajo inútil).")]
         [Range(6, 40)] public int riverCorridorRejectEarlyAbort = 12;
+        [Tooltip("Tope global de intentos de colocación de río por GenerateWater. 0 = auto (≈48–96 según tamaño). Superado: relajar pase estricto y log [RiverAttemptBudget].")]
+        [Range(0, 500)] public int maxTotalRiverBuildAttempts = 0;
+        [Tooltip("Solo diagnóstico: ignora maxTotalRiverBuildAttempts (puede disparar cientos de intentos).")]
+        public bool riverDebugUnlimitedBuildAttempts = false;
+        [Tooltip("En pase estricto, tras tantos early-reject seguidos, salta al pase con cruces permitidos sin agotar todos los intentos estrictos (si allowFallbackCrossing).")]
+        [Range(3, 24)] public int riverEarlyRejectConsecutiveToBreakStrictPass = 7;
         [Tooltip("Si true, al fallar un río se imprime una línea resumida (intentos, rechazos, ms) aunque debugLogs esté en false.")]
         public bool riverLogPlacementFailureSummary = true;
         [Tooltip("Si true y debugLogs, tras cada río colocado con éxito se imprime métricas de intentos/tiempo.")]
@@ -382,6 +663,22 @@ namespace Project.Gameplay.Map.Generator
         [Range(0, 2)] public int riverShoreWalkableWidthCells = 1;
         [Tooltip("Debug opcional en SceneView: muestra máscara final de río fusionada, núcleo no caminable y franja de orilla caminable.")]
         public bool debugDrawWaterMaskGizmos = false;
+        [Tooltip("Overlay SceneView: campo escalar de la fusión de ríos tras blur (antes de umbrales core/orilla). Independiente de la máscara con core/shore.")]
+        public bool debugDrawWaterFusionMask = false;
+        [Tooltip("Logs [RiverFusionRemoved] / [RiverFusionPreserved] / [RiverContinuityProtected] al fusionar celdas de río (sin afectar gameplay).")]
+        public bool riverFusionContinuityDebug = false;
+
+        [Header("Agua — limpieza topológica (pre-MS, solo grid visual)")]
+        [Tooltip("Pasada final tras fusión/orilla, islas de tierra y núcleo profundo de lago: quita micro-islas de agua, puntas y artefactos diagonales antes del Marching Squares.")]
+        public bool enableWaterTopologyCleanup = true;
+        [Tooltip("Elimina componentes 4-conexos Water/River con menos de N celdas (ford/centerline excluyen todo el componente).")]
+        [Range(2, 24)] public int waterTopologyRemoveIslandThresholdCells = 4;
+        [Tooltip("Consola: resumen [WaterCleanup] con contadores y ms.")]
+        public bool debugWaterTopologyCleanup = false;
+        [Tooltip("SceneView: overlay de celdas eliminadas (requiere consumidor que lea WaterGenerator.DebugLastWaterCleanupRemovedPacked).")]
+        public bool debugDrawWaterTopologyCleanupGizmo = false;
+        [Tooltip("Consola: desglose [WaterGenPerf] de tiempos y contadores BFS/conectividad dentro de GenerateWater (solo diagnóstico; overhead ligero si está OFF).")]
+        public bool debugWaterGeneratePerfDiagnostics = false;
 
         [Header("Agua MS - calidad visual (solo malla, no gameplay)")]
         [Tooltip("Suavizado extra del campo escalar antes del iso (0 = igual que antes). Mayor = orillas más redondeadas (más iteraciones de blur ligero).")]
@@ -398,8 +695,12 @@ namespace Project.Gameplay.Map.Generator
         [Range(0f, 0.35f)] public float riverWidthNoiseScale = 0.05f;
         [Tooltip("Mezcla extra del campo río↔lago en celdas River tocando Water (evita corte duro). 0 = desactivar.")]
         [Range(0f, 1f)] public float riverLakeVisualBlend = 0.35f;
-        [Tooltip("Rango en celdas para mapear profundidad visual (interior → centro oscuro). Mayor = transición más ancha.")]
+        [Tooltip("Rango en celdas para mapear profundidad visual (interior → centro oscuro). Mayor = transición más ancha. Legacy: si river/lake shore = 0 se usa este valor.")]
         [Range(1f, 24f)] public float shoreVisualWidth = 7f;
+        [Tooltip("Orilla UV en cauce río (más bajo = menos franja tipo lago). ~1.2–1.8.")]
+        [Range(0.5f, 8f)] public float riverShoreVisualWidth = 1.55f;
+        [Tooltip("Orilla UV en lagos (Marching Squares). ~valor histórico shoreVisualWidth.")]
+        [Range(1f, 24f)] public float lakeShoreVisualWidth = 7f;
         [Tooltip("Contraste del gradiente orilla→profundo en UV (1 = lineal).")]
         [Range(0.35f, 3f)] public float shoreVisualBlend = 1.25f;
         [Tooltip("Fuerza del tinte profundo/orilla vía UV.y en Project/RTS River Water (0 = conservar mapeo UV anterior por posición).")]
