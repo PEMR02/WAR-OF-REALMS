@@ -50,6 +50,14 @@ Assets/_TerrainAutoUpgrade.meta
 Assets/New Terrain*.asset
 Assets/New Terrain*.asset.meta
 
+# Legacy local hydrology backup (do not commit)
+Assets/_Project/__OLD_HYDROLOGY_BACKUP/
+Assets/_Project/__OLD_HYDROLOGY_BACKUP.meta
+
+# One-off mapgen strip script (local tooling)
+Assets/_Project/01_Gameplay/Map/MapGenerator/_strip_riverpath.ps1
+Assets/_Project/01_Gameplay/Map/MapGenerator/_strip_riverpath.ps1.meta
+
 # MCP / CLI probe leftovers (repository root)
 /_mcp_*
 
