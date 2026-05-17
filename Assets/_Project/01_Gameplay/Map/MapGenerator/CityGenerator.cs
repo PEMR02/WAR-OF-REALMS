@@ -57,7 +57,7 @@ namespace Project.Gameplay.Map.Generator
             }
 
             if (config.debugLogs)
-                Debug.Log($"Fase5 Ciudades: {cities.Count} colocadas.");
+                Debug.Log($"Fase6 Ciudades: {cities.Count} colocadas.");
             return cities;
         }
 

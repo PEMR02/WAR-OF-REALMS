@@ -46,7 +46,7 @@ MonoBehaviour:
     lakesEnabled: 1
     lakeCount: 2
     lakeSizeCellsRange: {x: 120, y: 800}
-    waterBaseHeightNormalized: 0.4
+    waterBaseHeightNormalized: 0.24
     waterCoverageBias: 0
     shorelineBlend: 1.2
     avoidSpawnFlooding: 1
@@ -129,7 +129,7 @@ MonoBehaviour:
     maxSlope: 15
     alignTerrainToGrid: 1
   water:
-    baseHeightNormalized: 0.4
+    baseHeightNormalized: 0.24
     waterHeight: -999
     waterHeightRelative: -1
     riverCount: 3

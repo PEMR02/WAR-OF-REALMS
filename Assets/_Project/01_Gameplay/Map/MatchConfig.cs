@@ -114,7 +114,7 @@ namespace Project.Gameplay.Map
         public sealed class WaterSettings
         {
             [Tooltip("Autoridad canónica para el generador definitivo: altura del agua en el heightmap normalizado [0–1].")]
-            [Range(0f, 1f)] public float baseHeightNormalized = 0.4f;
+            [Range(0f, 1f)] public float baseHeightNormalized = 0.24f;
 
             [Tooltip("LEGACY: pasabilidad / flujos viejos. No gobierna waterHeight01 del generador definitivo (ver baseHeightNormalized).")]
             public float waterHeight = -999f;

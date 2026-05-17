@@ -35,7 +35,7 @@ namespace Project.Gameplay.Map
         MapPreviewOverlayMode _overlayMode = MapPreviewOverlayMode.Terrain;
 
         Text _mtnValueLabel, _riverValueLabel, _lakeValueLabel, _waterValueLabel;
-        int _waterPercentUi = 40;
+        int _waterPercentUi = 24;
 
         int _mapSizeIndex = 1;
         /// <summary>0 = 1 jugador … 3 = 4 jugadores.</summary>
@@ -354,7 +354,7 @@ namespace Project.Gameplay.Map
                 out _lakeValueLabel);
             _waterPercentUi = _gen != null && _gen.waterHeightRelative >= 0f && _gen.waterHeightRelative <= 1f
                 ? Mathf.RoundToInt(_gen.waterHeightRelative * 100f)
-                : 40;
+                : 24;
             AddIntStepper(parent, "Agua base %", 0, 100,
                 () => _waterPercentUi,
                 v =>
@@ -922,7 +922,7 @@ namespace Project.Gameplay.Map
 
             _waterPercentUi = _gen.waterHeightRelative >= 0f && _gen.waterHeightRelative <= 1f
                 ? Mathf.RoundToInt(_gen.waterHeightRelative * 100f)
-                : 40;
+                : 24;
 
             _snapTrees = _gen.globalTrees;
             _snapGold = _gen.globalGold;
