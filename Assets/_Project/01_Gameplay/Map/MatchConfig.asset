@@ -134,12 +134,12 @@ MonoBehaviour:
     waterHeightRelative: -1
     riverCount: 3
     lakeCount: 2
-    maxLakeCells: 800
+    maxLakeCells: 1000
     riverWidthRadiusCells: 2
     riverWidthNoiseAmplitudeCells: 1
     lakeRiverMouthBlendCells: 3
     sandShoreCells: 3
-    surfaceOffset: 0.05
+    surfaceOffset: 0.08
     chunkSize: 32
     alpha: 0.88
     showWater: 1

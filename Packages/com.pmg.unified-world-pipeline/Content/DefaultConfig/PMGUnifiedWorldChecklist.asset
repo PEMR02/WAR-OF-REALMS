@@ -1,0 +1,200 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dddb73f0a7066c84b88bf361399a9a22, type: 3}
+  m_Name: PMGUnifiedWorldChecklist
+  m_EditorClassIdentifier: PMG.UnifiedWorldPipeline.Runtime::PMG.UnifiedWorldPipeline.PMGUnifiedWorldChecklistAsset
+  pipelineVersion: 1.0.0
+  missionSummary: "Pipeline \xFAnico basado en MapGenerator (juego) + evaluaci\xF3n
+    por aspectos estilo index.html."
+  segments:
+  - id: SETUP
+    title: 1. Setup
+    description: PMGUnifiedWorldPipelineConfig + capas/materiales propios.
+    sortOrder: 0
+  - id: LOGIC
+    title: "2. Generaci\xF3n l\xF3gica"
+    description: "GridSystem definitivo sin export visual (r\xE1pido)."
+    sortOrder: 1
+  - id: HYDRO
+    title: "3. Hidrolog\xEDa"
+    description: "R\xEDos org\xE1nicos, lagos BFS, cobertura agua."
+    sortOrder: 2
+  - id: SURFACE
+    title: 4. Superficie
+    description: TerrainExporter + WaterMeshBuilder con materiales del juego.
+    sortOrder: 3
+  - id: NAV
+    title: 5. NavMesh
+    description: Walkable, exclusiones agua, franjas finas.
+    sortOrder: 4
+  - id: GAMEPLAY
+    title: 6. Gameplay
+    description: Ciudades, caminos, recursos, fairness.
+    sortOrder: 5
+  - id: POLISH
+    title: 7. Pulido
+    description: Batch seeds, notas manuales, congelar perfil.
+    sortOrder: 6
+  items:
+  - id: setup-match
+    segmentId: SETUP
+    title: Config UWP
+    description: PMGUnifiedWorldPipelineConfig con modo independiente activo.
+    status: 0
+    notes: 
+    linkedAspect: 99
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: setup-rts
+    segmentId: SETUP
+    title: Materiales / capas
+    description: Grass, rock, agua asignados en el config UWP (no requiere RTS).
+    status: 0
+    notes: 
+    linkedAspect: 7
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: setup-materials
+    segmentId: SETUP
+    title: "Layers / materiales expl\xEDcitos"
+    description: Asignar TerrainLayers y materiales agua en Pipeline Config.
+    status: 0
+    notes: 
+    linkedAspect: 7
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: logic-generate
+    segmentId: LOGIC
+    title: "Preview l\xF3gico"
+    description: Generar GridSystem con MapGenerator (skip surface).
+    status: 0
+    notes: 
+    linkedAspect: 99
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: logic-batch
+    segmentId: LOGIC
+    title: Batch de seeds
+    description: Evaluar N seeds y guardar top candidatos.
+    status: 0
+    notes: 
+    linkedAspect: 99
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: hydro-rivers
+    segmentId: HYDRO
+    title: "Nota r\xEDos"
+    description: Span, meandro, afluentes, straightness.
+    status: 0
+    notes: 
+    linkedAspect: 0
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: hydro-endpoints
+    segmentId: HYDRO
+    title: "Nota extremos r\xEDo"
+    description: Sin ensanche en borde del mapa.
+    status: 0
+    notes: 
+    linkedAspect: 8
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: hydro-lakes
+    segmentId: HYDRO
+    title: Nota lagos
+    description: "Cantidad, tama\xF1o m\xEDnimo, dispersi\xF3n org\xE1nica."
+    status: 0
+    notes: 
+    linkedAspect: 1
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: hydro-coast
+    segmentId: HYDRO
+    title: Nota costa
+    description: "Banda costera y oc\xE9ano vs tierra jugable."
+    status: 0
+    notes: 
+    linkedAspect: 3
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: surf-terrain
+    segmentId: SURFACE
+    title: Export terreno
+    description: Terrain + splat con layers del RTS.
+    status: 0
+    notes: 
+    linkedAspect: 2
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: surf-water
+    segmentId: SURFACE
+    title: Meshes agua
+    description: Pipeline visual del MapGenConfig (WebFusion/Mouth).
+    status: 0
+    notes: 
+    linkedAspect: 7
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: nav-bake
+    segmentId: NAV
+    title: NavMesh bake
+    description: Bake y medir walkable vs agua.
+    status: 0
+    notes: 
+    linkedAspect: 4
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: nav-thin
+    segmentId: NAV
+    title: Franjas finas
+    description: "Detectar tiras walkable < 2 celdas junto a r\xEDo."
+    status: 0
+    notes: 
+    linkedAspect: 4
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: gp-cities
+    segmentId: GAMEPLAY
+    title: Ciudades/spawns
+    description: "Separaci\xF3n m\xEDnima y conectividad caminos."
+    status: 0
+    notes: 
+    linkedAspect: 5
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: gp-resources
+    segmentId: GAMEPLAY
+    title: Recursos
+    description: Densidad y distancia a TC.
+    status: 0
+    notes: 
+    linkedAspect: 6
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: polish-manual
+    segmentId: POLISH
+    title: "Revisi\xF3n visual manual"
+    description: Nota subjetiva agua/terreno en escena.
+    status: 0
+    notes: 
+    linkedAspect: 7
+    lastScore0To10: -1
+    lastGradeLetter: 
+  - id: polish-freeze
+    segmentId: POLISH
+    title: Congelar perfil
+    description: Guardar seed + scores en SessionRoot.
+    status: 0
+    notes: 
+    linkedAspect: 99
+    lastScore0To10: -1
+    lastGradeLetter: 

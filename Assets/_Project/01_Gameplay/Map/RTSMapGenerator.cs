@@ -10,6 +10,7 @@ using Project.Gameplay.Combat;
 using Unity.AI.Navigation;
 using Project.Gameplay.Map.Generator;
 using Project.Gameplay.Map.Generation;
+using Project.Gameplay.Map.CleanWaterPipeline;
 using Project.Gameplay.Map.Generation.Alpha;
 using Project.Gameplay.AI;
 using Project.Gameplay.Faction;
@@ -18,14 +19,6 @@ using Project.Gameplay.Units;
 
 namespace Project.Gameplay.Map
 {
-    public enum WaterMeshMode
-    {
-        [Tooltip("Varios meshes por zona (chunks). Mejor culling en mapas grandes.")]
-        Chunks,
-        [Tooltip("Un rectángulo del tamaño del mapa a waterHeight; geometría solo donde terreno < waterHeight (intersección con el mapa). Un solo mesh/draw call.")]
-        FullPlaneIntersect
-    }
-
     [DefaultExecutionOrder(-200)] // Ejecutar antes que las unidades para desactivar NavMeshAgent y evitar "Failed to create agent"
     public class RTSMapGenerator : MonoBehaviour
     {
@@ -44,6 +37,7 @@ namespace Project.Gameplay.Map
         [Tooltip("Si hay un MapLobbyController en escena que registre diferido, Start no llama Generate() hasta que el lobby confirme.")]
         MapLobbyController _deferredMapLobby;
         bool _pendingLobbyRuntimeTuning;
+        bool _bakeGeneratedMapAfterNextGenerate;
         
         [Tooltip("Ancho del mapa en celdas.")]
         public int width = 256;
@@ -127,8 +121,25 @@ namespace Project.Gameplay.Map
         public bool showWater = true;
         [Tooltip("Modo de malla: Chunks = varios meshes por zona (mejor culling). FullPlaneIntersect = un rectángulo del tamaño del mapa a waterHeight, con geometría solo donde el terreno está por debajo (intersección).")]
         public WaterMeshMode waterMeshMode = WaterMeshMode.FullPlaneIntersect;
+        [Tooltip("Pipeline visual de agua. Current = sistema actual estable; Unified = reservado para probar el sistema nuevo.")]
+        public bool overrideWaterVisualPipeline = false;
+        public WaterVisualPipelineMode waterVisualPipeline = WaterVisualPipelineMode.CurrentSplitLakeMsRiverSurface;
         [Tooltip("Material de la malla de agua (ej. MAT_Water, URP Lit o Unlit). Si no asignas, se usa un material por defecto.")]
         public Material waterMaterial;
+        [Tooltip("Modo runtime para el material legacy de agua/rio.")]
+        public WaterMaterialRuntimeMode waterMaterialMode = WaterMaterialRuntimeMode.SW2ProceduralTranslator;
+        [Tooltip("Material especifico para rio principal. Si null, usa waterMaterial.")]
+        public Material riverWaterMaterial;
+        public WaterMaterialRuntimeMode riverWaterMaterialMode = WaterMaterialRuntimeMode.DirectAsset;
+        [Tooltip("Material especifico para tributarios. Si null, usa el material del rio principal.")]
+        public Material tributaryWaterMaterial;
+        public WaterMaterialRuntimeMode tributaryWaterMaterialMode = WaterMaterialRuntimeMode.DirectAsset;
+        [Tooltip("Material especifico para lagos.")]
+        public Material lakeWaterMaterial;
+        public WaterMaterialRuntimeMode lakeWaterMaterialMode = WaterMaterialRuntimeMode.DirectAsset;
+        [Tooltip("Material reservado para mar/oceano si el mapa lo usa.")]
+        public Material seaWaterMaterial;
+        public WaterMaterialRuntimeMode seaWaterMaterialMode = WaterMaterialRuntimeMode.SW2ProceduralTranslator;
         [Tooltip("Transparencia del agua (0.5–1). Valores < 1 permiten ver la arena bajo el agua. Usado por el generador definitivo.")]
         [Range(0.5f, 1f)] public float waterAlpha = 0.88f;
         [Tooltip("Tamaño de chunk en celdas (solo si waterMeshMode = Chunks). Menor = más meshes, mejor culling.")]
@@ -303,6 +314,13 @@ namespace Project.Gameplay.Map
             "pisan la copia runtime (útil para probar en escena). Desactiva para que mande solo el asset MatchConfig / hydrology alpha.")]
         public bool preferSceneHydrologyOverrides = true;
 
+        [Header("Hidrología — perfil UWP (reversible)")]
+        [Tooltip("Ancho/carve/confluencias probados en UWP. Desactiva para volver al runtime legacy comprimido.")]
+        public bool applyUwpHydrologyProfile = true;
+
+        [Tooltip("Ancho visual troncal en celdas. 0 = default UWP (3.75). Solo si applyUwpHydrologyProfile.")]
+        public float uwpMainRiverFullWidthCells;
+
         MapGrid _grid;
         /// <summary>Índice de área NavMesh usado en celdas de vado (p. ej. Ford/Jump) para <see cref="NavMesh.SetAreaCost"/>.</summary>
         int _riverFordNavMeshAreaIndexUsed = -1;
@@ -320,18 +338,63 @@ namespace Project.Gameplay.Map
         // Reservas temporales alrededor de TCs para evitar colocar recursos.
         // Importante: NO deben quedarse como "occupied" permanentemente porque el A* evita occupied y aleja a las unidades.
         readonly List<TownCenterReservation> _townCenterReservations = new();
-        Transform _waterRoot;
         MatchConfig _runtimeMatchConfig;
         RuntimeMapGenerationSettings _lastCompiledSettings;
 
-        /// <summary>Último resultado de <see cref="MatchConfigCompiler.Build"/> en esta sesión de generación.</summary>
+        /// <summary>Último resultado de <see cref="CleanWaterPipelineOrchestrator.CompileForPlay"/> en esta sesión de generación.</summary>
         public RuntimeMapGenerationSettings LastCompiledMapSettings => _lastCompiledSettings;
+
+        /// <summary>
+        /// Generación headless (sin terreno/mallas) + datos listos para <see cref="RtsMapQualityEvaluator"/>.
+        /// El caller debe <see cref="Object.Destroy"/> <paramref name="runtimeConfig"/> tras evaluar.
+        /// </summary>
+        public bool TryGenerateForQualityEvaluation(int seed, out GridSystem grid, out MapGenConfig runtimeConfig)
+        {
+            grid = null;
+            runtimeConfig = null;
+
+            MatchConfig activeMatch = ResolveMatchConfig();
+            RuntimeMapGenerationSettings runtime = CleanWaterPipelineOrchestrator.CompileForPlay(
+                activeMatch,
+                ResolveDefinitiveMapGenTemplate(),
+                BuildRuntimeGenerationContext(),
+                logSummary: false);
+            MapGenConfig config = runtime.CompiledMapGen;
+            if (config == null)
+            {
+                _lastCompiledSettings = runtime;
+                return false;
+            }
+
+            _lastCompiledSettings = runtime;
+            config.seed = seed;
+            ApplyAuthoritativeGridLayout(this, config);
+
+            var generator = GetComponent<MapGenerator>();
+            if (generator == null)
+                generator = gameObject.AddComponent<MapGenerator>();
+            generator.config = config;
+
+            if (!generator.Generate(config, null, skipSurfaceExport: true, skipRoadConnectivityValidation: true))
+            {
+                Destroy(config);
+                generator.config = ResolveDefinitiveMapGenTemplate();
+                return false;
+            }
+
+            grid = generator.Grid;
+            runtimeConfig = config;
+            return grid != null;
+        }
 
         /// <summary>Registrado por <see cref="MapLobbyController"/> en Awake (orden de ejecución más bajo que este componente).</summary>
         public void RegisterDeferredMapLobby(MapLobbyController lobby) => _deferredMapLobby = lobby;
 
         /// <summary>Llama antes de <see cref="Generate"/> tras el lobby para aplicar seed/ríos/lagos del panel a la copia runtime del match.</summary>
         public void PrepareGenerateFromLobby() => _pendingLobbyRuntimeTuning = true;
+
+        /// <summary>One-shot del lobby: guarda el terreno generado cuando termine la próxima generación exitosa.</summary>
+        public void RequestGeneratedMapBakeFromLobby() => _bakeGeneratedMapAfterNextGenerate = true;
 
         public MapGrid GetGrid() => _grid;
 
@@ -354,6 +417,25 @@ namespace Project.Gameplay.Map
         }
 
         public System.Random GetRng() => _rng;
+
+        /// <summary>Plantilla técnica MapGen; recupera asset en Editor si la referencia de escena está rota.</summary>
+        MapGenConfig ResolveDefinitiveMapGenTemplate()
+        {
+            if (definitiveMapGenConfig != null)
+                return definitiveMapGenConfig;
+#if UNITY_EDITOR
+            const string defaultPath = "Assets/_Project/01_Gameplay/Map/MapGenerator/MapGenConfig.asset";
+            definitiveMapGenConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<MapGenConfig>(defaultPath);
+            if (definitiveMapGenConfig != null)
+            {
+                Debug.LogWarning(
+                    $"[RTSMapGenerator] definitiveMapGenConfig recuperado desde {defaultPath} " +
+                    "(la referencia en escena estaba vacía o rota).");
+            }
+#endif
+            return definitiveMapGenConfig;
+        }
+
         MatchConfig ResolveMatchConfig()
         {
             if (_runtimeMatchConfig != null)
@@ -384,7 +466,7 @@ namespace Project.Gameplay.Map
         /// </summary>
         internal void ApplySceneHydrologyToMatch(MatchConfig runtimeMatch)
         {
-            if (runtimeMatch == null || matchConfig == null || !preferSceneHydrologyOverrides) return;
+            if (runtimeMatch == null || !preferSceneHydrologyOverrides) return;
             runtimeMatch.water.riverCount = Mathf.Clamp(riverCount, 0, 8);
             runtimeMatch.water.lakeCount = Mathf.Clamp(lakeCount, 0, 12);
             runtimeMatch.water.maxLakeCells = Mathf.Max(50, maxLakeCells);
@@ -414,6 +496,10 @@ namespace Project.Gameplay.Map
             MatchConfig legacy = ScriptableObject.CreateInstance<MatchConfig>();
             legacy.hideFlags = HideFlags.HideAndDontSave;
             CopySceneGeneratorFieldsIntoMatchConfig(legacy);
+            legacy.hydrology.riverCount = Mathf.Clamp(riverCount, 0, 8);
+            legacy.hydrology.lakeCount = Mathf.Clamp(lakeCount, 0, 12);
+            legacy.hydrology.riversEnabled = legacy.hydrology.riverCount > 0;
+            legacy.hydrology.lakesEnabled = legacy.hydrology.lakeCount > 0;
             // Sin asset MatchConfig: el lobby y el generador alpha deben activarse para que layout/jugadores/hidrología sincronicen bien.
             legacy.useHighLevelAlphaConfig = true;
             legacy.layout.mapWidth = Mathf.Max(16, width);
@@ -460,8 +546,19 @@ namespace Project.Gameplay.Map
             target.water.alpha = waterAlpha;
             target.water.showWater = showWater;
             target.water.meshMode = waterMeshMode;
+            target.water.overrideVisualPipeline = overrideWaterVisualPipeline;
+            target.water.visualPipeline = waterVisualPipeline;
             target.water.waterLayer = waterLayerOverride;
             target.water.material = waterMaterial;
+            target.water.materialMode = waterMaterialMode;
+            target.water.riverMaterial = riverWaterMaterial;
+            target.water.riverMaterialMode = riverWaterMaterialMode;
+            target.water.tributaryMaterial = tributaryWaterMaterial;
+            target.water.tributaryMaterialMode = tributaryWaterMaterialMode;
+            target.water.lakeMaterial = lakeWaterMaterial;
+            target.water.lakeMaterialMode = lakeWaterMaterialMode;
+            target.water.seaMaterial = seaWaterMaterial;
+            target.water.seaMaterialMode = seaWaterMaterialMode;
             target.resources.ringNear = ringNear;
             target.resources.ringMid = ringMid;
             target.resources.ringFar = ringFar;
@@ -579,7 +676,7 @@ namespace Project.Gameplay.Map
                 if (slot.kind == MatchConfig.PlayerSlotKind.AI)
                 {
                     int d = Mathf.Clamp(lobbyAiDifficulty[i], 0, 2);
-                    slot.aiDifficulty = (AIDifficulty)d;
+                    slot.aiDifficulty = d;
                 }
                 m.players.slots.Add(slot);
             }
@@ -686,13 +783,15 @@ namespace Project.Gameplay.Map
         {
             return new MapGenerationRuntimeContext
             {
-                applySceneHydrologyOverrides = matchConfig != null && preferSceneHydrologyOverrides,
+                applySceneHydrologyOverrides = preferSceneHydrologyOverrides,
                 sceneRiverCount = riverCount,
                 sceneLakeCount = lakeCount,
                 sceneMaxLakeCells = maxLakeCells,
                 applyLobbyMacroRelief = true,
                 lobbyMacroMountainMassCount = lobbyMacroMountainMasses,
-                applyLegacyRiverWidthScale = true,
+                applyUwpHydrologyProfile = applyUwpHydrologyProfile,
+                uwpMainRiverFullWidthCells = uwpMainRiverFullWidthCells,
+                applyLegacyRiverWidthScale = !applyUwpHydrologyProfile,
                 legacyRiverWidthScale = 1.5f
             };
         }
@@ -727,8 +826,18 @@ namespace Project.Gameplay.Map
             waterAlpha = cfg.water.alpha;
             showWater = cfg.water.showWater;
             waterMeshMode = cfg.water.meshMode;
+            waterVisualPipeline = cfg.water.visualPipeline;
             waterLayerOverride = cfg.water.waterLayer;
             waterMaterial = cfg.water.material;
+            waterMaterialMode = cfg.water.materialMode;
+            riverWaterMaterial = cfg.water.riverMaterial;
+            riverWaterMaterialMode = cfg.water.riverMaterialMode;
+            tributaryWaterMaterial = cfg.water.tributaryMaterial;
+            tributaryWaterMaterialMode = cfg.water.tributaryMaterialMode;
+            lakeWaterMaterial = cfg.water.lakeMaterial;
+            lakeWaterMaterialMode = cfg.water.lakeMaterialMode;
+            seaWaterMaterial = cfg.water.seaMaterial;
+            seaWaterMaterialMode = cfg.water.seaMaterialMode;
             ringNear = cfg.resources.ringNear;
             ringMid = cfg.resources.ringMid;
             ringFar = cfg.resources.ringFar;
@@ -806,7 +915,7 @@ namespace Project.Gameplay.Map
             waterExclusionRadius = cfg.players.waterExclusionRadius;
             flattenSpawnAreas = cfg.players.flattenSpawnAreas;
             flattenRadius = cfg.players.flattenRadius;
-            townCenterSO = cfg.startingLoadout.townCenter;
+            townCenterSO = cfg.startingLoadout.townCenter as BuildingSO;
             townCenterPrefabOverride = cfg.startingLoadout.townCenterPrefabOverride;
             tcClearRadius = cfg.startingLoadout.townCenterClearRadius;
             townCenterSpawnYOffset = cfg.startingLoadout.townCenterSpawnYOffset;
@@ -924,42 +1033,83 @@ namespace Project.Gameplay.Map
                 navMeshSurface = FindFirstObjectByType<NavMeshSurface>();
             if (_deferredMapLobby != null && _deferredMapLobby.blockInitialGeneration)
             {
+                Debug.Log("[MapGen] Lobby activo: el mapa NO se genera hasta pulsar «Iniciar partida».");
                 _deferredMapLobby.Open(this);
                 return;
             }
             Generate();
         }
 
+        Coroutine _generateRoutine;
+        bool _generateInFlight;
+
         public void Generate()
         {
-            Log("=== Iniciando generación de mapa (Definitivo) ===");
-            _runtimeMatchConfig = null;
-            MatchRuntimeState.ClearGeneratedWorldBounds();
-            MatchConfig activeMatch = ResolveMatchConfig();
-            ApplyMatchConfigToLegacyFields(activeMatch);
-            if (navMeshSurface == null)
-                navMeshSurface = FindFirstObjectByType<NavMeshSurface>();
-
-            if (_grid == null)
-                _grid = GetComponent<MapGrid>();
-            if (_grid == null)
-                _grid = gameObject.AddComponent<MapGrid>();
-
-            if (useLegacyMapPresets)
+            if (_generateInFlight)
             {
-                ApplyMapPreset();
-                if (matchConfig == null)
-                    _runtimeMatchConfig = null;
+                Debug.LogWarning("[RTSMapGenerator] Generación ya en curso; ignorando llamada duplicada.");
+                return;
             }
-            else if (mapPreset != MapPresetType.Custom)
+
+            if (_generateRoutine != null)
+                StopCoroutine(_generateRoutine);
+            _generateRoutine = StartCoroutine(GenerateRoutine());
+        }
+
+        System.Collections.IEnumerator GenerateRoutine()
+        {
+            _generateInFlight = true;
+            Log("=== Iniciando generación de mapa (Definitivo) ===");
+            if (ResolveDefinitiveMapGenTemplate() == null)
             {
                 Debug.LogWarning(
-                    "[MapGen] mapPreset != Custom está ignorado (useLegacyMapPresets=false). " +
-                    "Edita MatchConfig (o activa useLegacyMapPresets solo para depuración legacy).");
+                    "[RTSMapGenerator] definitiveMapGenConfig vacío: se usará baseline de MatchConfigCompiler. " +
+                    "Asigna MapGenConfig.asset en el Inspector para tuning estable.");
             }
 
-            // Pipeline legacy retirado: desde ahora el proyecto usa SOLO el Generador Definitivo.
-            RunDefinitiveGenerate();
+            yield return null;
+
+            float t0 = Time.realtimeSinceStartup;
+            try
+            {
+                _runtimeMatchConfig = null;
+                MatchRuntimeState.ClearGeneratedWorldBounds();
+                MatchConfig activeMatch = ResolveMatchConfig();
+                ApplyMatchConfigToLegacyFields(activeMatch);
+                if (navMeshSurface == null)
+                    navMeshSurface = FindFirstObjectByType<NavMeshSurface>();
+
+                if (_grid == null)
+                    _grid = GetComponent<MapGrid>();
+                if (_grid == null)
+                    _grid = gameObject.AddComponent<MapGrid>();
+
+                if (useLegacyMapPresets)
+                {
+                    ApplyMapPreset();
+                    if (matchConfig == null)
+                        _runtimeMatchConfig = null;
+                }
+                else if (mapPreset != MapPresetType.Custom)
+                {
+                    Debug.LogWarning(
+                        "[MapGen] mapPreset != Custom está ignorado (useLegacyMapPresets=false). " +
+                        "Edita MatchConfig (o activa useLegacyMapPresets solo para depuración legacy).");
+                }
+
+                Debug.Log("[MapGen] Generando terreno y agua (Fase0–Fase9)…");
+                RunDefinitiveGenerate();
+                Debug.Log($"[MapGen] Generación finalizada en {Time.realtimeSinceStartup - t0:F1}s.");
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"[RTSMapGenerator] Generación abortada con excepción: {ex}");
+            }
+            finally
+            {
+                _generateInFlight = false;
+                _generateRoutine = null;
+            }
         }
 
         /// <summary>
@@ -979,9 +1129,9 @@ namespace Project.Gameplay.Map
             }
             PushSceneToMatchForGeneration(activeMatch);
 
-            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(
+            RuntimeMapGenerationSettings runtime = CleanWaterPipelineOrchestrator.CompileForPlay(
                 activeMatch,
-                definitiveMapGenConfig,
+                ResolveDefinitiveMapGenTemplate(),
                 BuildRuntimeGenerationContext(),
                 logSummary: false);
             MapGenConfig config = runtime.CompiledMapGen;
@@ -1009,20 +1159,20 @@ namespace Project.Gameplay.Map
             generator.terrainRockTileSize = rockTileSize;
             generator.terrainSandLayerOverride = sandLayer;
             generator.terrainSandTileSize = sandTileSize;
-            generator.terrainSandShoreCells = sandShoreCells;
+            generator.terrainSandShoreCells = ResolveTerrainSandShoreCells(config, sandShoreCells);
 
             bool ok = generator.Generate(config, null, skipSurfaceExport: true, skipRoadConnectivityValidation: true);
             if (!ok)
             {
                 failMessage = "Validación del generador falló; revisa la consola.";
                 Destroy(config);
-                generator.config = definitiveMapGenConfig;
+                generator.config = ResolveDefinitiveMapGenTemplate();
                 return false;
             }
 
             preview = MapPreviewTextureBuilder.Build(generator.Grid, generator.Cities, textureMaxSize, generator.Grid.SemanticRegions, previewOverlay);
             Destroy(config);
-            generator.config = definitiveMapGenConfig;
+            generator.config = ResolveDefinitiveMapGenTemplate();
             if (preview == null)
                 failMessage = "No se pudo rasterizar el grid.";
             return preview != null;
@@ -1032,6 +1182,13 @@ namespace Project.Gameplay.Map
         {
             if (multiplier <= 0f) multiplier = 1f;
             return new Vector2Int(Mathf.RoundToInt(v.x * multiplier), Mathf.RoundToInt(v.y * multiplier));
+        }
+
+        int ResolveTerrainSandShoreCells(MapGenConfig config, int sceneSandShoreCells)
+        {
+            if (applyUwpHydrologyProfile && config != null)
+                return config.sandShoreCells;
+            return sceneSandShoreCells;
         }
 
         /// <summary>Devuelve el layer o una copia con tileSize aplicado para reducir el efecto de repetición (textura no tileable).</summary>
@@ -1102,9 +1259,9 @@ namespace Project.Gameplay.Map
         {
             MatchConfig activeMatch = ResolveMatchConfig();
             _matchUsedForLastGenerate = activeMatch;
-            RuntimeMapGenerationSettings runtime = MatchConfigCompiler.Build(
+            RuntimeMapGenerationSettings runtime = CleanWaterPipelineOrchestrator.CompileForPlay(
                 activeMatch,
-                definitiveMapGenConfig,
+                ResolveDefinitiveMapGenTemplate(),
                 BuildRuntimeGenerationContext(),
                 logSummary: true);
             MapGenConfig config = runtime.CompiledMapGen;
@@ -1136,13 +1293,13 @@ namespace Project.Gameplay.Map
             generator.terrainRockTileSize = rockTileSize;
             generator.terrainSandLayerOverride = sandLayer;
             generator.terrainSandTileSize = sandTileSize;
-            generator.terrainSandShoreCells = sandShoreCells;
+            generator.terrainSandShoreCells = ResolveTerrainSandShoreCells(config, sandShoreCells);
 
             if (!generator.Generate(config, terrain))
             {
                 Debug.LogError("RTSMapGenerator Definitive: el Generador Definitivo falló (validación o reintentos).");
                 Destroy(config);
-                generator.config = definitiveMapGenConfig;
+                generator.config = ResolveDefinitiveMapGenTemplate();
                 return;
             }
 
@@ -1150,6 +1307,7 @@ namespace Project.Gameplay.Map
                 TerrainFeatureSummaryBuilder.AppendFromGrid(generator.Grid, config, runtime.TerrainFeatures);
             runtime.SemanticRegions = generator.Grid.SemanticRegions;
             MapGenerationPipelineLogger.LogPostGenerate(runtime, generator.Grid, config);
+            CleanWaterPipelineOrchestrator.AuditAfterGenerate(generator.Grid, config);
             if (runtime.UsedHighLevelAlphaConfig)
                 MapVisualBinder.LogBindingPlan(activeMatch.visualBinding);
 
@@ -1203,9 +1361,30 @@ namespace Project.Gameplay.Map
 
             StartCoroutine(RebuildNavMeshCoroutine());
             Log("=== Generación Definitiva completada ===");
+            if (_bakeGeneratedMapAfterNextGenerate)
+                StartCoroutine(BakeGeneratedMapSnapshotAfterSceneSettles());
 
             Destroy(config);
-            generator.config = definitiveMapGenConfig;
+            generator.config = ResolveDefinitiveMapGenTemplate();
+        }
+
+        IEnumerator BakeGeneratedMapSnapshotAfterSceneSettles()
+        {
+            if (!_bakeGeneratedMapAfterNextGenerate)
+                yield break;
+
+            // Destroy(go) de Unity se ejecuta al final del frame; esperar evita copiar recursos ya descartados.
+            yield return new WaitForEndOfFrame();
+            yield return null;
+            _bakeGeneratedMapAfterNextGenerate = false;
+#if UNITY_EDITOR
+            if (GeneratedMapBakeUtility.TryBakeTerrainSnapshot(this, terrain, out string assetFolder, out string message))
+                Debug.Log($"[GeneratedMapBake] OK folder={assetFolder} {message}");
+            else
+                Debug.LogWarning($"[GeneratedMapBake] No se pudo guardar el mapa generado: {message}");
+#else
+            Debug.LogWarning("[GeneratedMapBake] Solo disponible dentro del Editor de Unity.");
+#endif
         }
 
         /// <summary>Rango real del terreno en world Y (muestreando celdas). Para recomendar Water Height sin adivinar.</summary>
@@ -1275,30 +1454,6 @@ namespace Project.Gameplay.Map
                 Log($"BakePassability: {waterCount} celdas de agua (altura < {waterHeight:F1}), {blockedCount}/{totalCells} bloqueadas ({(blockedCount * 100f / totalCells):F1}%)");
             else
                 Log($"BakePassability: {blockedCount}/{totalCells} celdas bloqueadas ({(blockedCount * 100f / totalCells):F1}%). Agua desactivada (Water Height negativo).");
-        }
-
-        void GenerateWaterMesh()
-        {
-            if (_waterRoot != null)
-            {
-                if (Application.isPlaying) Destroy(_waterRoot.gameObject);
-                else DestroyImmediate(_waterRoot.gameObject);
-                _waterRoot = null;
-            }
-
-            var config = new MapWaterMeshGenerator.WaterMeshConfig
-            {
-                grid = _grid,
-                waterHeight = waterHeight,
-                waterSurfaceOffset = waterSurfaceOffset,
-                waterMaterial = waterMaterial,
-                showWater = showWater,
-                waterMeshMode = waterMeshMode,
-                waterChunkSize = waterChunkSize,
-                waterLayerOverride = waterLayerOverride
-            };
-
-            _waterRoot = MapWaterMeshGenerator.Generate(config, this, Log);
         }
 
         void GenerateHeightmap()

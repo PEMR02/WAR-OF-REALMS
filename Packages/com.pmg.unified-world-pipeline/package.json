@@ -1,0 +1,29 @@
+{
+  "name": "com.pmg.unified-world-pipeline",
+  "version": "1.0.4",
+  "displayName": "PMG Unified World Pipeline",
+  "description": "Motor procedural RTS (MapGenerator + hidrología) y herramienta editor UWP con shaders, materiales y config por defecto.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.unity.render-pipelines.universal": "14.0.0"
+  },
+  "keywords": [
+    "rts",
+    "terrain",
+    "procedural",
+    "hydrology",
+    "rivers",
+    "uwp"
+  ],
+  "author": {
+    "name": "PMG"
+  },
+  "samples": [
+    {
+      "displayName": "Minimal UWP Config",
+      "description": "PMGUnifiedWorldPipelineConfig y checklist por defecto.",
+      "path": "Samples~/MinimalSetup"
+    }
+  ]
+}

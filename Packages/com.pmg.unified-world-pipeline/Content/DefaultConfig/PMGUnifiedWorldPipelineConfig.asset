@@ -1,0 +1,76 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 13d7ca17937331b42a00208b650530b5, type: 3}
+  m_Name: PMGUnifiedWorldPipelineConfig
+  m_EditorClassIdentifier: PMG.UnifiedWorldPipeline.Runtime::PMG.UnifiedWorldPipeline.PMGUnifiedWorldPipelineConfig
+  uwpIndependentMode: 1
+  useDefinitiveTemplateBaseline: 1
+  uwpMapGenBaseline: {fileID: 11400000, guid: 129c1f0ca96df46468ada9b544d76316, type: 2}
+  uwpMatchBaseline: {fileID: 11400000, guid: 334252203f508da46bd36fcee4e5e594, type: 2}
+  definitiveTemplate: {fileID: 11400000, guid: 129c1f0ca96df46468ada9b544d76316, type: 2}
+  matchConfig: {fileID: 11400000, guid: 334252203f508da46bd36fcee4e5e594, type: 2}
+  uwpCityCount: 2
+  sceneVisualBindingsHost: {fileID: 0}
+  uwpGridCells: 358
+  uwpCellSizeWorld: 3
+  centerMapAtOrigin: 1
+  grassLayer: {fileID: 8574412962073106934, guid: 5be179411c8d9d14b9bf56dfde363363, type: 2}
+  dirtLayer: {fileID: 8574412962073106934, guid: 190767b3af2ce5346b68f4b391b6591f, type: 2}
+  rockLayer: {fileID: 8574412962073106934, guid: 5f2ee7ed991a03a409e4594913c22f03, type: 2}
+  sandLayer: {fileID: 8574412962073106934, guid: 815ce6ae53978174fbb3c46a7cd682b0, type: 2}
+  grassTileSize: {x: 6, y: 6}
+  dirtTileSize: {x: 6, y: 6}
+  rockTileSize: {x: 6, y: 6}
+  sandTileSize: {x: 6, y: 6}
+  sandShoreCells: 3
+  terrainMaterialTemplate: {fileID: 0}
+  riverWaterMaterial: {fileID: 2100000, guid: 54d723bb44ea0574bae881b904711ac9, type: 2}
+  lakeWaterMaterial: {fileID: 2100000, guid: 227594fb82c0eb649a9445fcfef573e6, type: 2}
+  seaWaterMaterial: {fileID: 0}
+  tributaryWaterMaterial: {fileID: 2100000, guid: 54d723bb44ea0574bae881b904711ac9, type: 2}
+  applyRiverVisualExportFix: 1
+  useMouthFusionWaterPipeline: 0
+  applyRiverBankTerrainFix: 1
+  uwpMainRiverFullWidthCells: 3.75
+  uwpTributaryRiverFullWidthCells: 1.55
+  uwpMainRiverCarveDepthWorld: 0.11
+  uwpMainRiverSurfaceWorldY: 0
+  uwpMainRiverCount: 1
+  uwpTributaryCount: 3
+  uwpLakeCount: 2
+  uwpMaxLakeCells: 1400
+  webTerrainJson: {fileID: 0}
+  jsonUseVisualHeight: 1
+  jsonFlipZ: 0
+  jsonUseGameWaterSystem: 1
+  checklist: {fileID: 11400000, guid: c37259aaa1b65594c8bdf8949c4f02ba, type: 2}
+  seedOverride: 0
+  useSeedOverride: 0
+  batchSeedCount: 50
+  batchTopN: 12
+  skipRoadConnectivityInPreview: 1
+  applySceneHydrologyOverrides: 0
+  weightRivers: 1.4
+  weightRiverEndpoints: 0.9
+  weightLakes: 1.2
+  weightTerrain: 1
+  weightCoastline: 0.8
+  weightNavMesh: 1.2
+  weightCities: 1
+  weightResources: 0.7
+  weightVisualWater: 0.7
+  idealMainRiverSpan01: 0.62
+  idealLakeCountMin: 3
+  idealLakeCountMax: 5
+  minLakeCellsIdeal: 80
+  idealLakeCoverage01: 0.045
+  idealLakeSpread01: 0.42

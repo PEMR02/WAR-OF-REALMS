@@ -49,6 +49,8 @@ namespace Project.Gameplay.Map
         GameObject[] _playerSlotRows = new GameObject[4];
         Button[] _slotHumanBtns = new Button[4];
         Button[] _slotAiBtns = new Button[4];
+        Button _bakeGeneratedMapToggle;
+        bool _bakeGeneratedMapOnStart;
 
         static readonly Color RtsChipIdle = new Color(0.12f, 0.13f, 0.16f, 1f);
         static readonly Color RtsChipOn = new Color(0.22f, 0.34f, 0.26f, 1f);
@@ -569,6 +571,8 @@ namespace Project.Gameplay.Map
             actV.spacing = 8;
             AddKicker(actCard.transform, "Acciones", new Color(0.75f, 0.75f, 0.78f));
             CreatePrimaryButton(actCard.transform, "Iniciar partida", OnStartGameClicked);
+            _bakeGeneratedMapToggle = CreateSmallButton(actCard.transform, "Guardar mapa: OFF", ToggleBakeGeneratedMapOnStart);
+            RefreshBakeGeneratedMapToggle();
             CreateSmallButton(actCard.transform, "Guardar configuración", OnSaveConfigClicked);
         }
 
@@ -608,6 +612,10 @@ namespace Project.Gameplay.Map
             AddLegendRow(aside.transform, new Color(0.18f, 0.72f, 0.88f), "Lago");
             AddLegendRow(aside.transform, new Color(0.08f, 0.45f, 0.3f), "Bosque");
             AddLegendRow(aside.transform, new Color(0.95f, 0.28f, 0.38f), "Spawn (ciudad)");
+
+            AddBody(aside.transform,
+                "Lagos sin arroyo al troncal son embalses cerrados (normal). UWP intenta conectar los más cercanos al río principal.",
+                10);
 
             AddBody(aside.transform,
                 "Si el match usa configuración alpha, layout/hidrología también se sincronizan al empezar.", 10);
@@ -1158,13 +1166,43 @@ namespace Project.Gameplay.Map
         void OnStartGameClicked()
         {
             PushToGenerator();
+            if (_statusText != null)
+                _statusText.text = "Generando mapa… (30–90 s, revisa consola [MapGen])";
             if (_root != null)
                 _root.SetActive(false);
             if (_gen != null)
             {
+                if (_bakeGeneratedMapOnStart)
+                    _gen.RequestGeneratedMapBakeFromLobby();
                 _gen.PrepareGenerateFromLobby();
                 _gen.Generate();
             }
+            else if (_statusText != null)
+                _statusText.text = "Error: RTSMapGenerator no encontrado en escena.";
+        }
+
+        void ToggleBakeGeneratedMapOnStart()
+        {
+            _bakeGeneratedMapOnStart = !_bakeGeneratedMapOnStart;
+            RefreshBakeGeneratedMapToggle();
+            if (_statusText != null)
+                _statusText.text = _bakeGeneratedMapOnStart
+                    ? "Guardar mapa generado: ON. Se guardará una copia al iniciar esta partida."
+                    : "Guardar mapa generado: OFF.";
+        }
+
+        void RefreshBakeGeneratedMapToggle()
+        {
+            if (_bakeGeneratedMapToggle == null)
+                return;
+
+            var img = _bakeGeneratedMapToggle.targetGraphic as Image;
+            if (img != null)
+                img.color = _bakeGeneratedMapOnStart ? RtsChipOn : new Color(0.16f, 0.18f, 0.22f, 1f);
+
+            var txt = _bakeGeneratedMapToggle.GetComponentInChildren<Text>();
+            if (txt != null)
+                txt.text = _bakeGeneratedMapOnStart ? "Guardar mapa: ON" : "Guardar mapa: OFF";
         }
     }
 }
