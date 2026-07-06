@@ -110,6 +110,8 @@ namespace Project.Gameplay.Map.Generator
             ApplyRiverEndReachTerrainCarveToHeightmap(heights, res, grid, config);
             ApplySlopeCliffAntiStairSmoothing(heights, res);
             ApplyUnifiedWaterlineHeightmapBand(heights, res, grid, config);
+            ApplyUwpRiverVisualMaskHeightmapFloorClamp(heights, res, grid, config);
+            ApplySlopeCliffAntiStairSmoothing(heights, res);
 
             data.SetHeights(0, 0, heights);
 
@@ -267,6 +269,11 @@ namespace Project.Gameplay.Map.Generator
                     }
                     else if (nearShore01 > 0.001f)
                     {
+                        int cx = Mathf.Clamp(Mathf.RoundToInt(gxF), 0, grid.Width - 1);
+                        int cz = Mathf.Clamp(Mathf.RoundToInt(gzF), 0, grid.Height - 1);
+                        if (ShouldPreserveUwpRiverChannelCarve(grid, cx, cz))
+                            continue;
+
                         float target = Mathf.Lerp(heights[y, x], landLipH, Mathf.Clamp01(nearShore01 * 0.82f));
                         heights[y, x] = Mathf.Max(heights[y, x], target);
                     }
@@ -279,6 +286,306 @@ namespace Project.Gameplay.Map.Generator
                 Debug.Log(
                     $"[UnifiedWaterlineTerrainBand] adjusted={adjusted} visualWaterH={visualWaterH:F4} " +
                     $"landLipH={landLipH:F4} edgeSubmergeH={edgeSubmergeH:F4} deepSubmergeH={deepSubmergeH:F4}");
+            }
+        }
+
+        static bool ShouldPreserveUwpRiverChannelCarve(GridSystem grid, int cx, int cz)
+        {
+            if (grid == null || !grid.InBoundsCell(cx, cz))
+                return false;
+            if (IsLandCellAdjacentToLakeWater(grid, cx, cz))
+                return true;
+            if (grid.RiverVisualSurfaceMask == null)
+                return false;
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    int nx = cx + dx;
+                    int nz = cz + dz;
+                    if (!grid.InBoundsCell(nx, nz))
+                        continue;
+                    if (grid.RiverVisualSurfaceMask[nx, nz])
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static float SampleRiverVisualMaskBilinear(GridSystem grid, float gxF, float gzF)
+        {
+            if (grid?.RiverVisualSurfaceMask == null)
+                return 0f;
+            int gx0 = Mathf.Clamp(Mathf.FloorToInt(gxF), 0, grid.Width - 1);
+            int gz0 = Mathf.Clamp(Mathf.FloorToInt(gzF), 0, grid.Height - 1);
+            int gx1 = Mathf.Clamp(gx0 + 1, 0, grid.Width - 1);
+            int gz1 = Mathf.Clamp(gz0 + 1, 0, grid.Height - 1);
+            float tx = Mathf.Clamp01(gxF - gx0);
+            float tz = Mathf.Clamp01(gzF - gz0);
+            float m00 = grid.RiverVisualSurfaceMask[gx0, gz0] ? 1f : 0f;
+            float m10 = grid.RiverVisualSurfaceMask[gx1, gz0] ? 1f : 0f;
+            float m01 = grid.RiverVisualSurfaceMask[gx0, gz1] ? 1f : 0f;
+            float m11 = grid.RiverVisualSurfaceMask[gx1, gz1] ? 1f : 0f;
+            return Mathf.Lerp(Mathf.Lerp(m00, m10, tx), Mathf.Lerp(m01, m11, tx), tz);
+        }
+
+        static float SampleInfluenceFieldBilinear(float[,] field, int w, int h, float gxF, float gzF)
+        {
+            if (field == null)
+                return 0f;
+            int gx0 = Mathf.Clamp(Mathf.FloorToInt(gxF), 0, w - 1);
+            int gz0 = Mathf.Clamp(Mathf.FloorToInt(gzF), 0, h - 1);
+            int gx1 = Mathf.Clamp(gx0 + 1, 0, w - 1);
+            int gz1 = Mathf.Clamp(gz0 + 1, 0, h - 1);
+            float tx = Mathf.Clamp01(gxF - gx0);
+            float tz = Mathf.Clamp01(gzF - gz0);
+            float a = Mathf.Lerp(field[gx0, gz0], field[gx1, gz0], tx);
+            float b = Mathf.Lerp(field[gx0, gz1], field[gx1, gz1], tx);
+            return Mathf.Lerp(a, b, tz);
+        }
+
+        /// <summary>
+        /// Campo 0..1 de intensidad del canal: 1 en la máscara/boca de lago, decae con smoothstep
+        /// hacia afuera en <paramref name="bankFalloffCells"/> celdas. Un jitter Perlin perturba la
+        /// distancia efectiva para romper el contorno recto (erosión visual de orilla).
+        /// </summary>
+        static float[,] BuildUwpChannelCarveInfluenceField(
+            GridSystem grid,
+            MapGenConfig config,
+            bool[,] mask,
+            int bankFalloffCells,
+            float noiseAmpCells)
+        {
+            int w = grid.Width;
+            int h = grid.Height;
+            var infl = new float[w, h];
+            var dist = new int[w, h];
+            for (int x = 0; x < w; x++)
+                for (int z = 0; z < h; z++)
+                    dist[x, z] = -1;
+
+            var qx = new Queue<int>();
+            var qz = new Queue<int>();
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    if ((mask != null && mask[x, z]) || IsLandCellAdjacentToLakeWater(grid, x, z))
+                    {
+                        dist[x, z] = 0;
+                        qx.Enqueue(x);
+                        qz.Enqueue(z);
+                    }
+                }
+            }
+
+            int ownedProjectionSeeds = 0;
+            if (config.uwpOwnedVisualPolicy && grid.RiverVisualSurfaces != null)
+            {
+                float tribFull = config.riverVisualRibbonFullWidthCellsTributary > 0.01f
+                    ? config.riverVisualRibbonFullWidthCellsTributary
+                    : config.riverVisualRibbonFullWidthCellsMain * 0.65f;
+                int projectionRadius = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(tribFull * 1.45f, 5f)), 5, 10);
+                int projectionSpan = Mathf.Clamp(config.lakeRiverMouthBlendCells + 5, 8, 18);
+                float maxDist = Mathf.Min(
+                    Mathf.Max(8f, config.lakeRiverConnectorMaxDistanceCells, config.lakeRiverMouthBlendCells + 12f),
+                    96f);
+
+                void SeedCell(int sx, int sz)
+                {
+                    if ((uint)sx >= (uint)w || (uint)sz >= (uint)h)
+                        return;
+                    if (dist[sx, sz] == 0)
+                        return;
+                    dist[sx, sz] = 0;
+                    qx.Enqueue(sx);
+                    qz.Enqueue(sz);
+                    ownedProjectionSeeds++;
+                }
+
+                void SeedDisk(Vector2 center, int radius)
+                {
+                    int cx = Mathf.Clamp(Mathf.FloorToInt(center.x), 0, w - 1);
+                    int cz = Mathf.Clamp(Mathf.FloorToInt(center.y), 0, h - 1);
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        for (int dx = -radius; dx <= radius; dx++)
+                        {
+                            if (dx * dx + dz * dz > radius * radius)
+                                continue;
+                            SeedCell(cx + dx, cz + dz);
+                        }
+                    }
+                }
+
+                void SeedOwnedProjectionEndpoint(List<Vector2> line, int endpointIndex)
+                {
+                    Vector2 end = line[endpointIndex];
+                    int ex = Mathf.Clamp(Mathf.FloorToInt(end.x), 0, w - 1);
+                    int ez = Mathf.Clamp(Mathf.FloorToInt(end.y), 0, h - 1);
+                    bool endpointAtLake =
+                        grid.GetCell(ex, ez).type == CellType.Water ||
+                        TerrainCellNearLakeBody(grid, ex, ez, 4) ||
+                        IsLandCellAdjacentToLakeWater(grid, ex, ez) ||
+                        TryFindNearestLakeShoreForCarve(grid, end, maxDist, out _);
+                    if (!endpointAtLake)
+                        return;
+
+                    int dir = endpointIndex == 0 ? 1 : -1;
+                    int limit = Mathf.Min(projectionSpan, line.Count - 1);
+                    for (int k = 0; k <= limit; k++)
+                    {
+                        int idx = endpointIndex + dir * k;
+                        if (idx < 0 || idx >= line.Count)
+                            break;
+                        float fade = 1f - k / Mathf.Max(1f, limit);
+                        int r = Mathf.Max(bankFalloffCells + 1, Mathf.RoundToInt(Mathf.Lerp(bankFalloffCells + 1, projectionRadius, fade)));
+                        SeedDisk(line[idx], r);
+                    }
+
+                    if (TryFindNearestLakeShoreForCarve(grid, end, maxDist, out Vector2 shore))
+                    {
+                        float bridgeDist = Vector2.Distance(end, shore);
+                        int steps = Mathf.Clamp(Mathf.CeilToInt(bridgeDist / 0.45f), 2, 32);
+                        for (int s = 1; s <= steps; s++)
+                            SeedDisk(Vector2.Lerp(end, shore, s / (float)steps), projectionRadius);
+                    }
+                }
+
+                for (int ri = 1; ri < grid.RiverVisualSurfaces.Count; ri++)
+                {
+                    if (!IsLakeOwnedTributaryIndex(grid, ri))
+                        continue;
+                    var surface = grid.RiverVisualSurfaces[ri];
+                    if (surface.Skipped || surface.FinalCenterlineCells == null || surface.FinalCenterlineCells.Count < 2)
+                        continue;
+                    SeedOwnedProjectionEndpoint(surface.FinalCenterlineCells, 0);
+                    SeedOwnedProjectionEndpoint(surface.FinalCenterlineCells, surface.FinalCenterlineCells.Count - 1);
+                }
+
+                if (ownedProjectionSeeds > 0)
+                {
+                    Debug.Log(
+                        $"[OwnedTributaryLakeProjectionClampSeed] seeds={ownedProjectionSeeds} " +
+                        $"radius={projectionRadius} span={projectionSpan} seed={config.seed}");
+                }
+            }
+
+            int maxD = Mathf.Max(1, bankFalloffCells);
+            while (qx.Count > 0)
+            {
+                int x = qx.Dequeue();
+                int z = qz.Dequeue();
+                int d = dist[x, z];
+                if (d >= maxD)
+                    continue;
+                for (int dz = -1; dz <= 1; dz++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dz == 0)
+                            continue;
+                        int nx = x + dx;
+                        int nz = z + dz;
+                        if ((uint)nx >= (uint)w || (uint)nz >= (uint)h)
+                            continue;
+                        if (dist[nx, nz] != -1)
+                            continue;
+                        dist[nx, nz] = d + 1;
+                        qx.Enqueue(nx);
+                        qz.Enqueue(nz);
+                    }
+                }
+            }
+
+            float noiseScale = 0.20f;
+            float ox = (config.seed % 733) * 0.017f;
+            float oz = ((config.seed / 733) % 733) * 0.019f;
+            float span = maxD + 0.5f;
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    int d = dist[x, z];
+                    if (d < 0)
+                    {
+                        infl[x, z] = 0f;
+                        continue;
+                    }
+                    if (d == 0)
+                    {
+                        infl[x, z] = 1f;
+                        continue;
+                    }
+
+                    float n = Mathf.PerlinNoise(ox + x * noiseScale, oz + z * noiseScale);
+                    float dEff = d - (n - 0.5f) * 2f * noiseAmpCells;
+                    float t = Mathf.Clamp01(1f - dEff / span);
+                    infl[x, z] = t * t * (3f - 2f * t);
+                }
+            }
+
+            return infl;
+        }
+
+        /// <summary>
+        /// Tras la banda de waterline: rebaja el canal ribbon y bocas lago-tributario con una
+        /// pendiente de orilla suave (falloff + jitter) en vez de una pared vertical.
+        /// </summary>
+        static void ApplyUwpRiverVisualMaskHeightmapFloorClamp(
+            float[,] heights,
+            int res,
+            GridSystem grid,
+            MapGenConfig config)
+        {
+            if (heights == null || grid == null || config == null || res < 2 ||
+                !config.riverVisualTerrainCarveEnabled || grid.RiverVisualSurfaceMask == null)
+                return;
+
+            float depthW = config.riverTerrainCarveDepthWorld;
+            if (depthW < 1e-4f)
+                return;
+
+            float depth01 = Mathf.Clamp(depthW, 0f, 3f) / Mathf.Max(1e-4f, config.terrainHeightWorld > 0f ? config.terrainHeightWorld : 50f);
+            float floorMain = ResolveUwpRiverCarveFloor01(grid, config, depth01, 0);
+            float floorTrib = ResolveUwpRiverCarveFloor01(grid, config, depth01, 1);
+            float floorH = Mathf.Min(floorMain, floorTrib);
+
+            int bankFalloff = Mathf.Clamp(Mathf.Max(3, config.riverVisualTerrainBankFalloffCells), 2, 6);
+            float noiseAmp = Mathf.Clamp(bankFalloff * 0.42f, 0.6f, 2.2f);
+            float[,] influence = BuildUwpChannelCarveInfluenceField(
+                grid, config, grid.RiverVisualSurfaceMask, bankFalloff, noiseAmp);
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int clamped = 0;
+
+            for (int y = 0; y < res; y++)
+            {
+                float gzF = (y / (float)(res - 1)) * (h - 1);
+                for (int x = 0; x < res; x++)
+                {
+                    float gxF = (x / (float)(res - 1)) * (w - 1);
+                    float infl = SampleInfluenceFieldBilinear(influence, w, h, gxF, gzF);
+                    if (infl <= 0.001f)
+                        continue;
+
+                    float natural = heights[y, x];
+                    float target = Mathf.Lerp(natural, floorH, infl);
+                    if (target < natural - 1e-6f)
+                    {
+                        heights[y, x] = target;
+                        clamped++;
+                    }
+                }
+            }
+
+            if (clamped > 0 && config.uwpOwnedVisualPolicy)
+            {
+                Debug.Log(
+                    $"[UwpRiverHeightmapFloorClamp] clamped={clamped} floorH={floorH:F4} " +
+                    $"bankFalloff={bankFalloff} noiseAmp={noiseAmp:F2} seed={config.seed}");
             }
         }
 
@@ -2060,9 +2367,12 @@ namespace Project.Gameplay.Map.Generator
             return Mathf.Clamp(Mathf.RoundToInt(mainW * 0.10f), 1, 2);
         }
 
+        const float UwpCenterlineExtraCarveDepthWorld = 0.2f;
+
         static void StampUniformUwpCenterlineFloor(
             float[,] outH,
             GridSystem grid,
+            MapGenConfig config,
             bool[,] mask,
             List<Vector2> line,
             float floorH,
@@ -2072,6 +2382,10 @@ namespace Project.Gameplay.Map.Generator
                 return;
             int w = grid.Width;
             int h = grid.Height;
+            float terrainY = config != null && config.terrainHeightWorld > 0f
+                ? config.terrainHeightWorld
+                : 50f;
+            float centerExtraDepth01 = UwpCenterlineExtraCarveDepthWorld / Mathf.Max(1e-4f, terrainY);
             for (int i = 0; i < line.Count; i++)
             {
                 int cx = Mathf.Clamp(Mathf.RoundToInt(line[i].x), 0, w - 1);
@@ -2079,7 +2393,7 @@ namespace Project.Gameplay.Map.Generator
                 ref var cell = ref grid.GetCell(cx, cz);
                 if (cell.type == CellType.Water && (mask == null || !mask[cx, cz]))
                     continue;
-                float target = cell.riverFord ? floorH - fordFloorDelta : floorH;
+                float target = cell.riverFord ? floorH - fordFloorDelta : floorH - centerExtraDepth01;
                 outH[cx, cz] = target;
             }
         }
@@ -2226,8 +2540,15 @@ namespace Project.Gameplay.Map.Generator
             int h = grid.Height;
             bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
             bool frozenTribCarve = frozenCarve && riverIndex > 0;
+            // El mesh del tributario se renderiza con riverSurfaceTributaryMeshOnlyWidthMul sobre el
+            // ancho base, pero el carve usa MaskHalfWidthsWorld (ancho base). Si el carve queda más
+            // estrecho que el mesh, el borde del mesh cruza el terreno (líneas blancas de orilla).
+            // Igualamos el carve al ancho del mesh (+2%) para contenerlo.
+            float frozenTribMeshMul = config != null
+                ? Mathf.Clamp(config.riverSurfaceTributaryMeshOnlyWidthMul * 1.02f, 0.92f, 1.7f)
+                : 1.02f;
             float halfWidthMul = frozenTribCarve
-                ? 0.92f
+                ? frozenTribMeshMul
                 : (frozenCarve ? 1f : ResolveUwpCarveHalfWidthMul(config, riverIndex));
             bool bellProfile = config != null && config.uwpCarveEuclideanBellProfileEnabled;
             bool requireMask = frozenCarve;
@@ -2274,6 +2595,7 @@ namespace Project.Gameplay.Map.Generator
                     int pz = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, h - 1);
                     bool allowWaterCarve = !frozenCarve && (mouthZone || TerrainCellNearLakeBody(grid, px, pz, 5));
                     bool forceFullDepth = frozenTribCarve || midBody;
+                    bool landLakeMouth = frozenTribCarve && IsLandCellAdjacentToLakeWater(grid, px, pz);
 
                     StampUniformUwpFloorDisk(
                         outH,
@@ -2285,7 +2607,7 @@ namespace Project.Gameplay.Map.Generator
                         fordFloorDelta,
                         fordMul,
                         config,
-                        requireMask: requireMask,
+                        requireMask: requireMask && !landLakeMouth,
                         allowWaterCarve: allowWaterCarve,
                         forceFullDepth: forceFullDepth,
                         uniformFlatChannelFloor: frozenTribCarve);
@@ -2351,7 +2673,7 @@ namespace Project.Gameplay.Map.Generator
 
                 if (!frozenCarve)
                 {
-                    StampUniformUwpCenterlineFloor(outH, grid, mask, carveLine, floorH, fordFloorDelta);
+                    StampUniformUwpCenterlineFloor(outH, grid, config, mask, carveLine, floorH, fordFloorDelta);
                 }
 
                 StampUwpTributaryCarveAlongPolyline(
@@ -2387,36 +2709,264 @@ namespace Project.Gameplay.Map.Generator
             GridSystem grid,
             MapGenConfig config,
             bool[,] mask,
-            float floorH,
+            float depth01,
             float fordFloorDelta,
             float fordMul)
         {
             if (!UsesUwpFrozenCarveContract(grid, config) || grid?.RiverVisualSurfaces == null || config == null)
                 return;
 
-            float maxDist = Mathf.Min(Mathf.Max(8f, config.lakeRiverConnectorMaxDistanceCells), 48f);
+            float maxDist = Mathf.Max(8f, config.lakeRiverConnectorMaxDistanceCells);
+            if (config.uwpOwnedVisualPolicy)
+                maxDist = Mathf.Min(Mathf.Max(maxDist, config.lakeRiverMouthBlendCells + 12f), 96f);
             float tribFull = config.riverVisualRibbonFullWidthCellsTributary > 0.01f
                 ? config.riverVisualRibbonFullWidthCellsTributary
                 : config.riverVisualRibbonFullWidthCellsMain * 0.65f;
             int radius = Mathf.Max(2, Mathf.CeilToInt(tribFull * 0.24f));
             int w = grid.Width;
             int h = grid.Height;
+            int reachCount = 0;
 
             for (int ri = 1; ri < grid.RiverVisualSurfaces.Count; ri++)
             {
-                if (!IsLakeOwnedTributaryIndex(grid, ri))
-                    continue;
-
                 var surface = grid.RiverVisualSurfaces[ri];
                 if (surface.Skipped || surface.FinalCenterlineCells == null || surface.FinalCenterlineCells.Count < 2)
                     continue;
 
-                StampLakeMouthCarveReachForEndpoint(
-                    outH, grid, config, mask, surface.FinalCenterlineCells, 0, maxDist, radius, floorH, fordFloorDelta, fordMul, w, h);
-                StampLakeMouthCarveReachForEndpoint(
-                    outH, grid, config, mask, surface.FinalCenterlineCells, surface.FinalCenterlineCells.Count - 1,
+                var line = surface.FinalCenterlineCells;
+                float floorH = ResolveUwpRiverCarveFloor01(grid, config, depth01, ri);
+                reachCount += StampTributaryLakeMouthLandEdgeAlongCenterline(
+                    outH, grid, config, mask, line, radius, floorH, fordFloorDelta, fordMul, w, h);
+                reachCount += StampOwnedTributaryLakeProjectionCarve(
+                    outH, grid, config, mask, line, ri, maxDist, radius, floorH, fordFloorDelta, fordMul, w, h);
+
+                bool needsReach =
+                    EndpointNeedsLakeMouthCarveReach(grid, line, 0, maxDist, w, h) ||
+                    EndpointNeedsLakeMouthCarveReach(grid, line, line.Count - 1, maxDist, w, h);
+                if (!needsReach)
+                    continue;
+
+                reachCount += StampLakeMouthCarveReachForEndpoint(
+                    outH, grid, config, mask, line, 0, maxDist, radius, floorH, fordFloorDelta, fordMul, w, h);
+                reachCount += StampLakeMouthCarveReachForEndpoint(
+                    outH, grid, config, mask, line, line.Count - 1,
                     maxDist, radius, floorH, fordFloorDelta, fordMul, w, h);
             }
+
+            if (reachCount > 0 && (config.debugLogs || config.debugHydrologyNetwork || config.uwpOwnedVisualPolicy))
+            {
+                Debug.Log(
+                    $"[TributaryLakeMouthCarveReach] stamped={reachCount} maxDist={maxDist:F1} seed={config.seed}");
+            }
+        }
+
+        static bool IsLandCellAdjacentToLakeWater(GridSystem grid, int cx, int cz)
+        {
+            if (grid == null || !grid.InBoundsCell(cx, cz))
+                return false;
+            var cellType = grid.GetCell(cx, cz).type;
+            if (cellType != CellType.Land && cellType != CellType.River)
+                return false;
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dz == 0)
+                        continue;
+                    int nx = cx + dx;
+                    int nz = cz + dz;
+                    if (!grid.InBoundsCell(nx, nz))
+                        continue;
+                    if (grid.GetCell(nx, nz).type == CellType.Water)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static bool EndpointNeedsLakeMouthCarveReach(
+            GridSystem grid,
+            List<Vector2> line,
+            int endpointIndex,
+            float maxDistCells,
+            int w,
+            int h)
+        {
+            if (line == null || endpointIndex < 0 || endpointIndex >= line.Count)
+                return false;
+            Vector2 end = line[endpointIndex];
+            int ex = Mathf.Clamp(Mathf.FloorToInt(end.x), 0, w - 1);
+            int ez = Mathf.Clamp(Mathf.FloorToInt(end.y), 0, h - 1);
+            if (grid.GetCell(ex, ez).type == CellType.Water)
+                return false;
+            if (IsLandCellAdjacentToLakeWater(grid, ex, ez))
+                return true;
+            return TryFindNearestLakeShoreForCarve(grid, end, maxDistCells, out Vector2 shore) &&
+                   Vector2.Distance(end, shore) > 0.2f;
+        }
+
+        static int StampTributaryLakeMouthLandEdgeAlongCenterline(
+            float[,] outH,
+            GridSystem grid,
+            MapGenConfig config,
+            bool[,] mask,
+            List<Vector2> line,
+            int radiusCells,
+            float floorH,
+            float fordFloorDelta,
+            float fordMul,
+            int w,
+            int h)
+        {
+            if (line == null || line.Count < 2)
+                return 0;
+
+            int count = 0;
+            for (int i = 0; i < line.Count; i++)
+            {
+                int cx = Mathf.Clamp(Mathf.FloorToInt(line[i].x), 0, w - 1);
+                int cz = Mathf.Clamp(Mathf.FloorToInt(line[i].y), 0, h - 1);
+                if (!IsLandCellAdjacentToLakeWater(grid, cx, cz))
+                    continue;
+
+                StampUniformUwpFloorDisk(
+                    outH,
+                    grid,
+                    mask,
+                    line[i],
+                    radiusCells,
+                    floorH,
+                    fordFloorDelta,
+                    fordMul,
+                    config,
+                    requireMask: false,
+                    allowWaterCarve: false,
+                    forceFullDepth: true,
+                    uniformFlatChannelFloor: true);
+                TryApplyUniformUwpFloorAtCell(outH, grid, null, cx, cz, floorH, fordFloorDelta, false);
+                count++;
+            }
+
+            return count;
+        }
+
+        static int StampOwnedTributaryLakeProjectionCarve(
+            float[,] outH,
+            GridSystem grid,
+            MapGenConfig config,
+            bool[,] mask,
+            List<Vector2> line,
+            int riverIndex,
+            float maxDistCells,
+            int radiusCells,
+            float floorH,
+            float fordFloorDelta,
+            float fordMul,
+            int w,
+            int h)
+        {
+            if (grid == null || config == null || line == null || line.Count < 2)
+                return 0;
+            if (!config.uwpOwnedVisualPolicy || !IsLakeOwnedTributaryIndex(grid, riverIndex))
+                return 0;
+
+            int count = 0;
+            int projectionRadius = Mathf.Max(radiusCells, Mathf.CeilToInt(radiusCells * 1.15f));
+            int span = Mathf.Clamp(config.lakeRiverMouthBlendCells + 2, 5, 14);
+
+            int StampProjectionEndpoint(int endpointIndex)
+            {
+                Vector2 end = line[endpointIndex];
+                int ex = Mathf.Clamp(Mathf.FloorToInt(end.x), 0, w - 1);
+                int ez = Mathf.Clamp(Mathf.FloorToInt(end.y), 0, h - 1);
+                bool endpointAtLake =
+                    grid.GetCell(ex, ez).type == CellType.Water ||
+                    TerrainCellNearLakeBody(grid, ex, ez, 3) ||
+                    IsLandCellAdjacentToLakeWater(grid, ex, ez) ||
+                    TryFindNearestLakeShoreForCarve(grid, end, maxDistCells, out _);
+                if (!endpointAtLake)
+                    return 0;
+
+                int dir = endpointIndex == 0 ? 1 : -1;
+                int stamped = 0;
+                int limit = Mathf.Min(span, line.Count - 1);
+                for (int k = 0; k <= limit; k++)
+                {
+                    int idx = endpointIndex + dir * k;
+                    if (idx < 0 || idx >= line.Count)
+                        break;
+
+                    float fade = 1f - k / Mathf.Max(1f, limit);
+                    int r = Mathf.Max(radiusCells, Mathf.RoundToInt(Mathf.Lerp(radiusCells, projectionRadius, fade)));
+                    Vector2 p = line[idx];
+                    StampUniformUwpFloorDisk(
+                        outH,
+                        grid,
+                        mask,
+                        p,
+                        r,
+                        floorH,
+                        fordFloorDelta,
+                        fordMul,
+                        config,
+                        requireMask: false,
+                        allowWaterCarve: true,
+                        forceFullDepth: true,
+                        uniformFlatChannelFloor: true);
+
+                    int px = Mathf.Clamp(Mathf.FloorToInt(p.x), 0, w - 1);
+                    int pz = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, h - 1);
+                    TryApplyUniformUwpFloorAtCell(outH, grid, null, px, pz, floorH, fordFloorDelta, true);
+                    stamped++;
+                }
+
+                if (TryFindNearestLakeShoreForCarve(grid, end, maxDistCells, out Vector2 shore))
+                {
+                    float bridgeDist = Vector2.Distance(end, shore);
+                    if (bridgeDist > 0.05f)
+                    {
+                        int steps = Mathf.Clamp(Mathf.CeilToInt(bridgeDist / 0.32f), 2, 28);
+                        for (int s = 1; s <= steps; s++)
+                        {
+                            Vector2 p = Vector2.Lerp(end, shore, s / (float)steps);
+                            StampUniformUwpFloorDisk(
+                                outH,
+                                grid,
+                                mask,
+                                p,
+                                projectionRadius,
+                                floorH,
+                                fordFloorDelta,
+                                fordMul,
+                                config,
+                                requireMask: false,
+                                allowWaterCarve: true,
+                                forceFullDepth: true,
+                                uniformFlatChannelFloor: true);
+
+                            int px = Mathf.Clamp(Mathf.FloorToInt(p.x), 0, w - 1);
+                            int pz = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, h - 1);
+                            TryApplyUniformUwpFloorAtCell(outH, grid, null, px, pz, floorH, fordFloorDelta, true);
+                            stamped++;
+                        }
+                    }
+                }
+
+                return stamped;
+            }
+
+            count += StampProjectionEndpoint(0);
+            count += StampProjectionEndpoint(line.Count - 1);
+
+            if (count > 0 && (config.debugLogs || config.debugHydrologyNetwork || config.uwpOwnedVisualPolicy))
+            {
+                Debug.Log(
+                    $"[OwnedTributaryLakeProjectionCarve] riverIndex={riverIndex} stamped={count} " +
+                    $"radius={projectionRadius} span={span}");
+            }
+
+            return count;
         }
 
         static bool IsLakeOwnedTributaryIndex(GridSystem grid, int riverIndex)
@@ -2432,7 +2982,7 @@ namespace Project.Gameplay.Map.Generator
             return false;
         }
 
-        static void StampLakeMouthCarveReachForEndpoint(
+        static int StampLakeMouthCarveReachForEndpoint(
             float[,] outH,
             GridSystem grid,
             MapGenConfig config,
@@ -2448,21 +2998,60 @@ namespace Project.Gameplay.Map.Generator
             int h)
         {
             if (line == null || endpointIndex < 0 || endpointIndex >= line.Count)
-                return;
+                return 0;
 
             Vector2 end = line[endpointIndex];
             int ex = Mathf.Clamp(Mathf.FloorToInt(end.x), 0, w - 1);
             int ez = Mathf.Clamp(Mathf.FloorToInt(end.y), 0, h - 1);
             ref var endCell = ref grid.GetCell(ex, ez);
             if (endCell.type == CellType.Water)
-                return;
+                return 0;
 
+            bool landAtLakeEdge = IsLandCellAdjacentToLakeWater(grid, ex, ez);
             if (!TryFindNearestLakeShoreForCarve(grid, end, maxDistCells, out Vector2 shore))
-                return;
+            {
+                if (!landAtLakeEdge)
+                    return 0;
+
+                StampUniformUwpFloorDisk(
+                    outH,
+                    grid,
+                    mask,
+                    end,
+                    radiusCells,
+                    floorH,
+                    fordFloorDelta,
+                    fordMul,
+                    config,
+                    requireMask: false,
+                    allowWaterCarve: false,
+                    forceFullDepth: true,
+                    uniformFlatChannelFloor: true);
+                return 1;
+            }
 
             float bridgeDist = Vector2.Distance(end, shore);
             if (bridgeDist < 0.2f)
-                return;
+            {
+                if (!landAtLakeEdge)
+                    return 0;
+
+                StampUniformUwpFloorDisk(
+                    outH,
+                    grid,
+                    mask,
+                    end,
+                    radiusCells,
+                    floorH,
+                    fordFloorDelta,
+                    fordMul,
+                    config,
+                    requireMask: false,
+                    allowWaterCarve: false,
+                    forceFullDepth: true,
+                    uniformFlatChannelFloor: true);
+                return 1;
+            }
 
             int steps = Mathf.Clamp(Mathf.CeilToInt(bridgeDist / 0.36f), 2, 24);
             for (int s = 1; s <= steps; s++)
@@ -2484,6 +3073,8 @@ namespace Project.Gameplay.Map.Generator
                     forceFullDepth: true,
                     uniformFlatChannelFloor: true);
             }
+
+            return steps;
         }
 
         static bool TryFindNearestLakeShoreForCarve(
@@ -2496,8 +3087,11 @@ namespace Project.Gameplay.Map.Generator
             if (grid?.LakeBodyCellsPacked == null || grid.LakeBodyCellsPacked.Count == 0)
                 return false;
 
+            const float minSepCells = 0.35f;
+            float minSepSq = minSepCells * minSepCells;
             float maxSq = maxDistCells * maxDistCells;
             float bestSq = float.MaxValue;
+
             if (grid.LakeMouthCellsPacked != null)
             {
                 foreach (long pk in grid.LakeMouthCellsPacked)
@@ -2506,11 +3100,10 @@ namespace Project.Gameplay.Map.Generator
                     int z = (int)(uint)pk;
                     var center = new Vector2(x + 0.5f, z + 0.5f);
                     float sq = (center - from).sqrMagnitude;
-                    if (sq < bestSq)
-                    {
-                        bestSq = sq;
-                        shore = center;
-                    }
+                    if (sq < minSepSq || sq >= bestSq)
+                        continue;
+                    bestSq = sq;
+                    shore = center;
                 }
             }
 
@@ -2518,25 +3111,14 @@ namespace Project.Gameplay.Map.Generator
             {
                 int x = (int)(pk >> 32);
                 int z = (int)(uint)pk;
-                for (int dz = -1; dz <= 1; dz++)
-                {
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        if (dx == 0 && dz == 0)
-                            continue;
-                        int nx = x + dx;
-                        int nz = z + dz;
-                        if (!grid.InBoundsCell(nx, nz))
-                            continue;
-                        var center = new Vector2(nx + 0.5f, nz + 0.5f);
-                        float sq = (center - from).sqrMagnitude;
-                        if (sq < bestSq)
-                        {
-                            bestSq = sq;
-                            shore = center;
-                        }
-                    }
-                }
+                if (grid.GetCell(x, z).type != CellType.Water)
+                    continue;
+                var center = new Vector2(x + 0.5f, z + 0.5f);
+                float sq = (center - from).sqrMagnitude;
+                if (sq < minSepSq || sq >= bestSq)
+                    continue;
+                bestSq = sq;
+                shore = center;
             }
 
             return bestSq <= maxSq;
@@ -2704,7 +3286,7 @@ namespace Project.Gameplay.Map.Generator
                     if (surface.Skipped || surface.FinalCenterlineCells == null || surface.FinalCenterlineCells.Count < 1)
                         continue;
                     StampUniformUwpCenterlineFloor(
-                        outH, grid, mask, surface.FinalCenterlineCells, floorH, fordFloorDelta);
+                        outH, grid, config, mask, surface.FinalCenterlineCells, floorH, fordFloorDelta);
                 }
             }
             else if (grid.RiverCenterlinesCellSpace != null &&
@@ -2715,7 +3297,7 @@ namespace Project.Gameplay.Map.Generator
                     var line = grid.RiverCenterlinesCellSpace[ri];
                     if (line == null || line.Count < 1)
                         continue;
-                    StampUniformUwpCenterlineFloor(outH, grid, mask, line, floorH, fordFloorDelta);
+                    StampUniformUwpCenterlineFloor(outH, grid, config, mask, line, floorH, fordFloorDelta);
                 }
             }
         }
@@ -3055,8 +3637,7 @@ namespace Project.Gameplay.Map.Generator
 
                 ApplyUwpTributaryLogicalPathCarve(outH, grid, config, m, depth01, fordFloorDelta, fordMul);
                 ApplyUwpTributaryLakeMouthFinalCarveReach(
-                    outH, grid, config, m, floorH: ComputeUniformUwpRiverCarveFloor01(config, depth01),
-                    fordFloorDelta, fordMul);
+                    outH, grid, config, m, depth01, fordFloorDelta, fordMul);
 
                 if (frozenCarve)
                     EnsureUwpFrozenCarveFlagsMarked(grid);
@@ -3176,6 +3757,14 @@ namespace Project.Gameplay.Map.Generator
                 Debug.Log(
                     $"[RiverVisualTerrainSync] riverMaskCells={maskCells} carvedCells={carved} bankCells={bankCells} " +
                     $"centerDepthMul={centerMul:F2} bankSoftness={bankSoft:F2} usedSurfaceMask=1 carve01_medio={(float)avg:F4}");
+            }
+
+            if (UsesUwpFrozenCarveContract(grid, config))
+            {
+                float fordFloorDelta = depth01 * 0.14f;
+                ApplyUwpTributaryLogicalPathCarve(outH, grid, config, m, depth01, fordFloorDelta, fordMul);
+                ApplyUwpTributaryLakeMouthFinalCarveReach(outH, grid, config, m, depth01, fordFloorDelta, fordMul);
+                EnsureUwpFrozenCarveFlagsMarked(grid);
             }
         }
 

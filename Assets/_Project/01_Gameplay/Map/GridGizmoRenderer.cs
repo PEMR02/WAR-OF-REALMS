@@ -814,6 +814,11 @@ namespace Project.Gameplay.Map
 
         void OnRenderObject()
         {
+            // Solo la cámara principal: evita que MinimapCamera_RT u otras cámaras disparen GL/mesh de grilla
+            // y corrompan el pass de Gizmos del Game view (Unity 6 + URP).
+            if (Camera.current != null && Camera.main != null && Camera.current != Camera.main)
+                return;
+
             if (_benchmarkForceHideGameGrid) { SetMeshVisible(false); return; }
             if (!showInGameView) { SetMeshVisible(false); return; }
             if (!ShouldShowGrid()) { SetMeshVisible(false); return; }

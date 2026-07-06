@@ -25,6 +25,9 @@ namespace Project.Gameplay.Map
         /// <summary>Celdas de río marcadas como vado (transitables); usado para gameplay (p. ej. velocidad al cruzar).</summary>
         bool[] _riverFord;
 
+        const float ImpassableSlopeDeg = 48f;
+        const float RoughSlopeDeg = 34f;
+
         void Awake()
         {
             if (Instance != null && Instance != this)
@@ -77,7 +80,9 @@ namespace Project.Gameplay.Map
                         wt = WaterTraverseMode.SwimNavigable;
                     bool impassWater = !ford && wt == WaterTraverseMode.Impassable;
                     // Río sin vado: siempre bloqueado para pie (A* usa IsPassableForPathfinding). Nadadores siguen por IsWater + excepción en ese método.
+                    bool steepSlope = cell.type == CellType.Land && cell.slopeDeg >= ImpassableSlopeDeg;
                     bool blocked = cell.type == CellType.Mountain
+                        || steepSlope
                         || impassWater
                         || (cell.type == CellType.Land && !cell.walkable)
                         || (cell.type == CellType.River && !ford);
@@ -90,6 +95,8 @@ namespace Project.Gameplay.Map
                         SetTerrainCost(c, 5f);
                     else if (ford)
                         SetTerrainCost(c, 1.35f);
+                    else if (cell.type == CellType.Land && cell.slopeDeg >= RoughSlopeDeg)
+                        SetTerrainCost(c, Mathf.Lerp(1.75f, 4f, Mathf.InverseLerp(RoughSlopeDeg, ImpassableSlopeDeg, cell.slopeDeg)));
                 }
             }
         }
@@ -388,4 +395,3 @@ namespace Project.Gameplay.Map
         int Index(Vector2Int c) => c.y * width + c.x;
     }
 }
-

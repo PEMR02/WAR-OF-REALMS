@@ -2,6 +2,7 @@ using System.Globalization;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using Project.Gameplay.Map.CleanWaterPipeline;
 using Project.Gameplay.Map.Generator;
 
 namespace Project.Gameplay.Map
@@ -49,6 +50,7 @@ namespace Project.Gameplay.Map
         GameObject[] _playerSlotRows = new GameObject[4];
         Button[] _slotHumanBtns = new Button[4];
         Button[] _slotAiBtns = new Button[4];
+        Button _riverPipelineToggle;
         Button _bakeGeneratedMapToggle;
         bool _bakeGeneratedMapOnStart;
 
@@ -571,6 +573,8 @@ namespace Project.Gameplay.Map
             actV.spacing = 8;
             AddKicker(actCard.transform, "Acciones", new Color(0.75f, 0.75f, 0.78f));
             CreatePrimaryButton(actCard.transform, "Iniciar partida", OnStartGameClicked);
+            _riverPipelineToggle = CreateSmallButton(actCard.transform, "Pipeline: Auto UWP", ToggleRiverPipelineMode);
+            RefreshRiverPipelineToggle();
             _bakeGeneratedMapToggle = CreateSmallButton(actCard.transform, "Guardar mapa: OFF", ToggleBakeGeneratedMapOnStart);
             RefreshBakeGeneratedMapToggle();
             CreateSmallButton(actCard.transform, "Guardar configuración", OnSaveConfigClicked);
@@ -942,6 +946,7 @@ namespace Project.Gameplay.Map
             RefreshSliderLabels();
             RefreshMapaChipVisuals();
             RefreshPlayerSlotUi();
+            RefreshRiverPipelineToggle();
             RefreshSummary();
             _statusText.text = "Pulsa «Regenerar preview» para un vistazo rápido del mapa.";
         }
@@ -973,6 +978,7 @@ namespace Project.Gameplay.Map
                 $"Ríos\t{_gen.riverCount}\n" +
                 $"Lagos\t{_gen.lakeCount}\n" +
                 $"Montañas (macro)\t{_gen.lobbyMacroMountainMasses}\n" +
+                $"Pipeline\t{RiverPipelineShortLabel(_gen.riverWaterPlayPipeline)}\n" +
                 $"Celda\t{LobbyWorldCellSizeMeters:0.0} m (fija)";
         }
 
@@ -1190,6 +1196,65 @@ namespace Project.Gameplay.Map
                     ? "Guardar mapa generado: ON. Se guardará una copia al iniciar esta partida."
                     : "Guardar mapa generado: OFF.";
         }
+
+        void ToggleRiverPipelineMode()
+        {
+            if (_gen == null)
+                return;
+
+            _gen.riverWaterPlayPipeline = _gen.riverWaterPlayPipeline switch
+            {
+                RuntimeRiverWaterPipelineMode.AutoCleanSplineWhenUwp => RuntimeRiverWaterPipelineMode.CleanSplineExperimental,
+                RuntimeRiverWaterPipelineMode.CleanSplineExperimental => RuntimeRiverWaterPipelineMode.HydroGraphV2,
+                RuntimeRiverWaterPipelineMode.HydroGraphV2 => RuntimeRiverWaterPipelineMode.LegacyCurrent,
+                _ => RuntimeRiverWaterPipelineMode.AutoCleanSplineWhenUwp
+            };
+
+            RefreshRiverPipelineToggle();
+            RefreshSummary();
+            if (_statusText != null)
+                _statusText.text = $"Pipeline de rios: {RiverPipelineStatusLabel(_gen.riverWaterPlayPipeline)}.";
+        }
+
+        void RefreshRiverPipelineToggle()
+        {
+            if (_riverPipelineToggle == null || _gen == null)
+                return;
+
+            var img = _riverPipelineToggle.targetGraphic as Image;
+            if (img != null)
+            {
+                img.color = _gen.riverWaterPlayPipeline switch
+                {
+                    RuntimeRiverWaterPipelineMode.CleanSplineExperimental => RtsChipOn,
+                    RuntimeRiverWaterPipelineMode.HydroGraphV2 => new Color(0.10f, 0.45f, 0.44f, 1f),
+                    RuntimeRiverWaterPipelineMode.LegacyCurrent => new Color(0.30f, 0.20f, 0.18f, 1f),
+                    _ => new Color(0.18f, 0.22f, 0.30f, 1f)
+                };
+            }
+
+            var txt = _riverPipelineToggle.GetComponentInChildren<Text>();
+            if (txt != null)
+                txt.text = $"Pipeline: {RiverPipelineShortLabel(_gen.riverWaterPlayPipeline)}";
+        }
+
+        static string RiverPipelineShortLabel(RuntimeRiverWaterPipelineMode mode) =>
+            mode switch
+            {
+                RuntimeRiverWaterPipelineMode.CleanSplineExperimental => "Clean Spline",
+                RuntimeRiverWaterPipelineMode.HydroGraphV2 => "HydroGraph V2",
+                RuntimeRiverWaterPipelineMode.LegacyCurrent => "Legacy",
+                _ => "Auto UWP"
+            };
+
+        static string RiverPipelineStatusLabel(RuntimeRiverWaterPipelineMode mode) =>
+            mode switch
+            {
+                RuntimeRiverWaterPipelineMode.CleanSplineExperimental => "Clean Spline forzado",
+                RuntimeRiverWaterPipelineMode.HydroGraphV2 => "HydroGraph V2 independiente",
+                RuntimeRiverWaterPipelineMode.LegacyCurrent => "Legacy anterior",
+                _ => "Auto UWP si el perfil limpio esta activo"
+            };
 
         void RefreshBakeGeneratedMapToggle()
         {

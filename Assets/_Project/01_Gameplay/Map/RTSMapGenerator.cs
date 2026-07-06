@@ -11,6 +11,7 @@ using Unity.AI.Navigation;
 using Project.Gameplay.Map.Generator;
 using Project.Gameplay.Map.Generation;
 using Project.Gameplay.Map.CleanWaterPipeline;
+using Project.Gameplay.Map.HydroGraphV2;
 using Project.Gameplay.Map.Generation.Alpha;
 using Project.Gameplay.AI;
 using Project.Gameplay.Faction;
@@ -124,6 +125,10 @@ namespace Project.Gameplay.Map
         [Tooltip("Pipeline visual de agua. Current = sistema actual estable; Unified = reservado para probar el sistema nuevo.")]
         public bool overrideWaterVisualPipeline = false;
         public WaterVisualPipelineMode waterVisualPipeline = WaterVisualPipelineMode.CurrentSplitLakeMsRiverSurface;
+        [Tooltip("Modo runtime de rios para Play. Auto usa el flujo limpio cuando UWP esta activo; LegacyCurrent vuelve al sistema anterior; CleanSplineExperimental lo fuerza.")]
+        public RuntimeRiverWaterPipelineMode riverWaterPlayPipeline = RuntimeRiverWaterPipelineMode.AutoCleanSplineWhenUwp;
+        [Tooltip("Configuracion del motor HydroGraph V2. Si queda vacia, se usa una configuracion runtime por defecto.")]
+        public HydroGraphV2Config hydroGraphV2Config;
         [Tooltip("Material de la malla de agua (ej. MAT_Water, URP Lit o Unlit). Si no asignas, se usa un material por defecto.")]
         public Material waterMaterial;
         [Tooltip("Modo runtime para el material legacy de agua/rio.")]
@@ -370,6 +375,26 @@ namespace Project.Gameplay.Map
             config.seed = seed;
             ApplyAuthoritativeGridLayout(this, config);
 
+            bool useHydroGraphV2 = riverWaterPlayPipeline == RuntimeRiverWaterPipelineMode.HydroGraphV2;
+            if (useHydroGraphV2)
+            {
+                var hydro = GetComponent<HydroGraphV2RuntimeGenerator>();
+                if (hydro == null)
+                    hydro = gameObject.AddComponent<HydroGraphV2RuntimeGenerator>();
+
+                Material riverMat = riverWaterMaterial != null ? riverWaterMaterial : waterMaterial;
+                Material lakeMat = lakeWaterMaterial != null ? lakeWaterMaterial : riverMat;
+                if (!hydro.Generate(hydroGraphV2Config, config, terrain, riverMat, lakeMat, grassLayer, dirtLayer, rockLayer, sandLayer, out var hydroResult))
+                {
+                    Destroy(config);
+                    return false;
+                }
+
+                grid = hydroResult.Grid;
+                runtimeConfig = config;
+                return grid != null;
+            }
+
             var generator = GetComponent<MapGenerator>();
             if (generator == null)
                 generator = gameObject.AddComponent<MapGenerator>();
@@ -401,6 +426,10 @@ namespace Project.Gameplay.Map
         /// <summary>Grid lógico de generación (agua, distancias, recursos por celda). Null antes/después de fallos de generación.</summary>
         public GridSystem TryGetLogicalGrid()
         {
+            var hydro = GetComponent<HydroGraphV2RuntimeGenerator>();
+            if (hydro != null && hydro.LastResult != null && hydro.LastResult.Grid != null)
+                return hydro.LastResult.Grid;
+
             var mapGen = GetComponent<MapGenerator>();
             return mapGen != null ? mapGen.Grid : null;
         }
@@ -1147,6 +1176,29 @@ namespace Project.Gameplay.Map
 
             ApplyAuthoritativeGridLayout(this, config);
 
+            bool useHydroGraphV2 = riverWaterPlayPipeline == RuntimeRiverWaterPipelineMode.HydroGraphV2;
+            if (useHydroGraphV2)
+            {
+                var hydro = GetComponent<HydroGraphV2RuntimeGenerator>();
+                if (hydro == null)
+                    hydro = gameObject.AddComponent<HydroGraphV2RuntimeGenerator>();
+
+                Material riverMat = riverWaterMaterial != null ? riverWaterMaterial : waterMaterial;
+                Material lakeMat = lakeWaterMaterial != null ? lakeWaterMaterial : riverMat;
+                if (!hydro.Generate(hydroGraphV2Config, config, terrain, riverMat, lakeMat, grassLayer, dirtLayer, rockLayer, sandLayer, out var hydroResult, exportTerrainAndMeshes: false))
+                {
+                    failMessage = "HydroGraph V2: validación falló; revisa la consola.";
+                    Destroy(config);
+                    return false;
+                }
+
+                preview = MapPreviewTextureBuilder.Build(hydroResult.Grid, hydroResult.Cities, textureMaxSize, hydroResult.Grid.SemanticRegions, previewOverlay);
+                Destroy(config);
+                if (preview == null)
+                    failMessage = "No se pudo rasterizar el grid HydroGraph V2.";
+                return preview != null;
+            }
+
             var generator = GetComponent<MapGenerator>();
             if (generator == null) generator = gameObject.AddComponent<MapGenerator>();
             generator.config = config;
@@ -1274,6 +1326,9 @@ namespace Project.Gameplay.Map
 
             _lastCompiledSettings = runtime;
 
+            if (CleanRiverSplinePlayPipeline.IsEnabled(riverWaterPlayPipeline, config))
+                CleanRiverSplinePlayPipeline.ApplyBeforeGenerate(config);
+
             if (MatchConfigCompiler.ApplyLegacyResourceFallbackFromScene(runtime.Resources, this))
                 runtime.MarkLegacyResourceFallbackFromScene();
 
@@ -1281,7 +1336,32 @@ namespace Project.Gameplay.Map
 
             ApplyAuthoritativeGridLayout(this, config);
 
-            var generator = GetComponent<MapGenerator>();
+            bool useHydroGraphV2 = riverWaterPlayPipeline == RuntimeRiverWaterPipelineMode.HydroGraphV2;
+            MapGenerator generator = null;
+            GridSystem generatedGrid = null;
+            List<CityNode> generatedCities = null;
+
+            if (useHydroGraphV2)
+            {
+                var hydro = GetComponent<HydroGraphV2RuntimeGenerator>();
+                if (hydro == null)
+                    hydro = gameObject.AddComponent<HydroGraphV2RuntimeGenerator>();
+
+                Material riverMat = riverWaterMaterial != null ? riverWaterMaterial : waterMaterial;
+                Material lakeMat = lakeWaterMaterial != null ? lakeWaterMaterial : riverMat;
+                if (!hydro.Generate(hydroGraphV2Config, config, terrain, riverMat, lakeMat, grassLayer, dirtLayer, rockLayer, sandLayer, out var hydroResult))
+                {
+                    Debug.LogError("RTSMapGenerator Definitive: HydroGraph V2 fallo (validacion o salida incompleta).");
+                    Destroy(config);
+                    return;
+                }
+
+                generatedGrid = hydroResult.Grid;
+                generatedCities = hydroResult.Cities;
+            }
+            else
+            {
+            generator = GetComponent<MapGenerator>();
             if (generator == null) generator = gameObject.AddComponent<MapGenerator>();
             generator.config = config;
             generator.terrain = terrain;
@@ -1302,31 +1382,39 @@ namespace Project.Gameplay.Map
                 generator.config = ResolveDefinitiveMapGenTemplate();
                 return;
             }
+                generatedGrid = generator.Grid;
+                generatedCities = generator.Cities;
+            }
 
             if (runtime.TerrainFeatures != null)
-                TerrainFeatureSummaryBuilder.AppendFromGrid(generator.Grid, config, runtime.TerrainFeatures);
-            runtime.SemanticRegions = generator.Grid.SemanticRegions;
-            MapGenerationPipelineLogger.LogPostGenerate(runtime, generator.Grid, config);
-            CleanWaterPipelineOrchestrator.AuditAfterGenerate(generator.Grid, config);
+                TerrainFeatureSummaryBuilder.AppendFromGrid(generatedGrid, config, runtime.TerrainFeatures);
+            runtime.SemanticRegions = generatedGrid.SemanticRegions;
+            MapGenerationPipelineLogger.LogPostGenerate(runtime, generatedGrid, config);
+            if (!useHydroGraphV2)
+            {
+                CleanWaterPipelineOrchestrator.AuditAfterGenerate(generatedGrid, config);
+                if (CleanRiverSplinePlayPipeline.IsEnabled(riverWaterPlayPipeline, config))
+                    CleanRiverSplinePlayPipeline.AuditAfterGenerate(generatedGrid, config);
+            }
             if (runtime.UsedHighLevelAlphaConfig)
                 MapVisualBinder.LogBindingPlan(activeMatch.visualBinding);
 
-            _grid.InitializeFromGridSystem(generator.Grid);
+            _grid.InitializeFromGridSystem(generatedGrid);
             _spawns.Clear();
-            int spawnCount = Mathf.Min(playerCount, generator.Cities != null ? generator.Cities.Count : 0);
+            int spawnCount = Mathf.Min(playerCount, generatedCities != null ? generatedCities.Count : 0);
             for (int i = 0; i < spawnCount; i++)
             {
-                var city = generator.Cities[i];
-                Vector3 w = generator.Grid.CellToWorldCenter(city.Center);
+                var city = generatedCities[i];
+                Vector3 w = generatedGrid.CellToWorldCenter(city.Center);
                 w.y = SampleHeight(w);
                 _spawns.Add(w);
             }
-            if (_spawns.Count == 0 && generator.Cities != null && generator.Cities.Count > 0)
+            if (_spawns.Count == 0 && generatedCities != null && generatedCities.Count > 0)
             {
-                for (int i = 0; i < generator.Cities.Count; i++)
+                for (int i = 0; i < generatedCities.Count; i++)
                 {
-                    var city = generator.Cities[i];
-                    Vector3 w = generator.Grid.CellToWorldCenter(city.Center);
+                    var city = generatedCities[i];
+                    Vector3 w = generatedGrid.CellToWorldCenter(city.Center);
                     w.y = SampleHeight(w);
                     _spawns.Add(w);
                 }
@@ -1345,7 +1433,7 @@ namespace Project.Gameplay.Map
             if (townCenterSO != null)
                 tcFootprintRadius = Mathf.Max(townCenterSO.size.x, townCenterSO.size.y) * cellSz * 0.5f;
             float minDistFromTc = Mathf.Max(tcClearRadius, tcFootprintRadius) + cellSz * 2f;
-            MapResourcePlacer.PlaceFromDefinitiveGrid(generator.Grid, this, runtime.Resources, _townCenterPositions, minDistFromTc);
+            MapResourcePlacer.PlaceFromDefinitiveGrid(generatedGrid, this, runtime.Resources, _townCenterPositions, minDistFromTc);
             MapResourcePlacer.PlaceGlobalOnly(_spawns, this, runtime.Resources);
             ReleaseTownCenterReservations();
 
@@ -1365,7 +1453,8 @@ namespace Project.Gameplay.Map
                 StartCoroutine(BakeGeneratedMapSnapshotAfterSceneSettles());
 
             Destroy(config);
-            generator.config = ResolveDefinitiveMapGenTemplate();
+            if (generator != null)
+                generator.config = ResolveDefinitiveMapGenTemplate();
         }
 
         IEnumerator BakeGeneratedMapSnapshotAfterSceneSettles()

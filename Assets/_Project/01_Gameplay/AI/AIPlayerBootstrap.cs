@@ -110,7 +110,7 @@ namespace Project.Gameplay.AI
                 ctrl.townCenterTransform = tcGo.transform;
 
                 ctrl.Initialize(
-                    match.players.slots[slot].aiDifficulty,
+                    (AIDifficulty)match.players.slots[slot].aiDifficulty,
                     res,
                     pop,
                     tcProd,

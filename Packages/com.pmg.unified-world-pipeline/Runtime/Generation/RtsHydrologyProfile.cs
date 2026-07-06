@@ -155,10 +155,28 @@ namespace Project.Gameplay.Map.Generation
             cfg.riverTerrainCarveCenterCurve = 1f;
             cfg.riverTerrainCarveFordMul = Mathf.Clamp(cfg.riverTerrainCarveFordMul, 0.88f, 0.95f);
             cfg.riverBedDepthBelowWater01 = Mathf.Clamp(cfg.riverBedDepthBelowWater01, 0.022f, 0.028f);
+            // Tributario/boca de lago más profundo: mejor cruce con terreno y unión tributario-lago honda.
             cfg.tributaryBedDepthBelowWater01 = Mathf.Clamp(
-                Mathf.Max(cfg.tributaryBedDepthBelowWater01, 0.048f),
+                Mathf.Max(cfg.tributaryBedDepthBelowWater01, 0.066f),
                 0.036f,
-                0.075f);
+                0.09f);
+            // Lagos más profundos: StylizedWater2 usa profundidad en espacio-mundo (_WorldSpaceDepth)
+            // para el color profundo y para atenuar las cáusticas (la "cuadrícula" del fondo). Con el
+            // cap previo (0.022) el lago era demasiado somero y las cáusticas se veían en todo el fondo.
+            // Maximizamos la profundidad dentro del rango que permite terrainHeightWorld.
+            cfg.lakeBedDepthBelowWater01 = Mathf.Clamp(
+                Mathf.Max(cfg.lakeBedDepthBelowWater01, 0.14f),
+                0.05f,
+                0.16f);
+            cfg.lakeBedMinDepthBelowWater01 = Mathf.Clamp(
+                Mathf.Max(cfg.lakeBedMinDepthBelowWater01, 0.045f),
+                0f,
+                0.05f);
+            // Tributarios visualmente más anchos (mesh); el carve sigue el ancho del mesh (ver TerrainExporter).
+            cfg.riverVisualRibbonFullWidthCellsTributary = Mathf.Clamp(
+                cfg.riverVisualRibbonFullWidthCellsTributary * 1.4f,
+                0.5f,
+                Mathf.Min(3f, mainFullWidthCells * 0.9f));
             cfg.riverWidthRadiusCells = Mathf.Clamp(Mathf.RoundToInt(mainFullWidthCells * 0.25f), 1, 6);
             cfg.riverVisualRasterMaskExtraCellMargin = 0f;
             cfg.shoreSmoothRadiusCells = 2;

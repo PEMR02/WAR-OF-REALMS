@@ -58,20 +58,20 @@ MonoBehaviour:
     segmentId: SETUP
     title: Materiales / capas
     description: Grass, rock, agua asignados en el config UWP (no requiere RTS).
-    status: 0
+    status: 1
     notes: 
     linkedAspect: 7
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 5
+    lastGradeLetter: D
   - id: setup-materials
     segmentId: SETUP
     title: "Layers / materiales expl\xEDcitos"
     description: Asignar TerrainLayers y materiales agua en Pipeline Config.
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 7
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 5
+    lastGradeLetter: D
   - id: logic-generate
     segmentId: LOGIC
     title: "Preview l\xF3gico"
@@ -94,106 +94,106 @@ MonoBehaviour:
     segmentId: HYDRO
     title: "Nota r\xEDos"
     description: Span, meandro, afluentes, straightness.
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 0
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 6.1022468
+    lastGradeLetter: C
   - id: hydro-endpoints
     segmentId: HYDRO
     title: "Nota extremos r\xEDo"
     description: Sin ensanche en borde del mapa.
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 8
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 10
+    lastGradeLetter: A
   - id: hydro-lakes
     segmentId: HYDRO
     title: Nota lagos
     description: "Cantidad, tama\xF1o m\xEDnimo, dispersi\xF3n org\xE1nica."
-    status: 0
+    status: 1
     notes: 
     linkedAspect: 1
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 5.0391893
+    lastGradeLetter: D
   - id: hydro-coast
     segmentId: HYDRO
     title: Nota costa
     description: "Banda costera y oc\xE9ano vs tierra jugable."
-    status: 0
+    status: 1
     notes: 
     linkedAspect: 3
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 3.918685
+    lastGradeLetter: F
   - id: surf-terrain
     segmentId: SURFACE
     title: Export terreno
     description: Terrain + splat con layers del RTS.
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 2
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 5.8333335
+    lastGradeLetter: D
   - id: surf-water
     segmentId: SURFACE
     title: Meshes agua
     description: Pipeline visual del MapGenConfig (WebFusion/Mouth).
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 7
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 5
+    lastGradeLetter: D
   - id: nav-bake
     segmentId: NAV
     title: NavMesh bake
     description: Bake y medir walkable vs agua.
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 4
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 10
+    lastGradeLetter: A
   - id: nav-thin
     segmentId: NAV
     title: Franjas finas
     description: "Detectar tiras walkable < 2 celdas junto a r\xEDo."
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 4
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 10
+    lastGradeLetter: A
   - id: gp-cities
     segmentId: GAMEPLAY
     title: Ciudades/spawns
     description: "Separaci\xF3n m\xEDnima y conectividad caminos."
-    status: 0
+    status: 2
     notes: 
     linkedAspect: 5
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 10
+    lastGradeLetter: A
   - id: gp-resources
     segmentId: GAMEPLAY
     title: Recursos
     description: Densidad y distancia a TC.
-    status: 0
+    status: 1
     notes: 
     linkedAspect: 6
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 0.4681502
+    lastGradeLetter: F
   - id: polish-manual
     segmentId: POLISH
     title: "Revisi\xF3n visual manual"
     description: Nota subjetiva agua/terreno en escena.
-    status: 0
+    status: 1
     notes: 
     linkedAspect: 7
-    lastScore0To10: -1
-    lastGradeLetter: 
+    lastScore0To10: 5
+    lastGradeLetter: D
   - id: polish-freeze
     segmentId: POLISH
     title: Congelar perfil
     description: Guardar seed + scores en SessionRoot.
-    status: 0
+    status: 1
     notes: 
     linkedAspect: 99
     lastScore0To10: -1

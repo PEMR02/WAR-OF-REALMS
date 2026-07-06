@@ -337,6 +337,7 @@ namespace Project.Gameplay.Map.Generator
         [Tooltip("Activa ancho visual dedicado para tributarios (no afecta río principal).")]
         public bool riverSurfaceTributaryWidthFixEnabled = true;
         public bool riverSurfaceTributaryWidthDebugLogs = true;
+        public bool riverSurfaceAllowStraightTrustedTributaries = false;
         [Tooltip("Ancho normal tributario = baseHalfWidth × este factor (~2 = doble del cauce estrecho previo).")]
         [Range(1f, 3f)] public float riverSurfaceTributaryVisualWidthMul = 2f;
         [Range(1f, 3f)] public float riverSurfaceTributaryMinWidthMul = 1.75f;

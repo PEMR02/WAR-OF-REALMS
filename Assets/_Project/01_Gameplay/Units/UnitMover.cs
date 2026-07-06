@@ -411,10 +411,10 @@ namespace Project.Gameplay.Units
                 return;
 
             if (MapGrid.Instance != null && MapGrid.Instance.IsReady && !canSwim
-                && MapGrid.Instance.IsWater(MapGrid.Instance.WorldToCell(transform.position))
-                && (_followingAStarPath || _hasAStarGoal))
+                && MapGrid.Instance.IsWater(MapGrid.Instance.WorldToCell(transform.position)))
             {
-                TryRecoverFromWaterCell();
+                if (TryRecoverFromWaterCell())
+                    return;
             }
 
             // Puerta: al alcanzar el punto intermedio (Entry/Exit) retomamos el destino real.

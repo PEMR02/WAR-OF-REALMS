@@ -145,7 +145,7 @@ MonoBehaviour:
     showWater: 1
     meshMode: 1
     overrideVisualPipeline: 0
-    visualPipeline: 0
+    visualPipeline: 1
     waterLayer: -1
     material: {fileID: 0}
     materialMode: 2

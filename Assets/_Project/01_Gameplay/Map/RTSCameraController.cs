@@ -34,7 +34,11 @@ namespace Project.Gameplay
         public float moveSpeed = 25f;
         public float edgeSpeed = 20f;
         public float edgeSize = 12f;
+        [InspectorName("Activar movimiento por borde")]
+        [Tooltip("Si esta apagado, acercar el mouse a los bordes de la pantalla no movera la camara.")]
         public bool edgeScroll = true;
+        [Tooltip("Opcional: tecla para encender/apagar el movimiento por borde durante el juego. Dejalo en None si no quieres usar tecla todavia.")]
+        public Key edgeScrollToggleKey = Key.None;
         [Tooltip("Tiempo de suavizado para movimiento (0 = instantáneo). 0.05–0.15 típico.")]
         [Min(0f)] public float moveSmoothTime = 0.08f;
         [Tooltip("Si true, la velocidad de movimiento escala con el zoom: más lejos = más rápido (estilo AoE2).")]
@@ -367,6 +371,9 @@ namespace Project.Gameplay
             if (kb == null || mouse == null) return;
 
             float dt = Time.unscaledDeltaTime;
+            if (edgeScrollToggleKey != Key.None && kb[edgeScrollToggleKey].wasPressedThisFrame)
+                edgeScroll = !edgeScroll;
+
             bool selectionDragging = selection != null && selection.IsDraggingSelection;
 
             if (_prevSelectionDragging && !selectionDragging)

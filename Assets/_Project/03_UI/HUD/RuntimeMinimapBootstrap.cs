@@ -285,14 +285,12 @@ namespace Project.UI
                 return;
             }
 
-            bool manual = throttledMinimapUpdate;
-            _minimapCamera.enabled = !manual;
+            _minimapCamera.enabled = false;
 
-            if (!manual)
-                return;
-
-            bool due = Time.unscaledTime >= _nextMinimapRenderTime;
-            if (!due && !MainCameraRelevantChange())
+            bool due = !throttledMinimapUpdate
+                || Time.unscaledTime >= _nextMinimapRenderTime
+                || MainCameraRelevantChange();
+            if (!due)
                 return;
 
             _nextMinimapRenderTime = Time.unscaledTime + Mathf.Max(0.05f, minimapUpdateInterval);
@@ -948,7 +946,8 @@ namespace Project.UI
                     listener.enabled = false;
             }
 
-            _minimapCamera.enabled = true;
+            // Nunca auto-render: solo Camera.Render() manual para no interferir con Gizmos del Game view.
+            _minimapCamera.enabled = false;
             _minimapCamera.orthographic = true;
             _minimapCamera.clearFlags = CameraClearFlags.SolidColor;
             _minimapCamera.backgroundColor = new Color(0.05f, 0.07f, 0.10f, 1f);
@@ -1000,16 +999,9 @@ namespace Project.UI
             if (_minimapCamera == null) return;
             if (useStaticMinimapBackground && staticMinimapBackground != null) return;
             SnapshotMainCameraForMinimapThrottle();
-            if (throttledMinimapUpdate)
-            {
-                _minimapCamera.enabled = false;
-                _minimapCamera.Render();
-                _nextMinimapRenderTime = Time.unscaledTime + Mathf.Max(0.05f, minimapUpdateInterval);
-            }
-            else
-            {
-                _minimapCamera.enabled = true;
-            }
+            _minimapCamera.enabled = false;
+            _minimapCamera.Render();
+            _nextMinimapRenderTime = Time.unscaledTime + Mathf.Max(0.05f, minimapUpdateInterval);
         }
 
         void LogMinimapDiagnostics()

@@ -32,31 +32,31 @@ MonoBehaviour:
   rockTileSize: {x: 6, y: 6}
   sandTileSize: {x: 6, y: 6}
   sandShoreCells: 3
-  terrainMaterialTemplate: {fileID: 0}
-  riverWaterMaterial: {fileID: 2100000, guid: 54d723bb44ea0574bae881b904711ac9, type: 2}
-  lakeWaterMaterial: {fileID: 2100000, guid: 227594fb82c0eb649a9445fcfef573e6, type: 2}
-  seaWaterMaterial: {fileID: 0}
+  terrainMaterialTemplate: {fileID: 2100000, guid: 41a18f629bbb9a346a745ab59c438f68, type: 2}
+  riverWaterMaterial: {fileID: 2100000, guid: 2ce9183c834c4a178d76c9e57f0a6b41, type: 2}
+  lakeWaterMaterial: {fileID: 2100000, guid: 2ce9183c834c4a178d76c9e57f0a6b41, type: 2}
+  seaWaterMaterial: {fileID: 2100000, guid: 2ce9183c834c4a178d76c9e57f0a6b41, type: 2}
   tributaryWaterMaterial: {fileID: 2100000, guid: 54d723bb44ea0574bae881b904711ac9, type: 2}
   applyRiverVisualExportFix: 1
   useMouthFusionWaterPipeline: 0
   applyRiverBankTerrainFix: 1
-  uwpMainRiverFullWidthCells: 3.75
-  uwpTributaryRiverFullWidthCells: 1.55
-  uwpMainRiverCarveDepthWorld: 0.11
+  uwpMainRiverFullWidthCells: 6
+  uwpTributaryRiverFullWidthCells: 4
+  uwpMainRiverCarveDepthWorld: 0.2
   uwpMainRiverSurfaceWorldY: 0
   uwpMainRiverCount: 1
   uwpTributaryCount: 3
   uwpLakeCount: 2
   uwpMaxLakeCells: 1400
-  webTerrainJson: {fileID: 0}
+  webTerrainJson: {fileID: 4900000, guid: 2da280a59f3a6f549a1d163492011208, type: 3}
   jsonUseVisualHeight: 1
   jsonFlipZ: 0
   jsonUseGameWaterSystem: 1
   checklist: {fileID: 11400000, guid: c37259aaa1b65594c8bdf8949c4f02ba, type: 2}
-  seedOverride: 0
-  useSeedOverride: 0
+  seedOverride: 2147483647
+  useSeedOverride: 1
   batchSeedCount: 50
-  batchTopN: 12
+  batchTopN: 20
   skipRoadConnectivityInPreview: 1
   applySceneHydrologyOverrides: 0
   weightRivers: 1.4

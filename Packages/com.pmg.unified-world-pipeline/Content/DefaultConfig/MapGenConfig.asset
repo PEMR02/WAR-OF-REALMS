@@ -135,6 +135,9 @@ MonoBehaviour:
   riverVisualTerrainBankSoftness: 0.65
   riverSurfaceMeshUvScale: 0.042
   riverSurfaceMeshExtraYOffsetWorld: 0.12
+  riverSurfaceMainMeshOnlyWidthMul: 1
+  riverSurfaceTributaryMeshOnlyWidthMul: 1
+  riverSurfaceMainRootYOffsetWorld: 0
   riverSurfaceDebugFlatMaterial: 0
   riverSurfaceChaikinPasses: 1
   riverSurfaceSampleSpacingCells: 1
@@ -150,6 +153,7 @@ MonoBehaviour:
   riverSurfaceSkipTributaryConfluenceCap: 1
   riverSurfaceTributaryWidthFixEnabled: 1
   riverSurfaceTributaryWidthDebugLogs: 1
+  riverSurfaceAllowStraightTrustedTributaries: 0
   riverSurfaceTributaryVisualWidthMul: 2
   riverSurfaceTributaryMinWidthMul: 1.75
   riverSurfaceTributaryMaxWidthMul: 2.35
@@ -209,6 +213,14 @@ MonoBehaviour:
   riverTerrainCarveFalloffCells: 8
   riverTerrainCarveCenterCurve: 1.35
   riverTerrainCarveFordMul: 0.18
+  uwpCarveEuclideanBellProfileEnabled: 1
+  uwpCarveTransverseFlatRatio: 0.38
+  uwpCarveTransverseBankPower: 1.8
+  uwpCarveHalfWidthMulMain: 0.92
+  uwpCarveHalfWidthMulTributary: 0.9
+  uwpCarveLongitudinalRadiusNoiseAmpMain: 0.03
+  uwpCarveLongitudinalRadiusNoiseAmpTributary: 0.025
+  uwpCarveLongitudinalRadiusNoiseScale: 0.04
   riverOutletTerrainFixEnabled: 1
   riverOutletTerrainFixLengthCells: 10
   riverOutletTerrainFixRadiusMul: 1.15
@@ -364,7 +376,7 @@ MonoBehaviour:
   sandEdgeNoiseStrength: 0.85
   shoreSmoothRadiusCells: 5
   shoreSmoothStrength: 1
-  waterVisualPipeline: 0
+  waterVisualPipeline: 1
   unifiedWaterPerimeterExpandWorld: 1.35
   unifiedWaterSurfaceExtraYOffsetWorld: 0.24
   unifiedWaterSurfaceLiftFromDepthFactor: 0.055

@@ -3733,7 +3733,8 @@ namespace Project.Gameplay.Map.Generator
                 if (direct > 4f)
                 {
                     float ratio = PolylineLengthCellSpace(poly) / direct;
-                    if (ratio < 1.15f)
+                    bool allowStraight = config.riverSurfaceAllowStraightTrustedTributaries;
+                    if (ratio < 1.15f && !allowStraight)
                     {
                         rejectReason = "too_straight";
                         return true;
@@ -3971,13 +3972,16 @@ namespace Project.Gameplay.Map.Generator
             if (grid == null || cellProcessed == null || cellProcessed.Count < 2 || config == null || riverIndex <= 0)
                 return cellProcessed != null && cellProcessed.Count >= 2;
 
-            float lakeApproach = ResolveLakeMouthApproachMaxDistCells(config);
-            bool lakeBound = IsTributaryLakeOwner(grid, riverIndex) ||
-                             RiverFunctionalEndNearLake(grid, riverIndex, config) ||
-                             IsCellSpacePointInOrNearLake(grid, cellProcessed[cellProcessed.Count - 1], lakeApproach) ||
-                             IsCellSpacePointInOrNearLake(grid, cellProcessed[0], lakeApproach);
-            if (!lakeBound)
+            if (!ShouldApplyTributaryLakeMouthFinalJoin(grid, cellProcessed, riverIndex, config))
                 return cellProcessed.Count >= 2;
+
+            int beforePts = cellProcessed.Count;
+            Vector2 endBefore = cellProcessed[cellProcessed.Count - 1];
+            float shoreDistBefore = float.MaxValue;
+            TryGetNearestLakeShorePoint(
+                grid, endBefore, ResolveLakeMouthApproachMaxDistCells(config), out Vector2 shoreBefore);
+            if (shoreBefore != default)
+                shoreDistBefore = Vector2.Distance(endBefore, shoreBefore);
 
             ApplyLakeRiverMouthVisualBridging(grid, cellProcessed, riverIndex, config);
             if (cellProcessed == null || cellProcessed.Count < 2)
@@ -3987,8 +3991,30 @@ namespace Project.Gameplay.Map.Generator
             if (cellProcessed == null || cellProcessed.Count < 2)
                 return false;
 
-            TrimRiverSurfaceEndAtLakeMouth(grid, cellProcessed, config);
+            if (IsTributaryLakeOwner(grid, riverIndex) &&
+                !IsCellSpacePointInOrNearLake(grid, cellProcessed[cellProcessed.Count - 1], 4) &&
+                !IsCellSpacePointInOrNearLake(grid, cellProcessed[0], 4))
+            {
+                TryAppendOwnedTributaryClosestLakeBridge(grid, cellProcessed, riverIndex, config);
+            }
+
+            TrimRiverSurfaceEndAtLakeMouth(grid, cellProcessed, config, riverIndex);
             TrimRiverSurfaceStaticWaterFromEnds(grid, cellProcessed, riverIndex, config);
+
+            if (config.uwpOwnedVisualPolicy)
+            {
+                Vector2 endAfter = cellProcessed[cellProcessed.Count - 1];
+                float shoreDistAfter = float.MaxValue;
+                if (TryGetNearestLakeShorePoint(
+                        grid, endAfter, ResolveLakeMouthApproachMaxDistCells(config), out Vector2 shoreAfter))
+                    shoreDistAfter = Vector2.Distance(endAfter, shoreAfter);
+
+                Debug.Log(
+                    $"[TributaryLakeMouthJoin] riverIndex={riverIndex} owner={(IsTributaryLakeOwner(grid, riverIndex) ? 1 : 0)} " +
+                    $"beforePts={beforePts} afterPts={cellProcessed.Count} shoreDistBefore={shoreDistBefore:F2} " +
+                    $"shoreDistAfter={shoreDistAfter:F2} tribToMain={(TributaryTargetsMainConfluence(grid, riverIndex) ? 1 : 0)}");
+            }
+
             return cellProcessed != null && cellProcessed.Count >= 2;
         }
 
@@ -5497,7 +5523,11 @@ namespace Project.Gameplay.Map.Generator
             FlareEnd(false);
         }
 
-        static void TrimRiverSurfaceEndAtLakeMouth(GridSystem grid, List<Vector2> cellProcessed, MapGenConfig config)
+        static void TrimRiverSurfaceEndAtLakeMouth(
+            GridSystem grid,
+            List<Vector2> cellProcessed,
+            MapGenConfig config,
+            int riverIndex = -1)
         {
             if (grid == null || cellProcessed == null || cellProcessed.Count < 4)
                 return;
@@ -5525,9 +5555,20 @@ namespace Project.Gameplay.Map.Generator
             if (trim <= 0 || trim >= cellProcessed.Count - 1)
                 return;
 
-            cellProcessed.RemoveRange(cellProcessed.Count - trim, trim);
+            bool preserveOwnedLakeOverlap =
+                config != null &&
+                config.uwpOwnedVisualPolicy &&
+                riverIndex > 0 &&
+                IsTributaryLakeOwner(grid, riverIndex);
+            int remove = preserveOwnedLakeOverlap ? Mathf.Max(0, trim - 1) : trim;
+            if (remove <= 0 || remove >= cellProcessed.Count - 1)
+                return;
+
+            cellProcessed.RemoveRange(cellProcessed.Count - remove, remove);
             if (config != null && (config.debugLogs || config.debugHydrologyNetwork))
-                Debug.Log($"[LakeMouthEndTrim] trimmedEndPoints={trim} remaining={cellProcessed.Count}");
+                Debug.Log(
+                    $"[LakeMouthEndTrim] trimmedEndPoints={trim} removed={remove} " +
+                    $"preserveLakeOverlap={(preserveOwnedLakeOverlap ? 1 : 0)} remaining={cellProcessed.Count}");
         }
 
         static void TrimRiverSurfaceStartAtLakeMouth(GridSystem grid, List<Vector2> cellProcessed, MapGenConfig config)
@@ -6468,6 +6509,11 @@ namespace Project.Gameplay.Map.Generator
 
             bool ShouldTrim(Vector2 p) =>
                 IsCellSpacePointWater(grid, p) || IsCellSpacePointInLakeBody(grid, p);
+            bool preserveOwnedLakeOverlap =
+                config != null &&
+                config.uwpOwnedVisualPolicy &&
+                riverIndex > 0 &&
+                IsTributaryLakeOwner(grid, riverIndex);
 
             int endTrim = 0;
             for (int i = cellProcessed.Count - 1; i >= 1; i--)
@@ -6478,8 +6524,9 @@ namespace Project.Gameplay.Map.Generator
                     break;
             }
 
-            if (endTrim > 0 && endTrim < cellProcessed.Count - 1)
-                cellProcessed.RemoveRange(cellProcessed.Count - endTrim, endTrim);
+            int endRemove = preserveOwnedLakeOverlap ? Mathf.Max(0, endTrim - 1) : endTrim;
+            if (endRemove > 0 && endRemove < cellProcessed.Count - 1)
+                cellProcessed.RemoveRange(cellProcessed.Count - endRemove, endRemove);
 
             int startTrim = 0;
             if (riverIndex > 0)
@@ -6492,8 +6539,9 @@ namespace Project.Gameplay.Map.Generator
                         break;
                 }
 
-                if (startTrim > 0 && startTrim < cellProcessed.Count - 1)
-                    cellProcessed.RemoveRange(0, startTrim);
+                int startRemove = preserveOwnedLakeOverlap ? Mathf.Max(0, startTrim - 1) : startTrim;
+                if (startRemove > 0 && startRemove < cellProcessed.Count - 1)
+                    cellProcessed.RemoveRange(0, startRemove);
             }
 
             if ((endTrim > 0 || startTrim > 0) && config != null &&
@@ -6501,6 +6549,7 @@ namespace Project.Gameplay.Map.Generator
             {
                 Debug.Log(
                     $"[RiverStaticWaterTrim] riverIndex={riverIndex} endTrim={endTrim} startTrim={startTrim} " +
+                    $"preserveLakeOverlap={(preserveOwnedLakeOverlap ? 1 : 0)} " +
                     $"remaining={cellProcessed.Count}");
             }
         }
@@ -6834,7 +6883,45 @@ namespace Project.Gameplay.Map.Generator
         {
             if (grid == null || riverIndex <= 0 || config == null)
                 return false;
-            return IsTributaryLakeOwner(grid, riverIndex);
+            if (IsTributaryLakeOwner(grid, riverIndex))
+                return true;
+            return TryGetNearestLakeShorePoint(
+                grid,
+                endpoint,
+                ResolveLakeMouthApproachMaxDistCells(config),
+                out _);
+        }
+
+        static bool ShouldApplyTributaryLakeMouthFinalJoin(
+            GridSystem grid,
+            List<Vector2> cellProcessed,
+            int riverIndex,
+            MapGenConfig config)
+        {
+            if (grid == null || cellProcessed == null || cellProcessed.Count < 2 || config == null || riverIndex <= 0)
+                return false;
+            if (IsTributaryLakeOwner(grid, riverIndex) || RiverFunctionalEndNearLake(grid, riverIndex, config))
+                return true;
+
+            float maxDist = ResolveLakeMouthApproachMaxDistCells(config);
+            if (TryGetNearestLakeShorePoint(grid, cellProcessed[cellProcessed.Count - 1], maxDist, out _))
+                return true;
+            if (TryGetNearestLakeShorePoint(grid, cellProcessed[0], maxDist, out _))
+                return true;
+
+            if (grid.RiverCenterlinesCellSpace != null &&
+                riverIndex < grid.RiverCenterlinesCellSpace.Count)
+            {
+                var raw = grid.RiverCenterlinesCellSpace[riverIndex];
+                if (raw != null && raw.Count >= 2)
+                {
+                    if (TryGetNearestLakeShorePoint(grid, raw[0], maxDist, out _) ||
+                        TryGetNearestLakeShorePoint(grid, raw[raw.Count - 1], maxDist, out _))
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -6878,15 +6965,19 @@ namespace Project.Gameplay.Map.Generator
                 int neighbor = extendStart ? 1 : cellProcessed.Count - 2;
                 Vector2 approach = end - cellProcessed[neighbor];
                 Vector2 toLake = shore - end;
+                float dotMin = config.uwpOwnedVisualPolicy &&
+                               (IsTributaryLakeOwner(grid, riverIndex) || RiverFunctionalEndNearLake(grid, riverIndex, config))
+                    ? -0.35f
+                    : 0.25f;
                 if (approach.sqrMagnitude > 1e-6f && toLake.sqrMagnitude > 1e-6f &&
-                    Vector2.Dot(approach.normalized, toLake.normalized) < 0.25f)
+                    Vector2.Dot(approach.normalized, toLake.normalized) < dotMin)
                     return;
             }
 
             float spacing = config.riverSurfaceVisualSpacingCells > 0.01f
                 ? Mathf.Clamp(config.riverSurfaceVisualSpacingCells, 0.55f, 1f)
                 : 0.75f;
-            int steps = Mathf.Clamp(Mathf.CeilToInt(dist / spacing), 2, 14);
+            int steps = Mathf.Clamp(Mathf.CeilToInt(dist / spacing), 2, Mathf.CeilToInt(maxDist / spacing) + 2);
             var bridge = new List<Vector2>(steps);
             for (int s = 1; s <= steps; s++)
             {
@@ -6928,6 +7019,9 @@ namespace Project.Gameplay.Map.Generator
                 ResolveLakeMouthApproachMaxDistCells(config),
                 out _);
         }
+
+        public static bool RiverFunctionalEndNearLakeForAudit(GridSystem grid, int riverIndex, MapGenConfig config) =>
+            RiverFunctionalEndNearLake(grid, riverIndex, config);
 
         static void ApplySplitModeLakeMouthApproaches(
             GridSystem grid,
@@ -8490,6 +8584,46 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
+        static void ApplyOwnedTributaryLakeEndpointVisualTuck(
+            GridSystem grid,
+            List<Vector2> cellProcessed,
+            int riverIndex,
+            MapGenConfig config)
+        {
+            if (grid == null || cellProcessed == null || cellProcessed.Count < 2 || config == null)
+                return;
+            if (!config.uwpOwnedVisualPolicy || riverIndex <= 0 || !IsTributaryLakeOwner(grid, riverIndex))
+                return;
+
+            float maxDist = ResolveLakeMouthApproachMaxDistCells(config);
+            bool startHasLake = TryGetNearestLakeShorePoint(grid, cellProcessed[0], maxDist, out Vector2 startShore);
+            bool endHasLake = TryGetNearestLakeShorePoint(grid, cellProcessed[cellProcessed.Count - 1], maxDist, out Vector2 endShore);
+            if (!startHasLake && !endHasLake)
+                return;
+
+            bool tuckStart;
+            if (startHasLake && endHasLake)
+            {
+                float startDist = Vector2.Distance(cellProcessed[0], startShore);
+                float endDist = Vector2.Distance(cellProcessed[cellProcessed.Count - 1], endShore);
+                tuckStart = startDist <= endDist;
+            }
+            else
+            {
+                tuckStart = startHasLake;
+            }
+
+            int before = cellProcessed.Count;
+            ApplyLakeEndpointVisualTuck(grid, cellProcessed, riverIndex, config, tuckStart);
+
+            if (config.debugLogs || config.debugHydrologyNetwork)
+            {
+                Debug.Log(
+                    $"[OwnedTributaryLakeTuck] riverIndex={riverIndex} endpoint={(tuckStart ? "start" : "end")} " +
+                    $"beforePts={before} afterPts={cellProcessed.Count}");
+            }
+        }
+
         static void ApplyLakeRiverMouthVisualBridging(
             GridSystem grid,
             List<Vector2> cellProcessed,
@@ -8502,6 +8636,7 @@ namespace Project.Gameplay.Map.Generator
             bool emissary = riverIndex > 0 && IsLakeEmissaryCenterline(grid, cellProcessed, riverIndex);
             if (emissary)
                 ApplyLakeEndpointVisualTuck(grid, cellProcessed, riverIndex, config, extendStart: true);
+            ApplyOwnedTributaryLakeEndpointVisualTuck(grid, cellProcessed, riverIndex, config);
 
             bool tribToMain = TributaryTargetsMainConfluence(grid, riverIndex);
             bool mainToLake = riverIndex == 0 &&

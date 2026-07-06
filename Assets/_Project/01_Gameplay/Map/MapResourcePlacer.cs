@@ -886,6 +886,11 @@ namespace Project.Gameplay.Map
                 UnityEngine.Object.Destroy(go);
                 return false;
             }
+            if (kind == ResourceKind.Wood && !IsWoodFootprintClearOfWater(go, generator, grid))
+            {
+                UnityEngine.Object.Destroy(go);
+                return false;
+            }
             EnsureResourceCollectable(go, kind, generator, res);
             go.name = $"{kind}_{spawned.Count}";
             spawned.Add(go);
@@ -939,6 +944,46 @@ namespace Project.Gameplay.Map
             return b.min.x >= minX && b.max.x <= maxX && b.min.z >= minZ && b.max.z <= maxZ;
         }
 
+        static bool IsWoodFootprintClearOfWater(GameObject go, RTSMapGenerator gen, MapGrid grid)
+        {
+            if (go == null || gen == null || grid == null || !grid.IsReady)
+                return true;
+
+            Bounds b = default;
+            bool have = false;
+            var rs = go.GetComponentsInChildren<Renderer>(true);
+            if (rs != null)
+            {
+                for (int i = 0; i < rs.Length; i++)
+                {
+                    var r = rs[i];
+                    if (r == null || !r.enabled) continue;
+                    if (!have) { b = r.bounds; have = true; }
+                    else b.Encapsulate(r.bounds);
+                }
+            }
+
+            Vector3 center = have ? b.center : go.transform.position;
+            float cs = Mathf.Max(0.01f, grid.cellSize);
+            float rx = have ? Mathf.Min(Mathf.Max(0.15f, b.extents.x * 0.35f), cs * 0.42f) : cs * 0.28f;
+            float rz = have ? Mathf.Min(Mathf.Max(0.15f, b.extents.z * 0.35f), cs * 0.42f) : cs * 0.28f;
+
+            for (int ix = -1; ix <= 1; ix++)
+            {
+                for (int iz = -1; iz <= 1; iz++)
+                {
+                    Vector3 p = new Vector3(center.x + ix * rx, center.y, center.z + iz * rz);
+                    Vector2Int c = grid.WorldToCell(p);
+                    if (!grid.IsInBounds(c) || grid.IsWater(c))
+                        return false;
+                    if (gen.IsWorldConsideredUnderWater(p))
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
         static bool IsCellNearGridEdge(MapGrid grid, Vector2Int c, int inset)
         {
             if (grid == null || !grid.IsReady) return false;
@@ -967,6 +1012,11 @@ namespace Project.Gameplay.Map
                 return false;
             }
             if (kind == ResourceKind.Wood && !IsResourceVisualBoundsInsideTerrainXZ(go, generator, 0.06f))
+            {
+                UnityEngine.Object.Destroy(go);
+                return false;
+            }
+            if (kind == ResourceKind.Wood && !IsWoodFootprintClearOfWater(go, generator, grid))
             {
                 UnityEngine.Object.Destroy(go);
                 return false;

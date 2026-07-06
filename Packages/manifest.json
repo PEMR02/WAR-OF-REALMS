@@ -1,7 +1,8 @@
 {
   "dependencies": {
-    "com.pmg.unified-world-pipeline": "file:com.pmg.unified-world-pipeline",
     "com.coplaydev.unity-mcp": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main",
+    "com.game-crafters-guild.worldbuilding": "https://github.com/Game-Crafters-Guild/WorldBuilding.git",
+    "com.pmg.unified-world-pipeline": "file:com.pmg.unified-world-pipeline",
     "com.unity.2d.enhancers": "1.0.0",
     "com.unity.ai.navigation": "2.0.12",
     "com.unity.collab-proxy": "2.12.4",
