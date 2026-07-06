@@ -16,6 +16,9 @@ namespace Project.Gameplay.Map.Generation
         public const float DefaultTributaryMeshOnlyWidthMul = 1.5f;
         public const float DefaultTributaryConfluenceMeshBoostMul = 1.10f;
         public const float DefaultMainSurfaceRootYOffsetWorld = 0f;
+        public const float DefaultTributaryToMainWidthRatio = 0.52f;
+        public const int DefaultPlayMinRiverBuildAttempts = 80;
+        public const int DefaultPlayMaxRiverBuildAttempts = 180;
 
         public static void Apply(MapGenConfig cfg, float mainFullWidthCellsOverride = 0f)
         {
@@ -28,7 +31,10 @@ namespace Project.Gameplay.Map.Generation
             float mainW = mainFullWidthCellsOverride > 0.01f
                 ? mainFullWidthCellsOverride
                 : DefaultMainFullWidthCells;
-            float tribW = Mathf.Min(cfg.riverVisualRibbonFullWidthCellsTributary, mainW * 0.95f);
+            float tribW = Mathf.Clamp(
+                mainW * DefaultTributaryToMainWidthRatio,
+                1.2f,
+                mainW * 0.58f);
             UwpHydrologyContract.RetuneVisualWidths(cfg, mainW, tribW, DefaultMainCarveDepthWorld);
 
             UwpRiverProfileModule.Apply(cfg, null);
@@ -44,27 +50,28 @@ namespace Project.Gameplay.Map.Generation
             UwpHydrologyContract.ApplyRtsPlayPlacementTuning(cfg);
             cfg.riverRelaxedMissingTributaryFillPass = true;
             cfg.maxTotalRiverBuildAttempts = Mathf.Clamp(
-                Mathf.Max(cfg.maxTotalRiverBuildAttempts, 24),
-                24,
-                48);
+                Mathf.Max(cfg.maxTotalRiverBuildAttempts, DefaultPlayMinRiverBuildAttempts),
+                DefaultPlayMinRiverBuildAttempts,
+                DefaultPlayMaxRiverBuildAttempts);
             cfg.riverTributaryRouteBudgetMs = Mathf.Clamp(
-                Mathf.Max(cfg.riverTributaryRouteBudgetMs, 280),
-                120,
-                320);
-            cfg.riverTributaryRouteMaxAttempts = Mathf.Clamp(cfg.riverTributaryRouteMaxAttempts, 4, 8);
+                Mathf.Max(cfg.riverTributaryRouteBudgetMs, 320),
+                200,
+                420);
+            cfg.riverTributaryRouteMaxAttempts = Mathf.Clamp(cfg.riverTributaryRouteMaxAttempts, 8, 16);
             cfg.riverTributaryCandidatesPerSlot = Mathf.Clamp(
-                Mathf.Max(cfg.riverTributaryCandidatesPerSlot, 16),
-                4,
-                24);
-            cfg.riverPlacementMaxAttemptsPerRiver = Mathf.Clamp(cfg.riverPlacementMaxAttemptsPerRiver, 4, 8);
+                Mathf.Max(cfg.riverTributaryCandidatesPerSlot, 24),
+                16,
+                36);
+            cfg.riverPlacementMaxAttemptsPerRiver = Mathf.Clamp(cfg.riverPlacementMaxAttemptsPerRiver, 6, 12);
             cfg.riverTributaryProceduralCandidatesPerSlot = Mathf.Clamp(
-                Mathf.Max(cfg.riverTributaryProceduralCandidatesPerSlot, 24),
-                8,
-                32);
+                Mathf.Max(cfg.riverTributaryProceduralCandidatesPerSlot, 48),
+                32,
+                64);
             cfg.riverTributaryProceduralMaxSourceDistCells =
-                Mathf.Max(cfg.riverTributaryProceduralMaxSourceDistCells, 72);
+                Mathf.Max(cfg.riverTributaryProceduralMaxSourceDistCells, 96);
 
             ApplyRtsPlayPerformanceCaps(cfg);
+            UwpRiverProfileModule.ApplyBankTerrainFix(cfg);
 
             Debug.LogWarning(
                 "[HydrologyCompileAudit] RTS perfil UWP: " +
@@ -174,14 +181,14 @@ namespace Project.Gameplay.Map.Generation
                 0.05f);
             // Tributarios visualmente más anchos (mesh); el carve sigue el ancho del mesh (ver TerrainExporter).
             cfg.riverVisualRibbonFullWidthCellsTributary = Mathf.Clamp(
-                cfg.riverVisualRibbonFullWidthCellsTributary * 1.4f,
-                0.5f,
-                Mathf.Min(3f, mainFullWidthCells * 0.9f));
+                mainFullWidthCells * DefaultTributaryToMainWidthRatio,
+                1.2f,
+                mainFullWidthCells * 0.58f);
             cfg.riverWidthRadiusCells = Mathf.Clamp(Mathf.RoundToInt(mainFullWidthCells * 0.25f), 1, 6);
             cfg.riverVisualRasterMaskExtraCellMargin = 0f;
-            cfg.shoreSmoothRadiusCells = 2;
-            cfg.shoreSmoothStrength = 0.30f;
-            cfg.sandShoreCells = 1;
+            cfg.shoreSmoothRadiusCells = Mathf.Max(cfg.shoreSmoothRadiusCells, 4);
+            cfg.shoreSmoothStrength = Mathf.Max(cfg.shoreSmoothStrength, 0.38f);
+            cfg.sandShoreCells = Mathf.Max(cfg.sandShoreCells, 2);
             cfg.riverConfluenceTerrainMaxHeightAboveWater01 = 0f;
             cfg.lakeRiverConnectorMaxPerMap = 1;
             cfg.uwpCarveEuclideanBellProfileEnabled = true;
@@ -200,20 +207,24 @@ namespace Project.Gameplay.Map.Generation
                 return;
 
             cfg.riverTributaryRecoveryRelaxGeometry = false;
-            cfg.riverTributaryRecoveryEnabled = false;
+            cfg.riverTributaryRecoveryEnabled = true;
+            cfg.riverTributaryRecoveryAttempts = Mathf.Max(cfg.riverTributaryRecoveryAttempts, 12);
+            cfg.riverTributaryRecoveryMaxMs = Mathf.Max(cfg.riverTributaryRecoveryMaxMs, 120);
             cfg.riverLogPlacementFailureSummary = false;
         }
 
-        /// <summary>Caps finales Play RTS: anulan boosts del runner UWP Editor (720/880 intentos).</summary>
+        /// <summary>Caps finales Play RTS: más aire que el editor UWP pero sin coste de 880 intentos.</summary>
         static void ApplyRtsPlayPerformanceCaps(MapGenConfig cfg)
         {
             if (cfg == null)
                 return;
 
-            cfg.maxTotalRiverBuildAttempts = Mathf.Clamp(cfg.maxTotalRiverBuildAttempts, 16, 48);
-            cfg.riverPlacementMaxAttemptsPerRiver = Mathf.Clamp(cfg.riverPlacementMaxAttemptsPerRiver, 4, 8);
-            cfg.riverTributaryRecoveryEnabled = false;
-            cfg.riverTributaryRecoveryAttempts = Mathf.Min(cfg.riverTributaryRecoveryAttempts, 4);
+            cfg.maxTotalRiverBuildAttempts = Mathf.Clamp(
+                cfg.maxTotalRiverBuildAttempts,
+                DefaultPlayMinRiverBuildAttempts,
+                DefaultPlayMaxRiverBuildAttempts);
+            cfg.riverPlacementMaxAttemptsPerRiver = Mathf.Clamp(cfg.riverPlacementMaxAttemptsPerRiver, 6, 12);
+            cfg.riverTributaryRecoveryAttempts = Mathf.Clamp(cfg.riverTributaryRecoveryAttempts, 8, 20);
             cfg.maxRetries = Mathf.Clamp(cfg.maxRetries, 1, 1);
             cfg.debugLogs = false;
             cfg.debugHydrologyNetwork = false;

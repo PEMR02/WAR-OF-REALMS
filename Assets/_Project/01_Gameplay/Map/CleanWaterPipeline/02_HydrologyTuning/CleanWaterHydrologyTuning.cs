@@ -15,6 +15,13 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
                 return;
 
             cfg.riverRelaxedMissingTributaryFillPass = true;
+
+            if (cfg.uwpOwnedVisualPolicy)
+            {
+                cfg.lakeRiverConnectorMaxPerMap = Mathf.Min(cfg.lakeRiverConnectorMaxPerMap, 1);
+                return;
+            }
+
             cfg.riverTributaryRouteBudgetMs = Mathf.Clamp(cfg.riverTributaryRouteBudgetMs, 120, 320);
             cfg.maxTotalRiverBuildAttempts = Mathf.Clamp(cfg.maxTotalRiverBuildAttempts, 16, 48);
             cfg.riverTributaryRouteMaxAttempts = Mathf.Clamp(cfg.riverTributaryRouteMaxAttempts, 4, 8);
