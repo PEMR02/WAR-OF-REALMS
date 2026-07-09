@@ -9,7 +9,8 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
         AutoCleanSplineWhenUwp = 0,
         LegacyCurrent = 1,
         CleanSplineExperimental = 2,
-        HydroGraphV2 = 3
+        HydroGraphV2 = 3,
+        LakeFirstHydrology = 4
     }
 
     /// <summary>
@@ -17,7 +18,7 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
     /// </summary>
     public static class CleanRiverSplinePlayPipeline
     {
-        const float MainMeshWidthMul = 1.78f;
+        const float MainMeshWidthMul = 1.92f;
         const float TributaryMeshWidthMul = 1.68f;
         const float TributaryVisualWidthMul = 1.14f;
         const float MinMainCarveDepthWorld = 0.18f;
@@ -28,10 +29,11 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
         const int MaxCleanRiverAttempts = 180;
 
         public static bool IsEnabled(RuntimeRiverWaterPipelineMode mode, MapGenConfig cfg = null) =>
-            mode == RuntimeRiverWaterPipelineMode.CleanSplineExperimental ||
+            mode != RuntimeRiverWaterPipelineMode.LakeFirstHydrology &&
+            (mode == RuntimeRiverWaterPipelineMode.CleanSplineExperimental ||
             (mode == RuntimeRiverWaterPipelineMode.AutoCleanSplineWhenUwp &&
              cfg != null &&
-             cfg.uwpOwnedVisualPolicy);
+             cfg.uwpOwnedVisualPolicy));
 
         public static void ApplyBeforeGenerate(MapGenConfig cfg)
         {
@@ -61,10 +63,13 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
                 return;
 
             cfg.riverSurfaceMainMeshOnlyWidthMul = Mathf.Max(cfg.riverSurfaceMainMeshOnlyWidthMul, MainMeshWidthMul);
-            cfg.riverSurfaceTributaryMeshOnlyWidthMul = Mathf.Max(cfg.riverSurfaceTributaryMeshOnlyWidthMul, TributaryMeshWidthMul);
-            cfg.riverSurfaceTributaryVisualWidthMul = Mathf.Max(cfg.riverSurfaceTributaryVisualWidthMul, TributaryVisualWidthMul);
-            cfg.riverSurfaceTributaryMinWidthMul = Mathf.Max(cfg.riverSurfaceTributaryMinWidthMul, TributaryVisualWidthMul);
-            cfg.riverSurfaceTributaryMaxWidthMul = Mathf.Max(cfg.riverSurfaceTributaryMaxWidthMul, TributaryVisualWidthMul + 0.18f);
+            if (!cfg.uwpOwnedVisualPolicy)
+            {
+                cfg.riverSurfaceTributaryMeshOnlyWidthMul = Mathf.Max(cfg.riverSurfaceTributaryMeshOnlyWidthMul, TributaryMeshWidthMul);
+                cfg.riverSurfaceTributaryVisualWidthMul = Mathf.Max(cfg.riverSurfaceTributaryVisualWidthMul, TributaryVisualWidthMul);
+                cfg.riverSurfaceTributaryMinWidthMul = Mathf.Max(cfg.riverSurfaceTributaryMinWidthMul, TributaryVisualWidthMul);
+                cfg.riverSurfaceTributaryMaxWidthMul = Mathf.Max(cfg.riverSurfaceTributaryMaxWidthMul, TributaryVisualWidthMul + 0.18f);
+            }
 
             cfg.riverTerrainCarveDepthWorld = Mathf.Max(cfg.riverTerrainCarveDepthWorld, MinMainCarveDepthWorld);
             cfg.riverBedDepthBelowWater01 = Mathf.Max(cfg.riverBedDepthBelowWater01, MinRiverBedDepth01);
@@ -80,13 +85,16 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
             cfg.riverSurfaceWidthNoiseAmpTributary = Mathf.Min(cfg.riverSurfaceWidthNoiseAmpTributary, 0.024f);
             cfg.riverSurfaceWidthOrganicVarFrac = Mathf.Min(cfg.riverSurfaceWidthOrganicVarFrac, 0.035f);
             cfg.riverVisualFinalCleanupMaxPatchCells = Mathf.Max(cfg.riverVisualFinalCleanupMaxPatchCells, 128);
-            cfg.riverSurfaceTributaryConfluenceApproachCells = Mathf.Max(cfg.riverSurfaceTributaryConfluenceApproachCells, 16);
+            if (!cfg.uwpOwnedVisualPolicy)
+                cfg.riverSurfaceTributaryConfluenceApproachCells = Mathf.Max(cfg.riverSurfaceTributaryConfluenceApproachCells, 16);
             cfg.lakeRiverMouthBlendCells = Mathf.Max(cfg.lakeRiverMouthBlendCells, 8);
 
             if (cfg.uwpOwnedVisualPolicy)
             {
                 cfg.riverRelaxedMissingTributaryFillPass = true;
                 cfg.maxTotalRiverBuildAttempts = Mathf.Max(cfg.maxTotalRiverBuildAttempts, 80);
+                cfg.riverConfluenceHideLastSegmentUnderMain = true;
+                cfg.riverSurfaceSkipTributaryConfluenceCap = true;
                 return;
             }
 

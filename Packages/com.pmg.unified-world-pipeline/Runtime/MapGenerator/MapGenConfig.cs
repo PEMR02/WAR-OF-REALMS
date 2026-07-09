@@ -91,6 +91,12 @@ namespace Project.Gameplay.Map.Generator
         [Header("UWP — herramienta independiente (runtime)")]
         [Tooltip("Anchos mesh/carve = riverVisualRibbonFullWidthCells*; ignora escala dendrítica visual.")]
         public bool uwpOwnedVisualPolicy = false;
+        [Tooltip("Pipeline experimental lake-first: main → lagos válidos lejos del main → tributario outlet→confluencia; validación previa a raster/mesh/carve.")]
+        public bool uwpLakeFirstHydrologyPipeline = false;
+        [Tooltip("Gizmo overlay: main, lake outlet, tributario, confluencia y carve path del pipeline lake-first.")]
+        public bool debugDrawLakeFirstHydrologyOverlay = false;
+        [Tooltip("Auditoría boca lago→tributario: gizmos terreno vs floorH, máscara y log [TributaryCarveMouthAudit].")]
+        public bool debugDrawTributaryCarveAudit = false;
         [Tooltip("lakeCount/maxLakeCells del autor sin caps lobby ni mapa 256.")]
         public bool ignoreLobbyHydrologyCaps = false;
 

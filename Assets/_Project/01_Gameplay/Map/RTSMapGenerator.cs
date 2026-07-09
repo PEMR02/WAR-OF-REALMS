@@ -125,8 +125,8 @@ namespace Project.Gameplay.Map
         [Tooltip("Pipeline visual de agua. Current = sistema actual estable; Unified = reservado para probar el sistema nuevo.")]
         public bool overrideWaterVisualPipeline = false;
         public WaterVisualPipelineMode waterVisualPipeline = WaterVisualPipelineMode.CurrentSplitLakeMsRiverSurface;
-        [Tooltip("Modo runtime de rios para Play. Auto usa el flujo limpio cuando UWP esta activo; LegacyCurrent vuelve al sistema anterior; CleanSplineExperimental lo fuerza.")]
-        public RuntimeRiverWaterPipelineMode riverWaterPlayPipeline = RuntimeRiverWaterPipelineMode.AutoCleanSplineWhenUwp;
+        [Tooltip("Modo runtime de rios para Play. Auto usa el flujo limpio cuando UWP esta activo; LakeFirstHydrology activa el pipeline experimental lake-first UWP.")]
+        public RuntimeRiverWaterPipelineMode riverWaterPlayPipeline = RuntimeRiverWaterPipelineMode.LakeFirstHydrology;
         [Tooltip("Configuracion del motor HydroGraph V2. Si queda vacia, se usa una configuracion runtime por defecto.")]
         public HydroGraphV2Config hydroGraphV2Config;
         [Tooltip("Material de la malla de agua (ej. MAT_Water, URP Lit o Unlit). Si no asignas, se usa un material por defecto.")]
@@ -374,6 +374,7 @@ namespace Project.Gameplay.Map
             _lastCompiledSettings = runtime;
             config.seed = seed;
             ApplyAuthoritativeGridLayout(this, config);
+            ApplyRiverWaterPlayPipelineToConfig(config);
 
             bool useHydroGraphV2 = riverWaterPlayPipeline == RuntimeRiverWaterPipelineMode.HydroGraphV2;
             if (useHydroGraphV2)
@@ -825,6 +826,19 @@ namespace Project.Gameplay.Map
             };
         }
 
+        void ApplyRiverWaterPlayPipelineToConfig(MapGenConfig config)
+        {
+            if (config == null)
+                return;
+
+            UwpLakeFirstPlayPipeline.ClearFromConfig(config);
+
+            if (UwpLakeFirstPlayPipeline.IsEnabled(riverWaterPlayPipeline))
+                UwpLakeFirstPlayPipeline.ApplyBeforeGenerate(config);
+            else if (CleanRiverSplinePlayPipeline.IsEnabled(riverWaterPlayPipeline, config))
+                CleanRiverSplinePlayPipeline.ApplyBeforeGenerate(config);
+        }
+
         void ApplyMatchConfigToLegacyFields(MatchConfig cfg)
         {
             if (cfg == null) return;
@@ -1175,6 +1189,7 @@ namespace Project.Gameplay.Map
                 runtime.MarkLegacyResourceFallbackFromScene();
 
             ApplyAuthoritativeGridLayout(this, config);
+            ApplyRiverWaterPlayPipelineToConfig(config);
 
             bool useHydroGraphV2 = riverWaterPlayPipeline == RuntimeRiverWaterPipelineMode.HydroGraphV2;
             if (useHydroGraphV2)
@@ -1326,8 +1341,7 @@ namespace Project.Gameplay.Map
 
             _lastCompiledSettings = runtime;
 
-            if (CleanRiverSplinePlayPipeline.IsEnabled(riverWaterPlayPipeline, config))
-                CleanRiverSplinePlayPipeline.ApplyBeforeGenerate(config);
+            ApplyRiverWaterPlayPipelineToConfig(config);
 
             if (MatchConfigCompiler.ApplyLegacyResourceFallbackFromScene(runtime.Resources, this))
                 runtime.MarkLegacyResourceFallbackFromScene();
@@ -1395,6 +1409,17 @@ namespace Project.Gameplay.Map
                 CleanWaterPipelineOrchestrator.AuditAfterGenerate(generatedGrid, config);
                 if (CleanRiverSplinePlayPipeline.IsEnabled(riverWaterPlayPipeline, config))
                     CleanRiverSplinePlayPipeline.AuditAfterGenerate(generatedGrid, config);
+                else if (UwpLakeFirstPlayPipeline.IsEnabled(riverWaterPlayPipeline) &&
+                         config.uwpLakeFirstHydrologyPipeline &&
+                         generatedGrid?.LakeFirstWaterGraph != null)
+                {
+                    var report = generatedGrid.LakeFirstWaterGraph.Report;
+                    Debug.Log(
+                        $"[UwpLakeFirstPlayPipeline] audit seed={config.seed} " +
+                        $"lakes={report.LakesAccepted}/{report.LakeCandidates} " +
+                        $"tribs={report.TributariesAccepted} rejected={report.TributariesRejected} " +
+                        $"connectivity={(report.FinalConnectivityOk ? 1 : 0)}");
+                }
             }
             if (runtime.UsedHighLevelAlphaConfig)
                 MapVisualBinder.LogBindingPlan(activeMatch.visualBinding);

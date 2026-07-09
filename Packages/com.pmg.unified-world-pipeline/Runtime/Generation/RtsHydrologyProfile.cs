@@ -10,13 +10,14 @@ namespace Project.Gameplay.Map.Generation
     /// </summary>
     public static class RtsHydrologyProfile
     {
-        public const float DefaultMainFullWidthCells = 5.35f;
+        public const float DefaultMainFullWidthCells = 6.25f;
         public const float DefaultMainCarveDepthWorld = 0.14f;
-        public const float DefaultMainMeshOnlyWidthMul = 1.72f;
-        public const float DefaultTributaryMeshOnlyWidthMul = 1.5f;
+        public const float DefaultMainMeshOnlyWidthMul = 1.88f;
+        public const float DefaultTributaryMeshOnlyWidthMul = 1.48f;
         public const float DefaultTributaryConfluenceMeshBoostMul = 1.10f;
         public const float DefaultMainSurfaceRootYOffsetWorld = 0f;
-        public const float DefaultTributaryToMainWidthRatio = 0.52f;
+        public const float DefaultTributaryToMainWidthRatio = 0.44f;
+        public const float DefaultTributaryConfluenceEndWidthRatio = 0.76f;
         public const int DefaultPlayMinRiverBuildAttempts = 80;
         public const int DefaultPlayMaxRiverBuildAttempts = 180;
 
@@ -72,6 +73,7 @@ namespace Project.Gameplay.Map.Generation
 
             ApplyRtsPlayPerformanceCaps(cfg);
             UwpRiverProfileModule.ApplyBankTerrainFix(cfg);
+            ApplyRtsPostBankTerrainGuards(cfg);
 
             Debug.LogWarning(
                 "[HydrologyCompileAudit] RTS perfil UWP: " +
@@ -81,7 +83,9 @@ namespace Project.Gameplay.Map.Generation
                 $"meshMul={cfg.riverSurfaceMainMeshOnlyWidthMul:F2} tribMeshMul={cfg.riverSurfaceTributaryMeshOnlyWidthMul:F2} " +
                 $"rootY={cfg.riverSurfaceMainRootYOffsetWorld:F2}m " +
                 $"lift={cfg.riverRibbonVerticalLiftWorld:F2}m meshY={cfg.riverSurfaceMeshExtraYOffsetWorld:F2}m " +
-                $"uwpOwned={cfg.uwpOwnedVisualPolicy} ignoreLobbyCaps={cfg.ignoreLobbyHydrologyCaps}");
+                $"uwpOwned={cfg.uwpOwnedVisualPolicy} ignoreLobbyCaps={cfg.ignoreLobbyHydrologyCaps} " +
+                $"bankFall={cfg.riverVisualTerrainBankFalloffCells} confApproach={cfg.riverSurfaceTributaryConfluenceApproachCells} " +
+                $"confEndMul={cfg.riverConfluenceTributaryEndWidthMul:F2}");
 
             if (cfg.debugLogs || cfg.debugHydrologyNetwork)
             {
@@ -105,9 +109,13 @@ namespace Project.Gameplay.Map.Generation
             cfg.riverVisualMinSurfacePieceLengthCells = 3;
             cfg.riverVisualMinSurfacePieceAreaCells = 2;
             cfg.riverVisualMinDetachedPatchCells = 2;
-            cfg.riverSurfaceTributaryVisualWidthMul = 1.08f;
-            cfg.riverSurfaceTributaryConfluenceApproachCells = Mathf.Max(cfg.riverSurfaceTributaryConfluenceApproachCells, 14);
-            cfg.riverConfluenceTributaryEndWidthMul = Mathf.Max(cfg.riverConfluenceTributaryEndWidthMul, 1f);
+            cfg.riverSurfaceTributaryVisualWidthMul = 0.92f;
+            cfg.riverSurfaceTributaryConfluenceApproachCells = Mathf.Clamp(
+                cfg.riverSurfaceTributaryConfluenceApproachCells, 5, 7);
+            cfg.riverConfluenceTributaryEndWidthMul = DefaultTributaryConfluenceEndWidthRatio;
+            cfg.riverConfluenceHideLastSegmentUnderMain = true;
+            cfg.riverSurfaceSkipTributaryConfluenceCap = true;
+            cfg.riverSurfaceAllowStraightTrustedTributaries = true;
             cfg.riverSurfaceWidthNoiseAmpMain = Mathf.Min(cfg.riverSurfaceWidthNoiseAmpMain, 0.028f);
             cfg.lakeMSRemoveNearRiverDistanceCells = 0;
             cfg.riverVisualFinalCleanupMaxPatchCells = Mathf.Max(cfg.riverVisualFinalCleanupMaxPatchCells, 96);
@@ -213,6 +221,24 @@ namespace Project.Gameplay.Map.Generation
             cfg.riverLogPlacementFailureSummary = false;
         }
 
+        static void ApplyRtsPostBankTerrainGuards(MapGenConfig cfg)
+        {
+            if (cfg == null)
+                return;
+
+            // ApplyBankTerrainFix pisa falloff/shore y reactiva carve legacy + disco simétrico en confluencias.
+            cfg.riverTerrainCarveFalloffCells = 0;
+            cfg.riverVisualTerrainCarveExtraCells = 0;
+            cfg.riverVisualTerrainBankFalloffCells = 0;
+            cfg.riverVisualTerrainBankSoftness = 1f;
+            cfg.riverVisualTerrainCenterDepthMul = 1f;
+            cfg.shoreSmoothRadiusCells = Mathf.Clamp(cfg.shoreSmoothRadiusCells, 2, 6);
+            cfg.shoreSmoothStrength = Mathf.Clamp(cfg.shoreSmoothStrength, 0.28f, 0.42f);
+            cfg.riverConfluenceTributaryEndWidthMul = DefaultTributaryConfluenceEndWidthRatio;
+            cfg.riverSurfaceTributaryConfluenceApproachCells =
+                Mathf.Clamp(cfg.riverSurfaceTributaryConfluenceApproachCells, 5, 7);
+        }
+
         /// <summary>Caps finales Play RTS: más aire que el editor UWP pero sin coste de 880 intentos.</summary>
         static void ApplyRtsPlayPerformanceCaps(MapGenConfig cfg)
         {
@@ -251,9 +277,9 @@ namespace Project.Gameplay.Map.Generation
 
             cfg.riverMainForceOrganicReshape = true;
             cfg.riverMainOrganicReshapeBudgetMs = 18;
-            cfg.riverConfluenceTributaryEndWidthMul = 1f;
+            cfg.riverConfluenceTributaryEndWidthMul = DefaultTributaryConfluenceEndWidthRatio;
             cfg.riverSurfaceTributaryConfluenceApproachCells =
-                Mathf.Max(cfg.riverSurfaceTributaryConfluenceApproachCells, 14);
+                Mathf.Clamp(cfg.riverSurfaceTributaryConfluenceApproachCells, 5, 7);
         }
     }
 }

@@ -51,6 +51,8 @@ namespace Project.Gameplay.Map.Generator
                 Debug.LogError("[UwpFrozenSurfacePipeline] FreezeUwpFinalWaterVisualSurfaceCache falló.");
             }
 
+            TerrainExporter.CleanUwpSkippedTributaryFunctionalData(grid, config);
+
             GameObject waterRoot = WaterMeshBuilder.BuildWaterMeshes(
                 grid, config, waterMaterial, spawnCells, cities, roads);
 

@@ -573,7 +573,7 @@ namespace Project.Gameplay.Map
             actV.spacing = 8;
             AddKicker(actCard.transform, "Acciones", new Color(0.75f, 0.75f, 0.78f));
             CreatePrimaryButton(actCard.transform, "Iniciar partida", OnStartGameClicked);
-            _riverPipelineToggle = CreateSmallButton(actCard.transform, "Pipeline: Auto UWP", ToggleRiverPipelineMode);
+            _riverPipelineToggle = CreateSmallButton(actCard.transform, "Pipeline: Lake First", ToggleRiverPipelineMode);
             RefreshRiverPipelineToggle();
             _bakeGeneratedMapToggle = CreateSmallButton(actCard.transform, "Guardar mapa: OFF", ToggleBakeGeneratedMapOnStart);
             RefreshBakeGeneratedMapToggle();
@@ -1205,9 +1205,10 @@ namespace Project.Gameplay.Map
             _gen.riverWaterPlayPipeline = _gen.riverWaterPlayPipeline switch
             {
                 RuntimeRiverWaterPipelineMode.AutoCleanSplineWhenUwp => RuntimeRiverWaterPipelineMode.CleanSplineExperimental,
-                RuntimeRiverWaterPipelineMode.CleanSplineExperimental => RuntimeRiverWaterPipelineMode.HydroGraphV2,
+                RuntimeRiverWaterPipelineMode.CleanSplineExperimental => RuntimeRiverWaterPipelineMode.LakeFirstHydrology,
+                RuntimeRiverWaterPipelineMode.LakeFirstHydrology => RuntimeRiverWaterPipelineMode.HydroGraphV2,
                 RuntimeRiverWaterPipelineMode.HydroGraphV2 => RuntimeRiverWaterPipelineMode.LegacyCurrent,
-                _ => RuntimeRiverWaterPipelineMode.AutoCleanSplineWhenUwp
+                _ => RuntimeRiverWaterPipelineMode.LakeFirstHydrology
             };
 
             RefreshRiverPipelineToggle();
@@ -1227,6 +1228,7 @@ namespace Project.Gameplay.Map
                 img.color = _gen.riverWaterPlayPipeline switch
                 {
                     RuntimeRiverWaterPipelineMode.CleanSplineExperimental => RtsChipOn,
+                    RuntimeRiverWaterPipelineMode.LakeFirstHydrology => new Color(0.12f, 0.55f, 0.72f, 1f),
                     RuntimeRiverWaterPipelineMode.HydroGraphV2 => new Color(0.10f, 0.45f, 0.44f, 1f),
                     RuntimeRiverWaterPipelineMode.LegacyCurrent => new Color(0.30f, 0.20f, 0.18f, 1f),
                     _ => new Color(0.18f, 0.22f, 0.30f, 1f)
@@ -1242,6 +1244,7 @@ namespace Project.Gameplay.Map
             mode switch
             {
                 RuntimeRiverWaterPipelineMode.CleanSplineExperimental => "Clean Spline",
+                RuntimeRiverWaterPipelineMode.LakeFirstHydrology => "Lake First",
                 RuntimeRiverWaterPipelineMode.HydroGraphV2 => "HydroGraph V2",
                 RuntimeRiverWaterPipelineMode.LegacyCurrent => "Legacy",
                 _ => "Auto UWP"
@@ -1251,6 +1254,7 @@ namespace Project.Gameplay.Map
             mode switch
             {
                 RuntimeRiverWaterPipelineMode.CleanSplineExperimental => "Clean Spline forzado",
+                RuntimeRiverWaterPipelineMode.LakeFirstHydrology => "UWP lake-first: main, lagos, tributario validado",
                 RuntimeRiverWaterPipelineMode.HydroGraphV2 => "HydroGraph V2 independiente",
                 RuntimeRiverWaterPipelineMode.LegacyCurrent => "Legacy anterior",
                 _ => "Auto UWP si el perfil limpio esta activo"

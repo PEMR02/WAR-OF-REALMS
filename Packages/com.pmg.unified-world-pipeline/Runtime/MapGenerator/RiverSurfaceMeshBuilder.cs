@@ -154,17 +154,17 @@ namespace Project.Gameplay.Map.Generator
         const float NarrowSharpTurnDeg = 38f;
         const float NarrowFoldHalfWidthCellsMul = 1.05f;
         const float UwpMainShoreHalfWidthFloorMul = 0.97f;
-        const float UwpTributaryConfluenceMeshBoostMul = 1.10f;
-        /// <summary>Fracción mínima del path tributario usada como zona de ensanche (T3 ≈ 0,34).</summary>
-        const float UwpTributaryConfluenceMinPathFraction = 0.34f;
+        const float UwpTributaryConfluenceMeshBoostMul = 1.12f;
+        /// <summary>Fracción máxima del path tributario usada como zona de ensanche (solo boca).</summary>
+        const float UwpTributaryConfluenceMinPathFraction = 0.08f;
 
         static float ResolveUwpConfluenceApproachDistCells(List<Vector2> cellPath, float approachCellsConfig)
         {
             float pathLen = PolylineLengthCellSpace(cellPath);
             if (pathLen < 1e-4f)
-                return Mathf.Max(6f, approachCellsConfig);
-            float dist = Mathf.Max(approachCellsConfig, pathLen * UwpTributaryConfluenceMinPathFraction);
-            return Mathf.Clamp(dist, 6f, pathLen * 0.52f);
+                return Mathf.Clamp(approachCellsConfig, 4f, 8f);
+            float dist = Mathf.Max(4f, approachCellsConfig);
+            return Mathf.Clamp(dist, 4f, Mathf.Max(6f, pathLen * UwpTributaryConfluenceMinPathFraction));
         }
 
         static void ResolveUwpConfluenceBlendRange(
@@ -799,11 +799,20 @@ namespace Project.Gameplay.Map.Generator
             GridSystem grid,
             List<Vector2> cellPath,
             bool fromEnd,
+            MapGenConfig config,
+            int riverIndex,
             out int joinIdx)
         {
             joinIdx = fromEnd ? cellPath.Count - 1 : 0;
             if (grid == null || cellPath == null || cellPath.Count < 2)
                 return false;
+
+            if (config != null && config.uwpOwnedVisualPolicy && riverIndex > 0)
+            {
+                if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, cellPath, riverIndex, out joinIdx))
+                    return false;
+                return fromEnd ? joinIdx == cellPath.Count - 1 : joinIdx == 0;
+            }
 
             if (fromEnd)
             {
@@ -835,6 +844,109 @@ namespace Project.Gameplay.Map.Generator
             return false;
         }
 
+        /// <summary>UWP frozen: joinIdx desde FinalCenterlineCells (no CellType.River ni centerline funcional).</summary>
+        static bool TryResolveTributaryJoinIndexFromFinalPath(
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2> finalPath,
+            int riverIndex,
+            out int joinIdx)
+        {
+            joinIdx = finalPath != null && finalPath.Count > 0 ? finalPath.Count - 1 : 0;
+            if (grid == null || config == null || finalPath == null || finalPath.Count < 2 || riverIndex <= 0)
+                return false;
+            if (TryResolveTributaryMainJoinEndpointIndex(grid, config, finalPath, riverIndex, out joinIdx))
+                return true;
+            joinIdx = finalPath.Count - 1;
+            return false;
+        }
+
+        static bool TryGetTributaryMainConfluenceApproachFromFinalPath(
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2> finalPath,
+            int riverIndex,
+            out Vector2 approach,
+            out int joinIdx)
+        {
+            approach = Vector2.right;
+            joinIdx = -1;
+            if (grid == null || config == null || finalPath == null || finalPath.Count < 2 || riverIndex <= 0)
+                return false;
+
+            if (!TryResolveTributaryJoinIndexFromFinalPath(grid, config, finalPath, riverIndex, out joinIdx))
+                joinIdx = finalPath.Count - 1;
+
+            int tcl = joinIdx <= 0
+                ? 1
+                : Mathf.Clamp(joinIdx, 1, finalPath.Count - 1);
+            approach = RiverDendriticUtility.TributaryIncomingAt(finalPath, tcl);
+            if (joinIdx <= 0 && approach.sqrMagnitude > 1e-6f)
+                approach = -approach;
+            if (approach.sqrMagnitude < 1e-6f)
+            {
+                int prev = Mathf.Max(0, joinIdx - 1);
+                approach = finalPath[joinIdx] - finalPath[prev];
+                if (joinIdx <= 0 && approach.sqrMagnitude > 1e-6f)
+                    approach = -approach;
+            }
+
+            if (approach.sqrMagnitude < 1e-6f)
+                return false;
+            approach.Normalize();
+            return true;
+        }
+
+        /// <summary>Vector de aproximación al troncal usando centerline funcional (tributario skipped, sin FinalCenterlineCells).</summary>
+        static bool TryGetSkippedTributaryConfluenceApproachFromFunctionalCenterline(
+            GridSystem grid,
+            int tribIdx,
+            Vector2Int confluenceCell,
+            out Vector2 approach)
+        {
+            approach = Vector2.right;
+            if (grid?.RiverCenterlinesCellSpace == null ||
+                tribIdx <= 0 ||
+                tribIdx >= grid.RiverCenterlinesCellSpace.Count)
+                return false;
+
+            var line = grid.RiverCenterlinesCellSpace[tribIdx];
+            if (line == null || line.Count < 2)
+                return false;
+
+            Vector2 conf = new Vector2(confluenceCell.x + 0.5f, confluenceCell.y + 0.5f);
+            int joinIdx = 0;
+            float bestSq = float.MaxValue;
+            for (int i = 0; i < line.Count; i++)
+            {
+                float d = (line[i] - conf).sqrMagnitude;
+                if (d < bestSq)
+                {
+                    bestSq = d;
+                    joinIdx = i;
+                }
+            }
+
+            int tcl = joinIdx <= 0
+                ? 1
+                : Mathf.Clamp(joinIdx, 1, line.Count - 1);
+            approach = RiverDendriticUtility.TributaryIncomingAt(line, tcl);
+            if (joinIdx <= 0 && approach.sqrMagnitude > 1e-6f)
+                approach = -approach;
+            if (approach.sqrMagnitude < 1e-6f)
+            {
+                int prev = Mathf.Max(0, joinIdx - 1);
+                approach = line[joinIdx] - line[prev];
+                if (joinIdx <= 0 && approach.sqrMagnitude > 1e-6f)
+                    approach = -approach;
+            }
+
+            if (approach.sqrMagnitude < 1e-6f)
+                return false;
+            approach.Normalize();
+            return true;
+        }
+
         static void ApplyTributaryConfluenceEndHalfWidths(
             GridSystem grid,
             List<Vector2> cellPath,
@@ -860,7 +972,8 @@ namespace Project.Gameplay.Map.Generator
 
             float cs = Mathf.Max(0.01f, grid.CellSizeWorld);
             float mainHalf = config.riverVisualRibbonFullWidthCellsMain * 0.5f * cs;
-            float joinHalf = mainHalf * Mathf.Clamp(config.riverConfluenceTributaryEndWidthMul, 1f, 1.12f);
+            float endMul = Mathf.Clamp(config.riverConfluenceTributaryEndWidthMul, 0.42f, 1.12f);
+            float joinHalf = mainHalf * endMul;
 
             for (int i = blendStart; i <= blendEnd; i++)
             {
@@ -888,7 +1001,10 @@ namespace Project.Gameplay.Map.Generator
 
             float mainHalf = config.riverVisualRibbonFullWidthCellsMain * 0.5f * cellSize;
             float mainMeshHalf = mainHalf * Mathf.Clamp(config.riverSurfaceMainMeshOnlyWidthMul, 1f, 2.5f);
-            float targetJoin = mainMeshHalf * UwpTributaryConfluenceMeshBoostMul;
+            float endMul = Mathf.Clamp(config.riverConfluenceTributaryEndWidthMul, 0.42f, 1.22f);
+            float lakeFirstMul = config.uwpLakeFirstHydrologyPipeline ? 1.2f : 1f;
+            float targetJoin = mainHalf * endMul * UwpTributaryConfluenceMeshBoostMul * lakeFirstMul;
+            targetJoin = Mathf.Min(targetJoin, mainMeshHalf * endMul * (config.uwpLakeFirstHydrologyPipeline ? 1.16f : 1.08f));
 
             void TaperAtEndpoint(int endpoint)
             {
@@ -3991,13 +4107,6 @@ namespace Project.Gameplay.Map.Generator
             if (cellProcessed == null || cellProcessed.Count < 2)
                 return false;
 
-            if (IsTributaryLakeOwner(grid, riverIndex) &&
-                !IsCellSpacePointInOrNearLake(grid, cellProcessed[cellProcessed.Count - 1], 4) &&
-                !IsCellSpacePointInOrNearLake(grid, cellProcessed[0], 4))
-            {
-                TryAppendOwnedTributaryClosestLakeBridge(grid, cellProcessed, riverIndex, config);
-            }
-
             TrimRiverSurfaceEndAtLakeMouth(grid, cellProcessed, config, riverIndex);
             TrimRiverSurfaceStaticWaterFromEnds(grid, cellProcessed, riverIndex, config);
 
@@ -4005,9 +4114,21 @@ namespace Project.Gameplay.Map.Generator
             {
                 Vector2 endAfter = cellProcessed[cellProcessed.Count - 1];
                 float shoreDistAfter = float.MaxValue;
-                if (TryGetNearestLakeShorePoint(
+                if (IsTributaryLakeOwner(grid, riverIndex))
+                {
+                    int lakeEp = TributaryTargetsMainConfluence(grid, riverIndex) ? cellProcessed.Count - 1 : 0;
+                    if (TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out int mainEp))
+                        lakeEp = mainEp == 0 ? cellProcessed.Count - 1 : 0;
+                    if (TryGetTributaryOwnedLakeShorePoint(
+                            grid, riverIndex, cellProcessed[Mathf.Clamp(lakeEp, 0, cellProcessed.Count - 1)],
+                            ResolveLakeMouthApproachMaxDistCells(config), out Vector2 shoreAfter))
+                        shoreDistAfter = Vector2.Distance(cellProcessed[lakeEp], shoreAfter);
+                }
+                else if (TryGetNearestLakeShorePoint(
                         grid, endAfter, ResolveLakeMouthApproachMaxDistCells(config), out Vector2 shoreAfter))
+                {
                     shoreDistAfter = Vector2.Distance(endAfter, shoreAfter);
+                }
 
                 Debug.Log(
                     $"[TributaryLakeMouthJoin] riverIndex={riverIndex} owner={(IsTributaryLakeOwner(grid, riverIndex) ? 1 : 0)} " +
@@ -4468,7 +4589,17 @@ namespace Project.Gameplay.Map.Generator
             minHalfW = Mathf.Max(0.02f, baseHalfW);
             if (riverIndex > 0 && config != null && config.uwpOwnedVisualPolicy)
             {
-                float visMul = Mathf.Clamp(config.riverSurfaceTributaryVisualWidthMul, 1f, 1.2f);
+                bool lakeFirstTrib = config.uwpLakeFirstHydrologyPipeline;
+                if (lakeFirstTrib)
+                {
+                    float lakeFirstNormalMul = Mathf.Clamp(config.riverSurfaceVisualNormalWidthMul, 1.25f, 2.05f);
+                    normalHalfW = minHalfW * lakeFirstNormalMul;
+                    maxHalfW = normalHalfW * 1.1f;
+                    return;
+                }
+
+                float visCap = 1.2f;
+                float visMul = Mathf.Clamp(config.riverSurfaceTributaryVisualWidthMul, 1f, visCap);
                 normalHalfW = minHalfW * visMul;
                 maxHalfW = normalHalfW * 1.12f;
                 return;
@@ -4563,6 +4694,7 @@ namespace Project.Gameplay.Map.Generator
             int fordD = Mathf.Max(1, config.riverVisualFordKeepDistanceCells);
             float cellSizeWorld = config != null && config.cellSizeWorld > 0.01f ? config.cellSizeWorld : 3f;
             bool mainOrganicBand = riverIndex == 0;
+            bool lakeFirstTrib = riverIndex > 0 && config != null && config.uwpLakeFirstHydrologyPipeline;
             if (mainOrganicBand)
             {
                 normalHalfW = Mathf.Max(baseHalfW, minHalfW);
@@ -4579,6 +4711,10 @@ namespace Project.Gameplay.Map.Generator
                 float endFade = MeanderEdgeFade(t01, fade);
                 float ang = InteriorTurnAngleDeg(cellPath, i);
                 float bendFade = ang >= JoinAngleHardDeg ? 0.55f : (ang >= JoinAngleSmoothDeg ? 0.8f : 1f);
+                if (lakeFirstTrib)
+                {
+                    bendFade = ang >= JoinAngleHardDeg ? 1.32f : (ang >= JoinAngleSmoothDeg ? 1.18f : 1.1f);
+                }
                 float sine = Mathf.Sin(acc * 0.11f + phase) * sineAmp;
                 float n01 = Mathf.PerlinNoise(acc * noiseScale + phase, riverIndex * 0.17f);
                 float noise = (n01 * 2f - 1f) * noiseAmp;
@@ -4598,7 +4734,15 @@ namespace Project.Gameplay.Map.Generator
                     if (riverIndex > 0)
                     {
                         float turnCap = MaxHalfWidthTurnCapWorld(cellPath, i, cellSizeWorld);
-                        wv = Mathf.Min(wv, turnCap);
+                        if (lakeFirstTrib)
+                        {
+                            float curveFloor = normalHalfW * (ang >= JoinAngleHardDeg ? 1.22f : (ang >= JoinAngleSmoothDeg ? 1.14f : 1.08f));
+                            wv = Mathf.Max(wv, curveFloor);
+                        }
+                        else
+                        {
+                            wv = Mathf.Min(wv, turnCap);
+                        }
                     }
                 }
 
@@ -4631,7 +4775,7 @@ namespace Project.Gameplay.Map.Generator
                 hw = smoothed;
             }
 
-            float maxStepAllowed = swing * (riverIndex == 0 ? 0.12f : 0.14f);
+            float maxStepAllowed = swing * (riverIndex == 0 ? 0.12f : (lakeFirstTrib ? 0.22f : 0.14f));
             for (int i = 1; i < n; i++)
             {
                 float step = hw[i] - hw[i - 1];
@@ -4820,14 +4964,22 @@ namespace Project.Gameplay.Map.Generator
             if (n < 3)
                 return;
 
-            int joinIdx = n - 1;
-            while (joinIdx > 0)
+            int joinIdx;
+            if (config.uwpOwnedVisualPolicy)
             {
-                int cx = Mathf.RoundToInt(cellPath[joinIdx].x);
-                int cz = Mathf.RoundToInt(cellPath[joinIdx].y);
-                if (grid.InBoundsCell(cx, cz) && grid.GetCell(cx, cz).type == CellType.River)
-                    break;
-                joinIdx--;
+                TryResolveTributaryJoinIndexFromFinalPath(grid, config, cellPath, riverIndex, out joinIdx);
+            }
+            else
+            {
+                joinIdx = n - 1;
+                while (joinIdx > 0)
+                {
+                    int cx = Mathf.RoundToInt(cellPath[joinIdx].x);
+                    int cz = Mathf.RoundToInt(cellPath[joinIdx].y);
+                    if (grid.InBoundsCell(cx, cz) && grid.GetCell(cx, cz).type == CellType.River)
+                        break;
+                    joinIdx--;
+                }
             }
 
             if (config.riverSurfaceTributaryWidthFixEnabled && config.uwpOwnedVisualPolicy)
@@ -4944,7 +5096,10 @@ namespace Project.Gameplay.Map.Generator
                 float tribHalf = config.riverVisualRibbonFullWidthCellsTributary > 0.01f
                     ? config.riverVisualRibbonFullWidthCellsTributary * 0.5f * cellSize
                     : bodyHalf;
-                float lakeHalf = Mathf.Max(bodyHalf, tribHalf * 1.12f);
+                float meshMul = Mathf.Clamp(config.riverSurfaceTributaryMeshOnlyWidthMul, 1f, 2f);
+                float lakeFirstMul = config.uwpLakeFirstHydrologyPipeline ? 1.24f : 1.05f;
+                float lakeHalf = Mathf.Max(bodyHalf, tribHalf * lakeFirstMul);
+                lakeHalf = Mathf.Min(lakeHalf, bodyHalf * meshMul * (config.uwpLakeFirstHydrologyPipeline ? 1.38f : 1.16f));
 
                 for (int i = blendStart; i <= blendEnd; i++)
                 {
@@ -4967,6 +5122,59 @@ namespace Project.Gameplay.Map.Generator
 
             PinLakeEnd(true);
             PinLakeEnd(false);
+        }
+
+        /// <summary>Solo mesh: ensancha boca lago sin inflar máscara/carve.</summary>
+        static void ApplyTributaryLakeMouthExtraMeshWidth(
+            GridSystem grid,
+            List<Vector2> cellPath,
+            List<float> halfWidths,
+            MapGenConfig config,
+            int riverIndex)
+        {
+            if (config == null || !config.uwpOwnedVisualPolicy || riverIndex <= 0 ||
+                cellPath == null || halfWidths == null || grid == null)
+                return;
+            int n = Mathf.Min(cellPath.Count, halfWidths.Count);
+            if (n < 4)
+                return;
+
+            float cellSize = grid.CellSizeWorld;
+            float meshMul = Mathf.Clamp(config.riverSurfaceTributaryMeshOnlyWidthMul, 1f, 2f);
+
+            void BoostLakeEnd(bool atEnd)
+            {
+                int endIdx = atEnd ? n - 1 : 0;
+                if (IsTributaryEndpointNearMain(grid, config, cellSize, cellPath, endIdx))
+                    return;
+                if (!IsCellSpacePointInOrNearLake(grid, cellPath[endIdx], 8))
+                {
+                    int probe = atEnd ? n - 2 : 1;
+                    if (probe < 0 || probe >= n || !IsCellSpacePointInOrNearLake(grid, cellPath[probe], 6))
+                        return;
+                }
+
+                int blend = Mathf.Clamp(config.lakeRiverMouthBlendCells + 4, 6, 14);
+                int blendStart = atEnd ? Mathf.Max(0, n - blend) : 0;
+                int blendEnd = atEnd ? n - 1 : Mathf.Min(n - 1, blend - 1);
+                int bodyRefIdx = atEnd ? Mathf.Max(0, blendStart - 1) : Mathf.Min(n - 1, blendEnd + 1);
+                float bodyHalf = halfWidths[Mathf.Clamp(bodyRefIdx, 0, n - 1)];
+                float lakeMeshHalf = bodyHalf * Mathf.Max(1.08f, meshMul * 0.92f);
+
+                for (int i = blendStart; i <= blendEnd; i++)
+                {
+                    float t = blendEnd <= blendStart
+                        ? 1f
+                        : (atEnd
+                            ? (i - blendStart) / (float)(blendEnd - blendStart)
+                            : (blendEnd - i) / (float)(blendEnd - blendStart));
+                    float target = Mathf.Lerp(bodyHalf, lakeMeshHalf, Mathf.SmoothStep(0f, 1f, t));
+                    halfWidths[i] = Mathf.Max(halfWidths[i], target);
+                }
+            }
+
+            BoostLakeEnd(true);
+            BoostLakeEnd(false);
         }
 
         /// <summary>UWP Play: reutiliza centerline/ancho ya resueltos (confluencia + boca lago) para la malla MS.</summary>
@@ -4997,6 +5205,8 @@ namespace Project.Gameplay.Map.Generator
                 surface.FinalCenterlineCells == null || surface.FinalCenterlineCells.Count < 2 ||
                 surface.HalfWidthsWorld == null ||
                 surface.HalfWidthsWorld.Count != surface.FinalCenterlineCells.Count)
+                return false;
+            if (riverIndex > 0 && IsUwpDegenerateTributary(surface.FinalCenterlineCells, cellSize))
                 return false;
 
             cellProcessed = new List<Vector2>(surface.FinalCenterlineCells);
@@ -5752,10 +5962,24 @@ namespace Project.Gameplay.Map.Generator
             if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
                 return;
 
+            if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out int mainEp))
+                mainEp = ResolveVisualTributaryMainEndpointIndex(grid, cellProcessed);
+            int lakeEp = mainEp == 0 ? cellProcessed.Count - 1 : 0;
+            if (IsTributaryEndpointNearLake(grid, cellProcessed, lakeEp) ||
+                CountWebFusionLakeMouthInteriorVertices(grid, cellProcessed) > 0)
+                return;
+
             float maxJoin = ResolveConfluenceReachMaxGapCells(config);
+            int guardMain = Mathf.Clamp(Mathf.CeilToInt(sampler.RadiusCells * 0.55f), 3, 8);
+            int guardLake = guardMain;
+            int searchStart = mainEp == 0 ? guardMain : guardLake;
+            int searchEnd = mainEp == 0 ? cellProcessed.Count - guardLake : cellProcessed.Count - guardMain;
+            if (searchEnd <= searchStart)
+                return;
+
             int bestIdx = -1;
             float bestDist = float.MaxValue;
-            for (int i = 0; i < cellProcessed.Count; i++)
+            for (int i = searchStart; i < searchEnd; i++)
             {
                 float d = Mathf.Sqrt(DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line));
                 if (d < bestDist)
@@ -5765,7 +5989,8 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
-            if (bestIdx < 1 || bestDist > maxJoin)
+            float reEntryMax = Mathf.Min(maxJoin, Mathf.Max(sampler.RadiusCells * 1.15f, guardMain + 1.5f));
+            if (bestIdx < searchStart || bestDist > reEntryMax)
                 return;
 
             int removeFrom = bestIdx + 1;
@@ -5778,7 +6003,7 @@ namespace Project.Gameplay.Map.Generator
             {
                 Debug.Log(
                     $"[RiverTributaryMainTrim] riverIndex={riverIndex} cutAt={bestIdx} minMainDist={bestDist:F2} " +
-                    $"removedTail={removed} remaining={cellProcessed.Count}");
+                    $"removedTail={removed} remaining={cellProcessed.Count} mode=interior_reentry");
             }
         }
 
@@ -6024,11 +6249,13 @@ namespace Project.Gameplay.Map.Generator
             int bestIdx = -1;
             float bestDist = maxDist + 1f;
             Vector2 bestShore = default;
-            for (int i = 0; i < cellProcessed.Count; i++)
+            int last = cellProcessed.Count - 1;
+            for (int ti = 0; ti < 2; ti++)
             {
+                int i = ti == 0 ? 0 : last;
                 if (i == mainIdx)
                     continue;
-                if (!TryGetNearestLakeShorePoint(grid, cellProcessed[i], maxDist, out Vector2 shore))
+                if (!TryGetTributaryOwnedLakeShorePoint(grid, riverIndex, cellProcessed[i], maxDist, out Vector2 shore))
                     continue;
                 float d = Vector2.Distance(cellProcessed[i], shore);
                 if (d < bestDist)
@@ -6068,6 +6295,186 @@ namespace Project.Gameplay.Map.Generator
             cellProcessed.Clear();
             cellProcessed.AddRange(sub);
             return true;
+        }
+
+        static void AppendCenterlineBridgeTowardShore(List<Vector2> cellProcessed, int endpointIndex, Vector2 shore)
+        {
+            if (cellProcessed == null || cellProcessed.Count < 2 || endpointIndex < 0 || endpointIndex >= cellProcessed.Count)
+                return;
+
+            Vector2 approach = cellProcessed[endpointIndex];
+            float bridgeDist = Vector2.Distance(approach, shore);
+            if (bridgeDist < 0.2f)
+            {
+                cellProcessed[endpointIndex] = shore;
+                return;
+            }
+
+            int steps = Mathf.Clamp(Mathf.CeilToInt(bridgeDist / 0.75f), 2, 14);
+            if (endpointIndex == cellProcessed.Count - 1)
+            {
+                for (int s = 1; s <= steps; s++)
+                {
+                    float t = s / (float)steps;
+                    cellProcessed.Add(Vector2.Lerp(approach, shore, t));
+                }
+            }
+            else
+            {
+                var bridge = new List<Vector2>(steps);
+                for (int s = steps; s >= 1; s--)
+                {
+                    float t = s / (float)steps;
+                    bridge.Add(Vector2.Lerp(approach, shore, t));
+                }
+
+                cellProcessed.InsertRange(0, bridge);
+            }
+        }
+
+        /// <summary>Pass final UWP: un tributario solo conecta a su lago owned; WebFusion + puente si falta carve.</summary>
+        static void EnsureTributaryOwnedLakeMouthPipeline(
+            GridSystem grid,
+            List<Vector2> cellProcessed,
+            int riverIndex,
+            MapGenConfig config)
+        {
+            if (grid == null || cellProcessed == null || cellProcessed.Count < 2 || config == null || riverIndex <= 0)
+                return;
+            if (!config.uwpOwnedVisualPolicy || !IsTributaryLakeOwner(grid, riverIndex))
+                return;
+
+            if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out int mainEp))
+                mainEp = ResolveVisualTributaryMainEndpointIndex(grid, cellProcessed);
+            int lakeEp = mainEp == 0 ? cellProcessed.Count - 1 : 0;
+            float maxDist = ResolveLakeMouthApproachMaxDistCells(config);
+
+            bool lakeReady = IsCellSpacePointInOrNearOwnedLake(grid, riverIndex, cellProcessed[lakeEp], 4) ||
+                             CountWebFusionLakeMouthInteriorVertices(grid, cellProcessed) > 0;
+            if (!lakeReady)
+            {
+                if (TryAppendOwnedTributaryClosestLakeBridge(grid, cellProcessed, riverIndex, config))
+                    lakeReady = true;
+                else if (TryGetTributaryOwnedLakeShorePoint(
+                             grid, riverIndex, cellProcessed[lakeEp], maxDist, out Vector2 ownedShore))
+                {
+                    AppendCenterlineBridgeTowardShore(cellProcessed, lakeEp, ownedShore);
+                    lakeReady = true;
+                }
+            }
+
+            if (!lakeReady)
+                return;
+
+            if (WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
+                ApplyWebFusionTributaryLakeMouthFinalize(grid, cellProcessed, riverIndex, config);
+
+            if (config.debugLogs || config.debugHydrologyNetwork || config.uwpOwnedVisualPolicy)
+            {
+                float shoreDist = float.MaxValue;
+                if (TryGetTributaryOwnedLakeShorePoint(grid, riverIndex, cellProcessed[lakeEp], maxDist, out Vector2 shore))
+                    shoreDist = Vector2.Distance(cellProcessed[lakeEp], shore);
+                Debug.Log(
+                    $"[TributaryOwnedLakeMouthFinal] riverIndex={riverIndex} lakeEp={lakeEp} " +
+                    $"points={cellProcessed.Count} shoreDist={shoreDist:F2} lakeReady=1");
+            }
+        }
+
+        /// <summary>Post-WebFusion: segmento main↔lago sin re-entradas al troncal ni ganchos.</summary>
+        static void FinalizeTributaryMainLakePath(
+            GridSystem grid,
+            List<Vector2> cellProcessed,
+            int riverIndex,
+            MapGenConfig config)
+        {
+            if (grid == null || cellProcessed == null || cellProcessed.Count < 4 || riverIndex <= 0 || config == null)
+                return;
+            if (!config.uwpOwnedVisualPolicy)
+                return;
+
+            int before = cellProcessed.Count;
+            PruneTributaryCenterlineInteriorMainCrossings(grid, cellProcessed, riverIndex, config);
+            if (TributaryTargetsMainConfluence(grid, riverIndex) || IsTributaryLakeOwner(grid, riverIndex))
+                TrimTributaryAtClosestMainApproach(grid, config, cellProcessed, riverIndex);
+
+            if (cellProcessed.Count != before && (config.debugLogs || config.debugHydrologyNetwork || config.uwpOwnedVisualPolicy))
+            {
+                Debug.Log(
+                    $"[TributaryMainLakeFinalize] riverIndex={riverIndex} beforePts={before} " +
+                    $"afterPts={cellProcessed.Count} tribToMain={(TributaryTargetsMainConfluence(grid, riverIndex) ? 1 : 0)}");
+            }
+        }
+
+        /// <summary>Elimina tramos que re-entran al troncal entre boca lago y confluencia (evita cruce doble).</summary>
+        static void PruneTributaryCenterlineInteriorMainCrossings(
+            GridSystem grid,
+            List<Vector2> cellProcessed,
+            int riverIndex,
+            MapGenConfig config)
+        {
+            if (grid == null || cellProcessed == null || cellProcessed.Count < 4 || riverIndex <= 0 || config == null)
+                return;
+            if (!config.uwpOwnedVisualPolicy)
+                return;
+            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
+                return;
+            if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out int mainEp))
+                mainEp = ResolveVisualTributaryMainEndpointIndex(grid, cellProcessed);
+
+            int lakeEp = mainEp == 0 ? cellProcessed.Count - 1 : 0;
+            var segment = ExtractVisualSubpathFromMainToIndex(cellProcessed, mainEp, lakeEp);
+            if (segment == null || segment.Count < 3)
+                return;
+
+            float corridorSq = sampler.RadiusSq * 1.12f;
+            int guardMain = Mathf.Clamp(Mathf.CeilToInt(sampler.RadiusCells * 0.55f), 3, 8);
+            int guardLake = guardMain;
+            var cleaned = new List<Vector2>(segment.Count) { segment[0] };
+            for (int i = 1; i < segment.Count - 1; i++)
+            {
+                float distSq = DistanceSqToPolylineCellSpace(segment[i], sampler.Line);
+                bool inside = distSq <= corridorSq;
+                bool nearMainEnd = i <= guardMain;
+                bool nearLakeEnd = i >= segment.Count - 1 - guardLake;
+                if (inside && !nearMainEnd && !nearLakeEnd)
+                    continue;
+
+                cleaned.Add(segment[i]);
+            }
+
+            cleaned.Add(segment[segment.Count - 1]);
+            if (cleaned.Count < 2)
+                return;
+
+            cellProcessed.Clear();
+            cellProcessed.AddRange(cleaned);
+        }
+
+        static void SyncMainRiverMaskWidthsToMesh(
+            List<float> maskHalfWidths,
+            List<float> meshHalfWidths)
+        {
+            if (maskHalfWidths == null || meshHalfWidths == null)
+                return;
+            int n = Mathf.Min(maskHalfWidths.Count, meshHalfWidths.Count);
+            for (int i = 0; i < n; i++)
+                maskHalfWidths[i] = meshHalfWidths[i];
+        }
+
+        static void SyncTributaryMeshWidthsToMask(
+            List<float> meshHalfWidths,
+            List<float> maskHalfWidths,
+            int riverIndex)
+        {
+            if (riverIndex <= 0 || meshHalfWidths == null || maskHalfWidths == null)
+                return;
+            int n = Mathf.Min(meshHalfWidths.Count, maskHalfWidths.Count);
+            for (int i = 0; i < n; i++)
+            {
+                float maskW = maskHalfWidths[i];
+                if (maskW > 1e-4f)
+                    meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], maskW);
+            }
         }
 
         static int ResolveVisualTributaryMainEndpointIndex(GridSystem grid, List<Vector2> cellProcessed)
@@ -6593,6 +7000,240 @@ namespace Project.Gameplay.Map.Generator
             return Mathf.Lerp(1f, nearLakeMul, Mathf.Clamp01(near01));
         }
 
+        static void ApplyTributaryMainConfluenceCenterlineTrim(
+            GridSystem grid,
+            List<Vector2> cellProcessed,
+            int riverIndex,
+            MapGenConfig config,
+            float cellSize)
+        {
+            if (grid == null || cellProcessed == null || riverIndex <= 0 || config == null)
+                return;
+            if (!IsStandardDendriticTributary(grid, riverIndex))
+                return;
+            if (!config.riverConfluenceHideLastSegmentUnderMain)
+                return;
+            if (!TributaryTargetsMainConfluence(grid, riverIndex) &&
+                !TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out _))
+                return;
+
+            TrimDendriticTributaryBeforeMainConfluence(grid, cellProcessed, riverIndex, config, cellSize);
+        }
+
+        static int PruneConfluenceOppositeBankMaskInWindow(
+            bool[,] mask,
+            int w,
+            int h,
+            RiverConfluenceNode node,
+            Vector2 approach,
+            MainRiverCorridorSampler mainSampler,
+            float keepRadiusSq,
+            bool pruneSkippedTributaryMouth)
+        {
+            int r = Mathf.Max(2, node.MergeRadiusCells + 4);
+            int cx0 = node.Cell.x;
+            int cz0 = node.Cell.y;
+            int x0 = Mathf.Clamp(cx0 - r, 0, w - 1);
+            int x1 = Mathf.Clamp(cx0 + r, 0, w - 1);
+            int z0 = Mathf.Clamp(cz0 - r, 0, h - 1);
+            int z1 = Mathf.Clamp(cz0 + r, 0, h - 1);
+            int pruned = 0;
+
+            for (int z = z0; z <= z1; z++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    if (!mask[x, z])
+                        continue;
+
+                    Vector2 p = new Vector2(x + 0.5f, z + 0.5f);
+                    float distSqMain = DistanceSqToPolylineCellSpace(p, mainSampler.Line);
+                    if (!ClosestPointOnPolyline2D(p, mainSampler.Line, out Vector2 closest, out _))
+                        continue;
+
+                    Vector2 off = p - closest;
+                    if (off.sqrMagnitude < 1e-6f)
+                        continue;
+                    off.Normalize();
+                    float sideDot = Vector2.Dot(off, approach);
+
+                    if (pruneSkippedTributaryMouth)
+                    {
+                        // Tributario skipped: quitar boca ensanchada del troncal en el lado de aproximación.
+                        if (sideDot >= -0.18f)
+                            continue;
+                        if (distSqMain <= keepRadiusSq)
+                            continue;
+                    }
+                    else
+                    {
+                        if (distSqMain <= keepRadiusSq)
+                            continue;
+                        if (sideDot <= 0.18f)
+                            continue;
+                    }
+
+                    mask[x, z] = false;
+                    pruned++;
+                }
+            }
+
+            return pruned;
+        }
+
+        /// <summary>
+        /// Tras ProtectMainRiverMaskCore: recorta la boca del troncal donde un tributario skipped tenía confluencia.
+        /// Usa centerline funcional solo para el vector approach; no rasteriza ni revive el afluente.
+        /// </summary>
+        static int PruneSkippedTributaryConfluenceMouthMask(
+            bool[,] mask,
+            int w,
+            int h,
+            GridSystem grid,
+            MapGenConfig config,
+            IReadOnlyList<RiverVisualSurfaceData> surfaces)
+        {
+            if (mask == null || grid?.RiverConfluences == null || config == null || !config.uwpOwnedVisualPolicy)
+                return 0;
+            if (grid.RiverConfluences.Count == 0 || surfaces == null || surfaces.Count == 0)
+                return 0;
+            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler mainSampler))
+                return 0;
+
+            float mainHalf = config.riverVisualRibbonFullWidthCellsMain * 0.5f;
+            float mouthTrimKeepSq = mainHalf * mainHalf * 0.82f * 0.82f;
+            int pruned = 0;
+
+            for (int ci = 0; ci < grid.RiverConfluences.Count; ci++)
+            {
+                RiverConfluenceNode node = grid.RiverConfluences[ci];
+                if (!node.Valid)
+                    continue;
+
+                int tribIdx = node.TributaryRiverIndex;
+                if (tribIdx < 0 || tribIdx >= surfaces.Count)
+                    continue;
+                RiverVisualSurfaceData tribSurface = surfaces[tribIdx];
+                if (tribSurface == null || !tribSurface.Skipped)
+                    continue;
+
+                if (!TryGetSkippedTributaryConfluenceApproachFromFunctionalCenterline(
+                        grid, tribIdx, node.Cell, out Vector2 approach))
+                    continue;
+
+                int mouthPruned = PruneConfluenceOppositeBankMaskInWindow(
+                    mask, w, h, node, approach, mainSampler, mouthTrimKeepSq, pruneSkippedTributaryMouth: true);
+                if (mouthPruned > 0)
+                {
+                    Debug.Log(
+                        $"[UWP_PRUNE_SKIPPED_TRIBUTARY_CONFLUENCE_MASK] mainIndex={node.MainRiverIndex} " +
+                        $"tributaryIndex={tribIdx} cell=({node.Cell.x},{node.Cell.y}) " +
+                        $"prunedCells={mouthPruned} reason=skipped_tributary_confluence");
+                }
+
+                pruned += mouthPruned;
+            }
+
+            return pruned;
+        }
+
+        static int PruneConfluenceOppositeBankMask(
+            bool[,] mask,
+            int w,
+            int h,
+            GridSystem grid,
+            MapGenConfig config,
+            IReadOnlyList<RiverVisualSurfaceData> surfaces)
+        {
+            if (mask == null || grid?.RiverConfluences == null || config == null || !config.uwpOwnedVisualPolicy)
+                return 0;
+            if (grid.RiverConfluences.Count == 0 || surfaces == null || surfaces.Count == 0)
+                return 0;
+            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler mainSampler))
+                return 0;
+
+            float mainHalf = config.riverVisualRibbonFullWidthCellsMain * 0.5f;
+            float keepRadiusSq = mainHalf * mainHalf * 0.90f * 0.90f;
+            int pruned = 0;
+
+            for (int ci = 0; ci < grid.RiverConfluences.Count; ci++)
+            {
+                RiverConfluenceNode node = grid.RiverConfluences[ci];
+                if (!node.Valid)
+                    continue;
+
+                int tribIdx = node.TributaryRiverIndex;
+                if (tribIdx < 0 || tribIdx >= surfaces.Count)
+                    continue;
+                RiverVisualSurfaceData tribSurface = surfaces[tribIdx];
+                if (tribSurface == null)
+                    continue;
+
+                if (tribSurface.Skipped)
+                    continue;
+
+                var tribLine = tribSurface.FinalCenterlineCells;
+                if (tribLine == null || tribLine.Count < 2)
+                    continue;
+
+                if (!TryGetTributaryMainConfluenceApproachFromFinalPath(
+                        grid, config, tribLine, tribIdx, out Vector2 approach, out _))
+                    continue;
+
+                pruned += PruneConfluenceOppositeBankMaskInWindow(
+                    mask, w, h, node, approach, mainSampler, keepRadiusSq, pruneSkippedTributaryMouth: false);
+            }
+
+            return pruned;
+        }
+
+        static bool[,] CloneBoolMask(bool[,] src, int w, int h)
+        {
+            var dst = new bool[w, h];
+            if (src == null)
+                return dst;
+            for (int z = 0; z < h; z++)
+                for (int x = 0; x < w; x++)
+                    dst[x, z] = src[x, z];
+            return dst;
+        }
+
+        /// <summary>El troncal no debe ensanchar su máscara por unión con tributarios; solo el afluente se acopla.</summary>
+        static int ProtectMainRiverMaskCore(
+            bool[,] combined,
+            bool[,] mainOnly,
+            GridSystem grid,
+            MapGenConfig config)
+        {
+            if (combined == null || mainOnly == null || grid == null || config == null || !config.uwpOwnedVisualPolicy)
+                return 0;
+            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
+                return 0;
+
+            float coreHalf = config.riverVisualRibbonFullWidthCellsMain * 0.5f * 0.90f;
+            float coreSq = coreHalf * coreHalf;
+            int w = grid.Width;
+            int h = grid.Height;
+            int restored = 0;
+            for (int z = 0; z < h; z++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (!combined[x, z] && !mainOnly[x, z])
+                        continue;
+                    Vector2 p = new Vector2(x + 0.5f, z + 0.5f);
+                    if (DistanceSqToPolylineCellSpace(p, sampler.Line) > coreSq)
+                        continue;
+                    if (combined[x, z] == mainOnly[x, z])
+                        continue;
+                    combined[x, z] = mainOnly[x, z];
+                    restored++;
+                }
+            }
+
+            return restored;
+        }
+
         static void TrimDendriticTributaryBeforeMainConfluence(
             GridSystem grid,
             List<Vector2> cellProcessed,
@@ -6610,8 +7251,8 @@ namespace Project.Gameplay.Map.Generator
                 return;
 
             int trim = 0;
-            float trimRadiusSq = sampler.CoreRadiusSq * 0.48f;
-            int maxTrim = Mathf.Clamp(config != null ? config.riverConfluenceMergeRadiusCells + 1 : 4, 2, 6);
+            float trimRadiusSq = sampler.CoreRadiusSq * 0.50f;
+            int maxTrim = Mathf.Clamp(config != null ? config.riverConfluenceMergeRadiusCells + 1 : 4, 2, 5);
             for (int i = cellProcessed.Count - 1; i >= 1 && trim < maxTrim; i--)
             {
                 float distSq = DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line);
@@ -6815,6 +7456,130 @@ namespace Project.Gameplay.Map.Generator
             return bestSq <= maxSq;
         }
 
+        static bool IsLakeCellInComponent(GridSystem grid, int compIdx, int x, int z)
+        {
+            if (grid?.LakeBodyComponents == null || compIdx < 0 || compIdx >= grid.LakeBodyComponents.Count)
+                return false;
+            return grid.LakeBodyComponents[compIdx].Contains(PackLakeCellLong(x, z));
+        }
+
+        static bool IsCellSpacePointInOrNearOwnedLake(GridSystem grid, int riverIndex, Vector2 p, int radius)
+        {
+            int comp = FindLakeComponentOwnedByRiver(grid, riverIndex);
+            if (comp < 0)
+                return false;
+
+            int cx = Mathf.Clamp(Mathf.FloorToInt(p.x), 0, grid.Width - 1);
+            int cz = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, grid.Height - 1);
+            int r = Mathf.Clamp(radius, 0, 8);
+            for (int z = cz - r; z <= cz + r; z++)
+            {
+                for (int x = cx - r; x <= cx + r; x++)
+                {
+                    if ((uint)x >= (uint)grid.Width || (uint)z >= (uint)grid.Height)
+                        continue;
+                    if (IsLakeCellInComponent(grid, comp, x, z))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Orilla del lago asignado al tributario (un afluente → un lago).</summary>
+        static bool TryGetTributaryOwnedLakeShorePoint(
+            GridSystem grid,
+            int riverIndex,
+            Vector2 from,
+            float maxDistCells,
+            out Vector2 shore)
+        {
+            shore = default;
+            int comp = FindLakeComponentOwnedByRiver(grid, riverIndex);
+            if (comp < 0 || grid?.LakeBodyComponents == null || comp >= grid.LakeBodyComponents.Count)
+                return false;
+
+            float maxSq = maxDistCells * maxDistCells;
+            float bestSq = float.MaxValue;
+            if (grid.LakeMouthCellsPacked != null && grid.LakeMouthCellsPacked.Count > 0)
+            {
+                foreach (long pk in grid.LakeMouthCellsPacked)
+                {
+                    int x = (int)(pk >> 32);
+                    int z = (int)(uint)pk;
+                    if (!IsLakeCellInComponent(grid, comp, x, z))
+                    {
+                        bool touches = false;
+                        for (int dz = -1; dz <= 1 && !touches; dz++)
+                        {
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                if (IsLakeCellInComponent(grid, comp, x + dx, z + dz))
+                                {
+                                    touches = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!touches)
+                            continue;
+                    }
+
+                    var center = new Vector2(x + 0.5f, z + 0.5f);
+                    float sq = (center - from).sqrMagnitude;
+                    if (sq < bestSq)
+                    {
+                        bestSq = sq;
+                        shore = center;
+                    }
+                }
+            }
+
+            foreach (long pk in grid.LakeBodyComponents[comp])
+            {
+                int x = (int)(pk >> 32);
+                int z = (int)(uint)pk;
+                for (int dz = -1; dz <= 1; dz++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dz == 0)
+                            continue;
+                        int nx = x + dx;
+                        int nz = z + dz;
+                        if (!grid.InBoundsCell(nx, nz))
+                            continue;
+                        if (IsLakeCellInComponent(grid, comp, nx, nz))
+                            continue;
+                        var center = new Vector2(nx + 0.5f, nz + 0.5f);
+                        float sq = (center - from).sqrMagnitude;
+                        if (sq < bestSq)
+                        {
+                            bestSq = sq;
+                            shore = center;
+                        }
+                    }
+                }
+            }
+
+            return bestSq <= maxSq;
+        }
+
+        static bool TryGetLakeShorePointForTributary(
+            GridSystem grid,
+            int riverIndex,
+            Vector2 from,
+            float maxDistCells,
+            out Vector2 shore)
+        {
+            if (riverIndex > 0 && IsTributaryLakeOwner(grid, riverIndex) &&
+                TryGetTributaryOwnedLakeShorePoint(grid, riverIndex, from, maxDistCells, out shore))
+                return true;
+
+            return TryGetNearestLakeShorePoint(grid, from, maxDistCells, out shore);
+        }
+
         static bool TryGetNearestLakeShorePoint(GridSystem grid, Vector2 from, out Vector2 shore)
         {
             return TryGetNearestLakeShorePoint(grid, from, 12f, out shore);
@@ -6885,8 +7650,9 @@ namespace Project.Gameplay.Map.Generator
                 return false;
             if (IsTributaryLakeOwner(grid, riverIndex))
                 return true;
-            return TryGetNearestLakeShorePoint(
+            return TryGetLakeShorePointForTributary(
                 grid,
+                riverIndex,
                 endpoint,
                 ResolveLakeMouthApproachMaxDistCells(config),
                 out _);
@@ -6900,13 +7666,15 @@ namespace Project.Gameplay.Map.Generator
         {
             if (grid == null || cellProcessed == null || cellProcessed.Count < 2 || config == null || riverIndex <= 0)
                 return false;
-            if (IsTributaryLakeOwner(grid, riverIndex) || RiverFunctionalEndNearLake(grid, riverIndex, config))
+            if (IsTributaryLakeOwner(grid, riverIndex))
+                return true;
+            if (RiverFunctionalEndNearLake(grid, riverIndex, config))
                 return true;
 
             float maxDist = ResolveLakeMouthApproachMaxDistCells(config);
-            if (TryGetNearestLakeShorePoint(grid, cellProcessed[cellProcessed.Count - 1], maxDist, out _))
+            if (TryGetLakeShorePointForTributary(grid, riverIndex, cellProcessed[cellProcessed.Count - 1], maxDist, out _))
                 return true;
-            if (TryGetNearestLakeShorePoint(grid, cellProcessed[0], maxDist, out _))
+            if (TryGetLakeShorePointForTributary(grid, riverIndex, cellProcessed[0], maxDist, out _))
                 return true;
 
             if (grid.RiverCenterlinesCellSpace != null &&
@@ -6915,8 +7683,8 @@ namespace Project.Gameplay.Map.Generator
                 var raw = grid.RiverCenterlinesCellSpace[riverIndex];
                 if (raw != null && raw.Count >= 2)
                 {
-                    if (TryGetNearestLakeShorePoint(grid, raw[0], maxDist, out _) ||
-                        TryGetNearestLakeShorePoint(grid, raw[raw.Count - 1], maxDist, out _))
+                    if (TryGetLakeShorePointForTributary(grid, riverIndex, raw[0], maxDist, out _) ||
+                        TryGetLakeShorePointForTributary(grid, riverIndex, raw[raw.Count - 1], maxDist, out _))
                         return true;
                 }
             }
@@ -6947,7 +7715,7 @@ namespace Project.Gameplay.Map.Generator
                 return;
 
             float maxDist = ResolveLakeMouthApproachMaxDistCells(config);
-            if (!TryGetNearestLakeShorePoint(grid, end, maxDist, out Vector2 shore))
+            if (!TryGetLakeShorePointForTributary(grid, riverIndex, end, maxDist, out Vector2 shore))
                 return;
 
             float dist = Vector2.Distance(end, shore);
@@ -8166,6 +8934,10 @@ namespace Project.Gameplay.Map.Generator
                 center.Count < 2)
                 return false;
 
+            // Lake-first: el tributario debe penetrar hacia el centro del lago para fusionarse con el MS.
+            if (config.uwpLakeFirstHydrologyPipeline && IsTributaryLakeOwner(grid, riverIndex))
+                return false;
+
             int n = cellSpaceLine.Count;
             int meshStart = 0;
             int meshEnd = n - 1;
@@ -8266,6 +9038,223 @@ namespace Project.Gameplay.Map.Generator
                 float t = (k + 1) / (float)taper;
                 halfWidths[idx] *= Mathf.Lerp(minMul, 1f, t);
             }
+        }
+
+        const float LakeFirstTributaryCarveWidthMul = 0.9f;
+
+        static void ScaleLakeFirstTributaryCarveMaskHalfWidths(List<float> maskHalfWidths)
+        {
+            if (maskHalfWidths == null || maskHalfWidths.Count == 0)
+                return;
+            for (int i = 0; i < maskHalfWidths.Count; i++)
+                maskHalfWidths[i] = Mathf.Max(0.02f, maskHalfWidths[i] * LakeFirstTributaryCarveWidthMul);
+        }
+
+        /// <summary>Lake-first: mesh un poco más ancho que el carve para que el shader blanco de orilla intersecte el terreno.</summary>
+        static void ApplyLakeFirstTributaryShoreIntersectionWidthBoost(
+            List<float> halfWidths,
+            List<Vector2> cellPath,
+            MapGenConfig config,
+            int riverIndex,
+            float baseHalfW,
+            float cellSize,
+            bool visualMeshOnly = false)
+        {
+            if (riverIndex <= 0 || halfWidths == null || cellPath == null || config == null ||
+                !config.uwpLakeFirstHydrologyPipeline || halfWidths.Count < 2)
+                return;
+
+            float ribbonHalf = config.riverVisualRibbonFullWidthCellsTributary > 0.01f
+                ? config.riverVisualRibbonFullWidthCellsTributary * 0.5f * cellSize
+                : baseHalfW;
+            float shoreFloor = visualMeshOnly
+                ? Mathf.Max(baseHalfW * 1.48f, ribbonHalf * 1.44f)
+                : Mathf.Max(baseHalfW * 1.22f, ribbonHalf * 1.14f);
+            float globalMul = visualMeshOnly ? 1.14f : 1.04f;
+            int n = Mathf.Min(halfWidths.Count, cellPath.Count);
+            float totalLen = PolylineLengthCellSpace(cellPath);
+            float acc = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0)
+                    acc += Vector2.Distance(cellPath[i], cellPath[i - 1]);
+                float along = totalLen > 1e-4f ? acc / totalLen : 0f;
+                float ang = InteriorTurnAngleDeg(cellPath, i);
+                float bendBoost = visualMeshOnly
+                    ? (ang >= JoinAngleHardDeg ? 1.38f : (ang >= JoinAngleSmoothDeg ? 1.24f : 1.1f))
+                    : (ang >= JoinAngleHardDeg ? 1.2f : (ang >= JoinAngleSmoothDeg ? 1.1f : 1.04f));
+                float mouthBoost = along <= 0.38f ? (visualMeshOnly ? 1.14f : 1.08f) : 1f;
+                float confBoost = along >= 0.62f ? (visualMeshOnly ? 1.14f : 1.08f) : 1f;
+                halfWidths[i] = Mathf.Max(
+                    halfWidths[i],
+                    shoreFloor * globalMul * bendBoost * mouthBoost * confBoost);
+            }
+        }
+
+        /// <summary>Lake-first: el carve UWP usa Ceil(halfW/cellSize) celdas; el mesh debe cubrir ese alcance.</summary>
+        static void AlignLakeFirstTributaryMeshToCarveReach(
+            List<float> meshHalfWidths,
+            List<Vector2> cellPath,
+            MapGenConfig config,
+            int riverIndex,
+            float cellSize)
+        {
+            if (config == null || !config.uwpLakeFirstHydrologyPipeline || riverIndex <= 0 ||
+                meshHalfWidths == null || meshHalfWidths.Count < 2)
+                return;
+
+            float cs = Mathf.Max(0.01f, cellSize);
+            float shorePad = Mathf.Max(0.08f, config.riverVisualRasterMaskExtraCellMargin * 0.35f) * cs;
+            int n = Mathf.Min(meshHalfWidths.Count, cellPath != null ? cellPath.Count : meshHalfWidths.Count);
+            for (int i = 0; i < n; i++)
+            {
+                float hw = meshHalfWidths[i];
+                int radiusCells = Mathf.Max(1, Mathf.CeilToInt(hw / cs));
+                float carveReach = radiusCells * cs;
+                float ang = cellPath != null ? InteriorTurnAngleDeg(cellPath, i) : 0f;
+                float curveMul = ang >= JoinAngleHardDeg ? 1.12f : (ang >= JoinAngleSmoothDeg ? 1.06f : 1f);
+                meshHalfWidths[i] = Mathf.Max(hw, carveReach * curveMul + shorePad);
+            }
+        }
+
+        static void AppendLakeFirstTributaryCenterlineTowardCentroid(
+            GridSystem grid,
+            int riverIndex,
+            List<Vector2> line,
+            MapGenConfig config)
+        {
+            if (grid == null || line == null || line.Count < 2 || config == null ||
+                !config.uwpLakeFirstHydrologyPipeline || riverIndex <= 0 ||
+                !IsTributaryLakeOwner(grid, riverIndex) || grid.LakeFirstWaterGraph == null)
+                return;
+
+            int compIdx = -1;
+            for (int ti = 0; ti < grid.LakeFirstWaterGraph.Tributaries.Count; ti++)
+            {
+                var trib = grid.LakeFirstWaterGraph.Tributaries[ti];
+                if (trib.Accepted && trib.RiverIndex == riverIndex)
+                {
+                    compIdx = trib.LakeComponentIndex;
+                    break;
+                }
+            }
+
+            if (compIdx < 0 || grid.LakeBodyComponents == null || compIdx >= grid.LakeBodyComponents.Count)
+                return;
+
+            var comp = grid.LakeBodyComponents[compIdx];
+            if (comp == null || comp.Count == 0)
+                return;
+
+            Vector2 centroid = ComputeLakeComponentCentroid(comp);
+            Vector2 mouth = line[0];
+            Vector2 toCentroid = centroid - mouth;
+            if (toCentroid.sqrMagnitude < 0.25f)
+                return;
+
+            var ingress = new List<Vector2>(6);
+            for (int k = 5; k >= 1; k--)
+            {
+                float t = k / 5f;
+                Vector2 p = Vector2.Lerp(mouth, centroid, 0.1f + t * 0.38f);
+                int cx = Mathf.FloorToInt(p.x);
+                int cz = Mathf.FloorToInt(p.y);
+                if (comp.Contains(PackLakeCellLong(cx, cz)) || k <= 2)
+                    ingress.Add(p);
+            }
+
+            if (ingress.Count == 0)
+                return;
+
+            ingress.Reverse();
+            line.InsertRange(0, ingress);
+        }
+
+        /// <summary>Lake-first: extiende el extremo de confluencia hacia el interior del troncal.</summary>
+        static void AppendLakeFirstTributaryCenterlineTowardMainRiver(
+            GridSystem grid,
+            int riverIndex,
+            List<Vector2> line,
+            MapGenConfig config)
+        {
+            if (grid == null || line == null || line.Count < 2 || config == null ||
+                !config.uwpLakeFirstHydrologyPipeline || riverIndex <= 0 ||
+                !IsTributaryLakeOwner(grid, riverIndex))
+                return;
+
+            if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, line, riverIndex, out int mainIdx))
+                mainIdx = line.Count - 1;
+            if (mainIdx != line.Count - 1)
+                return;
+
+            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
+                return;
+
+            Vector2 mouth = line[line.Count - 1];
+            if (TryResolveTributaryJoinOnMainRiver(grid, riverIndex, line, config, out Vector2 join))
+            {
+                line[line.Count - 1] = join;
+                mouth = join;
+            }
+
+            float bestDist = float.MaxValue;
+            int bestSeg = 0;
+            Vector2 bestJoin = mouth;
+            for (int i = 0; i < sampler.Line.Count - 1; i++)
+            {
+                Vector2 q = ClosestPointOnOpenSegment2D(mouth, sampler.Line[i], sampler.Line[i + 1]);
+                float d = (mouth - q).sqrMagnitude;
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    bestJoin = q;
+                    bestSeg = i;
+                }
+            }
+
+            Vector2 tangent = sampler.Line[bestSeg + 1] - sampler.Line[bestSeg];
+            if (tangent.sqrMagnitude < 1e-8f)
+                return;
+            tangent.Normalize();
+
+            if (line.Count >= 2)
+            {
+                Vector2 approach = mouth - line[line.Count - 2];
+                if (approach.sqrMagnitude > 1e-6f && Vector2.Dot(approach.normalized, tangent) < 0.2f)
+                    tangent = -tangent;
+            }
+
+            float ingressDepth = Mathf.Clamp(sampler.CoreRadiusCells * 1.05f, 1.5f, 5f);
+            Vector2 deep = bestJoin + tangent * ingressDepth;
+            var ingress = new List<Vector2>(5);
+            for (int k = 1; k <= 5; k++)
+            {
+                float t = k / 5f;
+                ingress.Add(Vector2.Lerp(mouth, deep, 0.1f + t * 0.62f));
+            }
+
+            if (ingress.Count == 0)
+                return;
+
+            line.AddRange(ingress);
+        }
+
+        static Vector2 ComputeLakeComponentCentroid(HashSet<long> comp)
+        {
+            if (comp == null || comp.Count == 0)
+                return Vector2.zero;
+
+            Vector2 sum = Vector2.zero;
+            int n = 0;
+            foreach (long pk in comp)
+            {
+                int x = (int)(pk >> 32);
+                int z = (int)(pk & 0xffffffffL);
+                sum += new Vector2(x + 0.5f, z + 0.5f);
+                n++;
+            }
+
+            return n > 0 ? sum / n : Vector2.zero;
         }
 
         static void ApplyWebFusionLakeBorderToAnchorHeightBlend(
@@ -8596,14 +9585,28 @@ namespace Project.Gameplay.Map.Generator
                 return;
 
             float maxDist = ResolveLakeMouthApproachMaxDistCells(config);
-            bool startHasLake = TryGetNearestLakeShorePoint(grid, cellProcessed[0], maxDist, out Vector2 startShore);
-            bool endHasLake = TryGetNearestLakeShorePoint(grid, cellProcessed[cellProcessed.Count - 1], maxDist, out Vector2 endShore);
+            Vector2 startShore = default;
+            Vector2 endShore = default;
+            bool startHasLake = IsCellSpacePointInOrNearOwnedLake(grid, riverIndex, cellProcessed[0], 8);
+            bool endHasLake = IsCellSpacePointInOrNearOwnedLake(grid, riverIndex, cellProcessed[cellProcessed.Count - 1], 8);
+            if (!startHasLake && !endHasLake)
+            {
+                startHasLake = TryGetTributaryOwnedLakeShorePoint(grid, riverIndex, cellProcessed[0], maxDist, out startShore);
+                endHasLake = TryGetTributaryOwnedLakeShorePoint(
+                    grid, riverIndex, cellProcessed[cellProcessed.Count - 1], maxDist, out endShore);
+            }
+
             if (!startHasLake && !endHasLake)
                 return;
 
             bool tuckStart;
             if (startHasLake && endHasLake)
             {
+                if (startShore == default)
+                    TryGetTributaryOwnedLakeShorePoint(grid, riverIndex, cellProcessed[0], maxDist, out startShore);
+                if (endShore == default)
+                    TryGetTributaryOwnedLakeShorePoint(
+                        grid, riverIndex, cellProcessed[cellProcessed.Count - 1], maxDist, out endShore);
                 float startDist = Vector2.Distance(cellProcessed[0], startShore);
                 float endDist = Vector2.Distance(cellProcessed[cellProcessed.Count - 1], endShore);
                 tuckStart = startDist <= endDist;
@@ -9093,9 +10096,10 @@ namespace Project.Gameplay.Map.Generator
                     grid, config, riverIndex, meshCenter, meshHalf, meshCell,
                     out mouthTaperStart, out mouthTaperEnd))
             {
-                if (mouthTaperStart)
+                bool skipLakeFirstTribTaper = config != null && config.uwpLakeFirstHydrologyPipeline && riverIndex > 0;
+                if (mouthTaperStart && !skipLakeFirstTribTaper)
                     ApplyMouthFusionShoreWidthTaper(meshHalf, atStart: true);
-                if (mouthTaperEnd)
+                if (mouthTaperEnd && !skipLakeFirstTribTaper)
                     ApplyMouthFusionShoreWidthTaper(meshHalf, atStart: false);
             }
 
@@ -9458,6 +10462,11 @@ namespace Project.Gameplay.Map.Generator
                     WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
                 {
                     ApplyWebFusionLakeMouthAfterTrim(grid, cellProcessed, riverIndex, config);
+                    if (cellProcessed == null || cellProcessed.Count < 2)
+                        continue;
+
+                    if (standardTrib)
+                        ApplyTributaryMainConfluenceCenterlineTrim(grid, cellProcessed, riverIndex, config, cellSize);
                     if (cellProcessed == null || cellProcessed.Count < 2)
                         continue;
                 }
@@ -9879,7 +10888,8 @@ namespace Project.Gameplay.Map.Generator
             List<List<Vector2>> lines,
             int skipIndex,
             int w,
-            int h)
+            int h,
+            HashSet<int> excludeRiverIndices = null)
         {
             var hs = new HashSet<long>();
             if (lines == null)
@@ -9887,6 +10897,8 @@ namespace Project.Gameplay.Map.Generator
             for (int li = 0; li < lines.Count; li++)
             {
                 if (li == skipIndex)
+                    continue;
+                if (excludeRiverIndices != null && excludeRiverIndices.Contains(li))
                     continue;
                 var ln = lines[li];
                 if (ln == null)
@@ -11076,6 +12088,178 @@ namespace Project.Gameplay.Map.Generator
             return 1f;
         }
 
+        static Vector2 CellPolylineTangentNormalize(List<Vector2> pts, int i)
+        {
+            if (pts == null || pts.Count < 2)
+                return Vector2.right;
+            Vector2 a = i > 0 ? pts[i] - pts[i - 1] : pts[Mathf.Min(1, pts.Count - 1)] - pts[0];
+            Vector2 b = i < pts.Count - 1 ? pts[i + 1] - pts[i] : pts[i] - pts[i - 1];
+            Vector2 t = a + b;
+            if (t.sqrMagnitude < 1e-10f)
+                t = b.sqrMagnitude > 1e-10f ? b : a;
+            return t.sqrMagnitude < 1e-10f ? Vector2.right : t.normalized;
+        }
+
+        /// <summary>Meander orgánico en espacio celda (máscara + mesh comparten FinalCenterlineCells).</summary>
+        static bool ApplyVisualMeanderToCellSpace(
+            List<Vector2> cellPath,
+            int w,
+            int h,
+            MapGenConfig config,
+            int riverIndex,
+            out float maxOffsetCells)
+        {
+            maxOffsetCells = 0f;
+            if (config == null || !config.riverSurfaceVisualMeanderEnabled || cellPath == null || cellPath.Count < 4)
+                return false;
+
+            float ampC = Mathf.Clamp(
+                Mathf.Max(config.riverSurfaceVisualMeanderAmplitudeCells, riverIndex == 0 ? 0.32f : 0.20f),
+                0f,
+                0.6f);
+            float freqC = Mathf.Max(2f, config.riverSurfaceVisualMeanderFrequencyCells);
+            float fade01 = Mathf.Clamp(config.riverSurfaceVisualMeanderEndFade01, 0.02f, 0.35f);
+            var trial = new List<Vector2>(cellPath);
+            float acc = 0f;
+            for (int i = 0; i < trial.Count; i++)
+            {
+                if (i > 0)
+                    acc += Vector2.Distance(trial[i], trial[i - 1]);
+                if (i == 0 || i == trial.Count - 1)
+                    continue;
+                if (IsTrueMapEdgeCellSpace(trial[i], w, h))
+                    continue;
+
+                float t01 = trial.Count > 1 ? i / (float)(trial.Count - 1) : 0f;
+                float fade = MeanderEdgeFade(t01, fade01);
+                if (fade < 1e-4f)
+                    continue;
+
+                Vector2 tan = CellPolylineTangentNormalize(trial, i);
+                Vector2 nrm = new Vector2(-tan.y, tan.x);
+                float phase = acc / freqC * (Mathf.PI * 2f) + riverIndex * 1.713f;
+                float noise01 = Mathf.PerlinNoise(
+                    acc / Mathf.Max(2f, freqC * 0.73f) + riverIndex * 13.17f,
+                    riverIndex * 0.271f + 4.13f);
+                float organicWave = Mathf.Clamp(Mathf.Sin(phase) * 0.72f + (noise01 * 2f - 1f) * 0.38f, -1f, 1f);
+                float offCells = organicWave * ampC * fade;
+                trial[i] += nrm * offCells;
+                maxOffsetCells = Mathf.Max(maxOffsetCells, Mathf.Abs(offCells));
+            }
+
+            if (PolylineSelfIntersectsXZCell(trial))
+                return false;
+
+            for (int i = 0; i < cellPath.Count; i++)
+                cellPath[i] = trial[i];
+            return true;
+        }
+
+        /// <summary>Lake-first: meandro orgánico reforzado (main + tributarios comparten FinalCenterlineCells).</summary>
+        static bool ApplyLakeFirstOrganicMeanderToCellSpace(
+            List<Vector2> cellPath,
+            int w,
+            int h,
+            MapGenConfig config,
+            int riverIndex,
+            out float maxOffsetCells)
+        {
+            maxOffsetCells = 0f;
+            if (config == null || !config.uwpLakeFirstHydrologyPipeline || cellPath == null || cellPath.Count < 4)
+                return false;
+
+            bool isMain = riverIndex == 0;
+            // Más carácter orgánico (sobre todo en tributarios) para romper tramos rectos,
+            // manteniendo el chequeo de self-intersection.
+            float ampC = isMain ? 0.50f : 0.62f;
+            float freqC = isMain ? 8.0f : 4.2f;
+            float fade01 = isMain ? 0.09f : 0.12f;
+            if (config.riverSurfaceVisualMeanderEnabled)
+            {
+                ampC = Mathf.Max(ampC, config.riverSurfaceVisualMeanderAmplitudeCells * (isMain ? 1.4f : 1.55f));
+                freqC = Mathf.Min(freqC, Mathf.Max(4.5f, config.riverSurfaceVisualMeanderFrequencyCells * 0.62f));
+            }
+
+            var trial = new List<Vector2>(cellPath);
+            float acc = 0f;
+            for (int i = 0; i < trial.Count; i++)
+            {
+                if (i > 0)
+                    acc += Vector2.Distance(trial[i], trial[i - 1]);
+                if (i == 0 || i == trial.Count - 1)
+                    continue;
+                if (IsTrueMapEdgeCellSpace(trial[i], w, h))
+                    continue;
+
+                float t01 = trial.Count > 1 ? i / (float)(trial.Count - 1) : 0f;
+                float fade = MeanderEdgeFade(t01, fade01);
+                if (!isMain && t01 < 0.22f)
+                    fade = Mathf.Max(fade, 0.72f);
+                if (fade < 1e-4f)
+                    continue;
+
+                Vector2 tan = CellPolylineTangentNormalize(trial, i);
+                Vector2 nrm = new Vector2(-tan.y, tan.x);
+                float phase = acc / freqC * (Mathf.PI * 2f) + riverIndex * 1.913f;
+                float noise01 = Mathf.PerlinNoise(
+                    acc / Mathf.Max(2f, freqC * 0.68f) + riverIndex * 17.11f,
+                    riverIndex * 0.319f + 6.07f);
+                float organicWave = Mathf.Clamp(Mathf.Sin(phase) * 0.76f + (noise01 * 2f - 1f) * 0.44f, -1f, 1f);
+                float offCells = organicWave * ampC * fade;
+                trial[i] += nrm * offCells;
+                maxOffsetCells = Mathf.Max(maxOffsetCells, Mathf.Abs(offCells));
+            }
+
+            if (PolylineSelfIntersectsXZCell(trial))
+                return false;
+
+            for (int i = 0; i < cellPath.Count; i++)
+                cellPath[i] = trial[i];
+            return true;
+        }
+
+        static void SnapMainRiverMapBorderEndpoints(List<Vector2> cellPath, int w, int h)
+        {
+            if (cellPath == null || cellPath.Count < 2)
+                return;
+
+            SnapMainRiverEndpointFlushToMapBorder(cellPath, w, h, isStart: true);
+            SnapMainRiverEndpointFlushToMapBorder(cellPath, w, h, isStart: false);
+        }
+
+        static void SnapMainRiverEndpointFlushToMapBorder(List<Vector2> cellPath, int w, int h, bool isStart)
+        {
+            int ep = isStart ? 0 : cellPath.Count - 1;
+            int inner = isStart ? 1 : cellPath.Count - 2;
+            if (inner < 0 || inner >= cellPath.Count)
+                return;
+            if (!IsTrueMapEdgeCellSpace(cellPath[ep], w, h))
+                return;
+
+            Vector2 outward = ResolveMapBorderOutwardDir(cellPath[ep], w, h);
+            if (outward.sqrMagnitude < 1e-8f)
+                return;
+
+            float west = 0.5f;
+            float east = (w - 1) + 0.5f;
+            float south = 0.5f;
+            float north = (h - 1) + 0.5f;
+            Vector2 snapped = cellPath[ep];
+            if (outward.x < -0.5f)
+                snapped.x = west;
+            else if (outward.x > 0.5f)
+                snapped.x = east;
+            if (outward.y < -0.5f)
+                snapped.y = south;
+            else if (outward.y > 0.5f)
+                snapped.y = north;
+
+            Vector2 approach = snapped - cellPath[inner];
+            float approachLen = approach.sqrMagnitude > 1e-6f ? approach.magnitude : 0.85f;
+            cellPath[inner] = snapped - outward * Mathf.Max(approachLen, 0.85f);
+            cellPath[ep] = snapped;
+        }
+
         static void ApplyVisualMeanderToCenters(
             List<Vector3> centersWorld,
             IReadOnlyList<Vector2> cellSpace,
@@ -11316,9 +12500,13 @@ namespace Project.Gameplay.Map.Generator
                     sym.VisualHalfWidth = Mathf.Max(halfWidths[ep], minBorderHalf);
                 halfWidths[ep] = sym.VisualHalfWidth;
 
-                if (ghostCells > 1e-4f && !uniformBorderWidth)
+                bool flatBorderCut = config.riverSurfaceFlatMapBorderCut;
+                float ghostUse = uniformBorderWidth && flatBorderCut
+                    ? Mathf.Min(ghostCells, 0.85f)
+                    : ghostCells;
+                if (ghostUse > 1e-4f && (!uniformBorderWidth || flatBorderCut))
                 {
-                    Vector2 ghostCell = cellSpace[ep] + outward * ghostCells;
+                    Vector2 ghostCell = cellSpace[ep] + outward * ghostUse;
                     Vector3 ghostWorld = new Vector3(
                         mapOrigin.x + ghostCell.x * cellSizeWorld,
                         center[ep].y,
@@ -11440,9 +12628,10 @@ namespace Project.Gameplay.Map.Generator
                     out mouthTaperStart, out mouthTaperEnd))
             {
                 mouthFusionTrimmed = true;
-                if (mouthTaperStart)
+                bool skipLakeFirstTribTaper = config != null && config.uwpLakeFirstHydrologyPipeline && riverIndex > 0;
+                if (mouthTaperStart && !skipLakeFirstTribTaper)
                     ApplyMouthFusionShoreWidthTaper(meshHalfW, atStart: true);
-                if (mouthTaperEnd)
+                if (mouthTaperEnd && !skipLakeFirstTribTaper)
                     ApplyMouthFusionShoreWidthTaper(meshHalfW, atStart: false);
             }
 
@@ -12554,6 +13743,437 @@ namespace Project.Gameplay.Map.Generator
                 $"surfaces={grid.RiverVisualSurfaces.Count}");
         }
 
+        static void BuildUwpDegenerateTributaryPrepass(
+            GridSystem grid,
+            MapGenConfig config,
+            int w,
+            int h,
+            float cellSize,
+            bool logDetail,
+            out HashSet<int> degenerateIndices,
+            out Dictionary<int, List<Vector2>> resolvedFinalByRiverIndex)
+        {
+            degenerateIndices = new HashSet<int>();
+            resolvedFinalByRiverIndex = new Dictionary<int, List<Vector2>>();
+            if (grid?.RiverCenterlinesCellSpace == null || config == null || !config.uwpOwnedVisualPolicy)
+                return;
+
+            for (int riverIndex = 1; riverIndex < grid.RiverCenterlinesCellSpace.Count; riverIndex++)
+            {
+                var rawPath = grid.RiverCenterlinesCellSpace[riverIndex];
+                if (rawPath == null || rawPath.Count < 2)
+                    continue;
+
+                if (!TryResolveRiverVisualFinalCenterlineCells(
+                        grid,
+                        config,
+                        riverIndex,
+                        rawPath,
+                        w,
+                        h,
+                        cellSize,
+                        logDetail,
+                        null,
+                        out List<Vector2> finalCenterline,
+                        out _))
+                    continue;
+
+                resolvedFinalByRiverIndex[riverIndex] = finalCenterline;
+                if (!IsUwpDegenerateTributary(finalCenterline, cellSize))
+                    continue;
+
+                degenerateIndices.Add(riverIndex);
+                float lengthWorld = ComputePolylineLengthCells(finalCenterline) * Mathf.Max(0.01f, cellSize);
+                Debug.Log(
+                    $"[UWP_DEGENERATE_TRIBUTARY_PREPASS] riverIndex={riverIndex} " +
+                    $"predictedFinalPts={finalCenterline.Count} predictedLength={lengthWorld:F2} " +
+                    $"reason=degenerate_tributary");
+            }
+        }
+
+        static bool TryResolveLakeFirstFinalCenterlineCells(
+            GridSystem grid,
+            int riverIndex,
+            IReadOnlyList<Vector2> rawPath,
+            MapGenConfig config,
+            out List<Vector2> finalCenterline,
+            out string skipReason)
+        {
+            finalCenterline = null;
+            skipReason = null;
+            List<Vector2> source = null;
+            if (grid?.LakeFirstWaterGraph != null &&
+                grid.LakeFirstWaterGraph.TryGetFinalCenterline(riverIndex, out List<Vector2> fromGraph))
+            {
+                source = fromGraph;
+            }
+            else if (rawPath != null && rawPath.Count >= 2)
+            {
+                source = rawPath as List<Vector2> ?? new List<Vector2>(rawPath);
+            }
+
+            if (source == null || source.Count < 2)
+            {
+                skipReason = "lake_first_no_centerline";
+                return false;
+            }
+
+            finalCenterline = NormalizeCenterlineSpacingForMesh(new List<Vector2>(source), config);
+            if (finalCenterline == null || finalCenterline.Count < 2)
+            {
+                skipReason = "lake_first_centerline_empty";
+                return false;
+            }
+
+            // En lake-first, el carve usa FinalCenterlineCells. Para evitar casos donde
+            // el carve queda "cortado" cerca de la boca, extendemos el inicio hacia orilla
+            // del lago y anclamos el extremo final a la confluencia del tributario aceptado.
+            Vector2? tribConfluence = null;
+            if (riverIndex > 0 && grid?.LakeFirstWaterGraph != null)
+            {
+                for (int i = 0; i < grid.LakeFirstWaterGraph.Tributaries.Count; i++)
+                {
+                    var trib = grid.LakeFirstWaterGraph.Tributaries[i];
+                    if (trib.RiverIndex != riverIndex || !trib.Accepted)
+                        continue;
+                    tribConfluence = new Vector2(
+                        trib.MainRiverConfluenceCell.x + 0.5f,
+                        trib.MainRiverConfluenceCell.y + 0.5f);
+                    break;
+                }
+            }
+
+            if (tribConfluence.HasValue && finalCenterline.Count >= 2)
+                finalCenterline[finalCenterline.Count - 1] = tribConfluence.Value;
+
+            if (riverIndex > 0 && !IsTributaryLakeOwner(grid, riverIndex))
+                AppendCenterlineTowardLakeShore(grid, finalCenterline, riverIndex, config, extendStart: true);
+
+            if (tribConfluence.HasValue && finalCenterline.Count >= 2)
+                finalCenterline[finalCenterline.Count - 1] = tribConfluence.Value;
+
+            int gw = grid != null ? grid.Width : 0;
+            int gh = grid != null ? grid.Height : 0;
+            if (gw >= 2 && gh >= 2)
+            {
+                ApplyLakeFirstOrganicMeanderToCellSpace(finalCenterline, gw, gh, config, riverIndex, out _);
+                if (riverIndex > 0)
+                {
+                    var backup = new List<Vector2>(finalCenterline);
+                    if (!ApplyLakeFirstOrganicMeanderToCellSpace(finalCenterline, gw, gh, config, riverIndex + 17, out _))
+                        finalCenterline = backup;
+                }
+
+                finalCenterline = NormalizeCenterlineSpacingForMesh(finalCenterline, config);
+
+                if (tribConfluence.HasValue && finalCenterline != null && finalCenterline.Count >= 2)
+                    finalCenterline[finalCenterline.Count - 1] = tribConfluence.Value;
+            }
+
+            if (riverIndex > 0 && IsTributaryLakeOwner(grid, riverIndex))
+            {
+                AppendLakeFirstTributaryCenterlineTowardCentroid(grid, riverIndex, finalCenterline, config);
+                AppendLakeFirstTributaryCenterlineTowardMainRiver(grid, riverIndex, finalCenterline, config);
+            }
+
+            if (grid?.LakeFirstWaterGraph != null)
+            {
+                if (grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex.ContainsKey(riverIndex))
+                    grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex[riverIndex] = new List<Vector2>(finalCenterline);
+            }
+
+            if (grid?.LakeFirstWaterGraph != null && riverIndex > 0)
+            {
+                for (int i = 0; i < grid.LakeFirstWaterGraph.Tributaries.Count; i++)
+                {
+                    var trib = grid.LakeFirstWaterGraph.Tributaries[i];
+                    if (trib.RiverIndex != riverIndex || !trib.Accepted)
+                        continue;
+                    trib.DebugCarvePathCells = new List<Vector2>(finalCenterline);
+                    break;
+                }
+            }
+
+            return true;
+        }
+
+        static bool TryResolveRiverVisualFinalCenterlineCells(
+            GridSystem grid,
+            MapGenConfig config,
+            int riverIndex,
+            IReadOnlyList<Vector2> rawPath,
+            int w,
+            int h,
+            float cellSize,
+            bool logDetail,
+            RiverVisualSurfaceData surfaceForAudit,
+            out List<Vector2> finalCenterline,
+            out string skipReason)
+        {
+            finalCenterline = null;
+            skipReason = null;
+            if (grid == null || config == null || rawPath == null || rawPath.Count < 2)
+            {
+                skipReason = "raw_too_short";
+                return false;
+            }
+
+            List<Vector2> rawPathList = rawPath as List<Vector2> ?? new List<Vector2>(rawPath);
+            List<Vector2> cellProcessed;
+            bool standardTrib = IsStandardDendriticTributary(grid, riverIndex);
+            bool lakeEmissary = IsLakeEmissaryRiverIndex(grid, riverIndex);
+            if (standardTrib)
+            {
+                if (!TryPrepareStandardTributaryCenterline(
+                        grid, config, riverIndex, rawPathList, logDetail, out cellProcessed, out _, out string rejectSub))
+                {
+                    skipReason = string.IsNullOrEmpty(rejectSub)
+                        ? "tributary_visual_reject"
+                        : $"tributary_visual_reject:{rejectSub}";
+                    return false;
+                }
+
+                if (!ApplyStandardTributaryLakeMouthFinalJoin(
+                        grid, ref cellProcessed, riverIndex, config, cellSize))
+                {
+                    skipReason = "lake_mouth_bridge_empty";
+                    return false;
+                }
+            }
+            else if (lakeEmissary)
+            {
+                if (!TryPrepareLakeEmissaryCenterline(
+                        grid, config, riverIndex, rawPathList, logDetail, out cellProcessed, out _))
+                {
+                    skipReason = "emissary_visual_reject";
+                    return false;
+                }
+            }
+            else
+            {
+                cellProcessed = BuildVisualCenterlineFromLogical(
+                    grid,
+                    rawPathList,
+                    config,
+                    riverIndex,
+                    out _,
+                    out _);
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "visual_centerline_failed";
+                    return false;
+                }
+
+                if (riverIndex == 0)
+                    cellProcessed = FallbackMainRiverCenterlineIfInvalid(grid, rawPathList, config, cellProcessed);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "main_centerline_invalid";
+                    return false;
+                }
+
+                if (riverIndex > 0 && !IsLakeEmissaryRiverIndex(grid, riverIndex))
+                    TrimRiverSurfaceStartAtLakeMouth(grid, cellProcessed, config);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "lake_mouth_trim_empty";
+                    return false;
+                }
+
+                if (riverIndex > 0 && !IsLakeEmissaryCenterline(grid, cellProcessed, riverIndex) &&
+                    !TributaryTargetsMainConfluence(grid, riverIndex))
+                    TrimRiverSurfaceExcludingLakeInterior(grid, cellProcessed, riverIndex, config);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "lake_interior_trim_empty";
+                    return false;
+                }
+
+                ApplyLakeRiverMouthVisualBridging(grid, cellProcessed, riverIndex, config);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "lake_mouth_bridge_empty";
+                    return false;
+                }
+
+                ApplySplitModeConfluenceAndLakeEndpoints(grid, cellProcessed, riverIndex, config, cellSize);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "split_endpoint_fix_empty";
+                    return false;
+                }
+
+                TrimRiverSurfaceEndAtLakeMouth(grid, cellProcessed, config);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "lake_mouth_end_trim_empty";
+                    return false;
+                }
+
+                TrimRiverSurfaceStaticWaterFromEnds(grid, cellProcessed, riverIndex, config);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "static_water_trim_empty";
+                    return false;
+                }
+
+                ApplyWebFusionLakeMouthAfterTrim(grid, cellProcessed, riverIndex, config);
+
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "web_fusion_mouth_empty";
+                    return false;
+                }
+            }
+
+            if ((standardTrib || lakeEmissary) &&
+                WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
+            {
+                ApplyWebFusionLakeMouthAfterTrim(grid, cellProcessed, riverIndex, config);
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "web_fusion_trib_mouth_empty";
+                    return false;
+                }
+
+                if (standardTrib)
+                    ApplyTributaryMainConfluenceCenterlineTrim(grid, cellProcessed, riverIndex, config, cellSize);
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = "tributary_confluence_trim_empty";
+                    return false;
+                }
+            }
+
+            bool webFusionStabilize = IsSplitLakeMsRiverWebFusionStabilizeMode(config);
+            if (!webFusionStabilize)
+            {
+                ApplySplitLakeMouthStabilizationTrims(
+                    grid, cellProcessed, riverIndex, config, standardTrib, lakeEmissary);
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = lakeEmissary
+                        ? "emissary_lake_origin_trim_empty"
+                        : "dendritic_lake_mouth_nudge_empty";
+                    return false;
+                }
+            }
+
+            if (cellProcessed == null || cellProcessed.Count < 2)
+            {
+                skipReason = "centerline_empty";
+                return false;
+            }
+
+            if (riverIndex > 0 && TryCullTributarySurfacePiece(grid, cellProcessed, riverIndex, config, logDetail))
+            {
+                skipReason = "tributary_cull";
+                return false;
+            }
+
+            if ((!standardTrib && !lakeEmissary) ||
+                WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
+                cellProcessed = NormalizeCenterlineSpacingForMesh(cellProcessed, config);
+
+            if (cellProcessed == null || cellProcessed.Count < 2)
+            {
+                skipReason = "centerline_empty";
+                return false;
+            }
+
+            if (WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config) && riverIndex > 0 &&
+                config.uwpOwnedVisualPolicy && standardTrib)
+            {
+                PruneTributaryCenterlineInteriorMainCrossings(grid, cellProcessed, riverIndex, config);
+            }
+
+            if (config.uwpOwnedVisualPolicy && standardTrib && cellProcessed != null)
+                EnsureTributaryOwnedLakeMouthPipeline(grid, cellProcessed, riverIndex, config);
+            else if (WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config) && riverIndex > 0)
+                ApplyWebFusionTributaryLakeMouthFinalize(grid, cellProcessed, riverIndex, config);
+
+            if (cellProcessed == null || cellProcessed.Count < 2)
+            {
+                skipReason = "web_fusion_finalize_empty";
+                return false;
+            }
+
+            if (webFusionStabilize)
+            {
+                ApplySplitLakeMouthStabilizationTrims(
+                    grid, cellProcessed, riverIndex, config, standardTrib, lakeEmissary);
+                if (cellProcessed == null || cellProcessed.Count < 2)
+                {
+                    skipReason = lakeEmissary
+                        ? "emissary_lake_origin_trim_empty"
+                        : "dendritic_lake_mouth_nudge_empty";
+                    return false;
+                }
+            }
+
+            if (cellProcessed == null || cellProcessed.Count < 2)
+            {
+                skipReason = "stabilize_trim_empty";
+                return false;
+            }
+
+            if (!standardTrib && !lakeEmissary)
+            {
+                if (surfaceForAudit != null)
+                    surfaceForAudit.PreClipInputPoints = cellProcessed.Count;
+                cellProcessed = PreClipCenterlineCellSpace(cellProcessed, w, h, out bool clipStart, out bool clipEnd);
+                if (surfaceForAudit != null)
+                {
+                    surfaceForAudit.PreClipOutputPoints = cellProcessed != null ? cellProcessed.Count : 0;
+                    surfaceForAudit.PreClipStart = clipStart;
+                    surfaceForAudit.PreClipEnd = clipEnd;
+                }
+
+                if (logDetail && surfaceForAudit != null)
+                {
+                    Debug.Log(
+                        $"[RiverSurfacePreClip] riverIndex={riverIndex} inputPoints={surfaceForAudit.PreClipInputPoints} " +
+                        $"outputPoints={surfaceForAudit.PreClipOutputPoints} startClipped={(clipStart ? 1 : 0)} endClipped={(clipEnd ? 1 : 0)} " +
+                        $"visibleOutsideBounds=0");
+                }
+            }
+            else if (surfaceForAudit != null)
+            {
+                surfaceForAudit.PreClipInputPoints = cellProcessed.Count;
+                surfaceForAudit.PreClipOutputPoints = cellProcessed.Count;
+                surfaceForAudit.PreClipStart = false;
+                surfaceForAudit.PreClipEnd = false;
+            }
+
+            if (cellProcessed == null || cellProcessed.Count < 2)
+            {
+                skipReason = "preclip_empty";
+                return false;
+            }
+
+            if (riverIndex == 0 && config.uwpOwnedVisualPolicy)
+            {
+                SnapMainRiverMapBorderEndpoints(cellProcessed, w, h);
+                if (ApplyVisualMeanderToCellSpace(cellProcessed, w, h, config, riverIndex, out float meanderMax) &&
+                    logDetail)
+                {
+                    Debug.Log(
+                        $"[RiverVisualMeander] riverId=0 mode=cellSpace maxOffsetCells={meanderMax:F3} " +
+                        $"accepted=1 rejectReason=none");
+                }
+            }
+
+            finalCenterline = cellProcessed;
+            return true;
+        }
+
         /// <summary>
         /// Fase 1 (auditoría): antes del cache, mesh y máscara repetían ProcessCenterline + meander + clip distinto;
         /// el clamp post-malla (verts_clamped) deformaba triángulos. Este método unifica la verdad visual.
@@ -12572,7 +14192,10 @@ namespace Project.Gameplay.Map.Generator
                 grid.RiverVisualSurfaceMask.GetLength(0) == grid.Width &&
                 grid.RiverVisualSurfaceMask.GetLength(1) == grid.Height)
             {
-                return true;
+                if (config.uwpOwnedVisualPolicy && UwpCachedSurfacesHaveUnskippedDegenerateTributary(grid, config))
+                    grid.ClearRiverVisualSurfaceCache();
+                else
+                    return true;
             }
 
             if (config.riverVisualSurfaceCacheEnabled &&
@@ -12583,7 +14206,10 @@ namespace Project.Gameplay.Map.Generator
                 grid.RiverVisualSurfaceMask.GetLength(1) == grid.Height &&
                 grid.RiverVisualSurfaces.Count == grid.RiverCenterlinesCellSpace.Count)
             {
-                return true;
+                if (config.uwpOwnedVisualPolicy && UwpCachedSurfacesHaveUnskippedDegenerateTributary(grid, config))
+                    grid.ClearRiverVisualSurfaceCache();
+                else
+                    return true;
             }
 
             grid.ClearRiverVisualSurfaceCache();
@@ -12595,8 +14221,19 @@ namespace Project.Gameplay.Map.Generator
             float marginCells = Mathf.Max(0f, config.riverVisualRasterMaskExtraCellMargin);
             float maxDev = Mathf.Max(0.2f, config.riverVisualMaxPathDeviationCells);
             bool logDetail = config.debugLogs || config.debugHydrologyNetwork;
+            bool lakeFirstPipeline = config.uwpLakeFirstHydrologyPipeline;
             var combinedMask = new bool[w, h];
             var surfaces = new List<RiverVisualSurfaceData>(grid.RiverCenterlinesCellSpace.Count);
+            bool[,] mainOnlyMask = null;
+            HashSet<int> uwpDegenerateTributaryPrepass = null;
+            Dictionary<int, List<Vector2>> uwpTributaryVisualPrepassFinal = null;
+            if (config.uwpOwnedVisualPolicy && !lakeFirstPipeline && grid.RiverCenterlinesCellSpace.Count > 1)
+            {
+                BuildUwpDegenerateTributaryPrepass(
+                    grid, config, w, h, cellSize, logDetail,
+                    out uwpDegenerateTributaryPrepass,
+                    out uwpTributaryVisualPrepassFinal);
+            }
 
             for (int riverIndex = 0; riverIndex < grid.RiverCenterlinesCellSpace.Count; riverIndex++)
             {
@@ -12624,259 +14261,71 @@ namespace Project.Gameplay.Map.Generator
                 }
 
                 List<Vector2> cellProcessed;
-                bool standardTrib = IsStandardDendriticTributary(grid, riverIndex);
-                bool lakeEmissary = IsLakeEmissaryRiverIndex(grid, riverIndex);
-                if (standardTrib)
+                if (lakeFirstPipeline)
                 {
-                    if (!TryPrepareStandardTributaryCenterline(
-                            grid, config, riverIndex, rawPath, logDetail, out cellProcessed, out _, out string rejectSub))
+                    if (!TryResolveLakeFirstFinalCenterlineCells(
+                            grid,
+                            riverIndex,
+                            rawPath,
+                            config,
+                            out cellProcessed,
+                            out string lakeFirstSkip))
                     {
                         surface.Skipped = true;
-                        surface.SkipReason = string.IsNullOrEmpty(rejectSub)
-                            ? "tributary_visual_reject"
-                            : $"tributary_visual_reject:{rejectSub}";
+                        surface.SkipReason = lakeFirstSkip ?? "lake_first_centerline_failed";
                         surfaces.Add(surface);
                         continue;
                     }
 
-                    if (!ApplyStandardTributaryLakeMouthFinalJoin(
-                            grid, ref cellProcessed, riverIndex, config, cellSize))
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "lake_mouth_bridge_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-                }
-                else if (lakeEmissary)
-                {
-                    if (!TryPrepareLakeEmissaryCenterline(
-                            grid, config, riverIndex, rawPath, logDetail, out cellProcessed, out _))
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "emissary_visual_reject";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-                }
-                else
-                {
-                    cellProcessed = BuildVisualCenterlineFromLogical(
-                        grid,
-                        rawPath,
-                        config,
-                        riverIndex,
-                        out _,
-                        out _);
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "visual_centerline_failed";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    if (riverIndex == 0)
-                        cellProcessed = FallbackMainRiverCenterlineIfInvalid(grid, rawPath, config, cellProcessed);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "main_centerline_invalid";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    if (riverIndex > 0 && !IsLakeEmissaryRiverIndex(grid, riverIndex))
-                        TrimRiverSurfaceStartAtLakeMouth(grid, cellProcessed, config);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "lake_mouth_trim_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    if (riverIndex > 0 && !IsLakeEmissaryCenterline(grid, cellProcessed, riverIndex) &&
-                        !TributaryTargetsMainConfluence(grid, riverIndex))
-                        TrimRiverSurfaceExcludingLakeInterior(grid, cellProcessed, riverIndex, config);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "lake_interior_trim_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    ApplyLakeRiverMouthVisualBridging(grid, cellProcessed, riverIndex, config);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "lake_mouth_bridge_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    ApplySplitModeConfluenceAndLakeEndpoints(grid, cellProcessed, riverIndex, config, cellSize);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "split_endpoint_fix_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    TrimRiverSurfaceEndAtLakeMouth(grid, cellProcessed, config);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "lake_mouth_end_trim_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    TrimRiverSurfaceStaticWaterFromEnds(grid, cellProcessed, riverIndex, config);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "static_water_trim_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-
-                    ApplyWebFusionLakeMouthAfterTrim(grid, cellProcessed, riverIndex, config);
-
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "web_fusion_mouth_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-                }
-
-                if ((standardTrib || lakeEmissary) &&
-                    WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
-                {
-                    ApplyWebFusionLakeMouthAfterTrim(grid, cellProcessed, riverIndex, config);
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = "web_fusion_trib_mouth_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-                }
-
-                bool webFusionStabilize = IsSplitLakeMsRiverWebFusionStabilizeMode(config);
-                if (!webFusionStabilize)
-                {
-                    ApplySplitLakeMouthStabilizationTrims(
-                        grid, cellProcessed, riverIndex, config, standardTrib, lakeEmissary);
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = lakeEmissary
-                            ? "emissary_lake_origin_trim_empty"
-                            : "dendritic_lake_mouth_nudge_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-                }
-
-                if (cellProcessed == null || cellProcessed.Count < 2)
-                {
-                    surface.Skipped = true;
-                    surface.SkipReason = "centerline_empty";
-                    surfaces.Add(surface);
-                    continue;
-                }
-
-                if (riverIndex > 0 && TryCullTributarySurfacePiece(grid, cellProcessed, riverIndex, config, logDetail))
-                {
-                    surface.Skipped = true;
-                    surface.SkipReason = "tributary_cull";
-                    surfaces.Add(surface);
-                    continue;
-                }
-
-                if ((!standardTrib && !lakeEmissary) ||
-                    WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
-                    cellProcessed = NormalizeCenterlineSpacingForMesh(cellProcessed, config);
-
-                if (cellProcessed == null || cellProcessed.Count < 2)
-                {
-                    surface.Skipped = true;
-                    surface.SkipReason = "centerline_empty";
-                    surfaces.Add(surface);
-                    continue;
-                }
-
-                if (WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config) && riverIndex > 0)
-                    ApplyWebFusionTributaryLakeMouthFinalize(grid, cellProcessed, riverIndex, config);
-
-                if (cellProcessed == null || cellProcessed.Count < 2)
-                {
-                    surface.Skipped = true;
-                    surface.SkipReason = "web_fusion_finalize_empty";
-                    surfaces.Add(surface);
-                    continue;
-                }
-
-                if (webFusionStabilize)
-                {
-                    ApplySplitLakeMouthStabilizationTrims(
-                        grid, cellProcessed, riverIndex, config, standardTrib, lakeEmissary);
-                    if (cellProcessed == null || cellProcessed.Count < 2)
-                    {
-                        surface.Skipped = true;
-                        surface.SkipReason = lakeEmissary
-                            ? "emissary_lake_origin_trim_empty"
-                            : "dendritic_lake_mouth_nudge_empty";
-                        surfaces.Add(surface);
-                        continue;
-                    }
-                }
-
-                if (!standardTrib && !lakeEmissary)
-                {
                     surface.PreClipInputPoints = cellProcessed.Count;
-                    cellProcessed = PreClipCenterlineCellSpace(cellProcessed, w, h, out bool clipStart, out bool clipEnd);
-                    surface.PreClipOutputPoints = cellProcessed != null ? cellProcessed.Count : 0;
-                    surface.PreClipStart = clipStart;
-                    surface.PreClipEnd = clipEnd;
+                    surface.PreClipOutputPoints = cellProcessed.Count;
+                    surface.PreClipStart = false;
+                    surface.PreClipEnd = false;
 
-                    if (logDetail)
-                    {
-                        Debug.Log(
-                            $"[RiverSurfacePreClip] riverIndex={riverIndex} inputPoints={surface.PreClipInputPoints} " +
-                            $"outputPoints={surface.PreClipOutputPoints} startClipped={(clipStart ? 1 : 0)} endClipped={(clipEnd ? 1 : 0)} " +
-                            $"visibleOutsideBounds=0");
-                    }
+                    if (riverIndex > 0 && cellProcessed != null && cellProcessed.Count >= 2)
+                        cellProcessed = DensifyLakeFirstCenterlineForMask(cellProcessed, 0.52f);
                 }
-                else
+                else if (config.uwpOwnedVisualPolicy &&
+                    riverIndex > 0 &&
+                    uwpTributaryVisualPrepassFinal != null &&
+                    uwpTributaryVisualPrepassFinal.TryGetValue(riverIndex, out List<Vector2> prepassFinal))
                 {
+                    cellProcessed = prepassFinal;
                     surface.PreClipInputPoints = cellProcessed.Count;
                     surface.PreClipOutputPoints = cellProcessed.Count;
                     surface.PreClipStart = false;
                     surface.PreClipEnd = false;
                 }
-
-                if (cellProcessed == null || cellProcessed.Count < 2)
+                else if (!TryResolveRiverVisualFinalCenterlineCells(
+                             grid,
+                             config,
+                             riverIndex,
+                             rawPath,
+                             w,
+                             h,
+                             cellSize,
+                             logDetail,
+                             surface,
+                             out cellProcessed,
+                             out string resolveSkipReason))
                 {
                     surface.Skipped = true;
-                    surface.SkipReason = "preclip_empty";
+                    surface.SkipReason = resolveSkipReason ?? "visual_centerline_failed";
                     surfaces.Add(surface);
                     continue;
                 }
 
                 surface.FinalCenterlineCells = cellProcessed;
+
+                if (!lakeFirstPipeline &&
+                    config.uwpOwnedVisualPolicy && riverIndex > 0 &&
+                    ((uwpDegenerateTributaryPrepass != null && uwpDegenerateTributaryPrepass.Contains(riverIndex)) ||
+                     IsUwpDegenerateTributary(cellProcessed, cellSize)))
+                {
+                    ApplyUwpDegenerateTributarySkip(surface, riverIndex, cellProcessed, cellSize);
+                    surfaces.Add(surface);
+                    continue;
+                }
 
                 float fullCellsW = riverIndex == 0
                     ? config.riverVisualRibbonFullWidthCellsMain
@@ -12895,7 +14344,18 @@ namespace Project.Gameplay.Map.Generator
                 List<float> halfWidths;
                 if (riverIndex == 0)
                 {
-                    var joinCells = BuildJoinProximityCellKeys(grid.RiverCenterlinesCellSpace, 0, w, h);
+                    var joinCells = BuildJoinProximityCellKeys(
+                        grid.RiverCenterlinesCellSpace, 0, w, h, uwpDegenerateTributaryPrepass);
+                    if (uwpDegenerateTributaryPrepass != null && uwpDegenerateTributaryPrepass.Count > 0)
+                    {
+                        foreach (int ignoredTrib in uwpDegenerateTributaryPrepass)
+                        {
+                            Debug.Log(
+                                $"[UWP_MAIN_IGNORE_DEGENERATE_TRIBUTARY] mainIndex=0 ignoredTributary={ignoredTrib} " +
+                                $"reason=degenerate_tributary");
+                        }
+                    }
+
                     halfWidths = BuildMainRiverHalfWidthsWithArcVariation(
                         grid,
                         worldForWidth,
@@ -12927,12 +14387,9 @@ namespace Project.Gameplay.Map.Generator
                 {
                     ApplyTributaryConfluenceVisualHalfWidths(
                         grid, cellProcessed, halfWidths, config, riverIndex);
-                    if (config.uwpOwnedVisualPolicy)
-                        ApplyTributaryLakeMouthVisualHalfWidths(
-                            grid, cellProcessed, halfWidths, config, riverIndex);
                 }
 
-                if (riverIndex == 0 || config.uwpOwnedVisualPolicy)
+                if (!lakeFirstPipeline && (riverIndex == 0 || config.uwpOwnedVisualPolicy))
                     ApplyLakeMouthVisualHalfWidthFlare(grid, cellProcessed, halfWidths, config);
                 if (WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
                 {
@@ -12948,19 +14405,76 @@ namespace Project.Gameplay.Map.Generator
                     }
                 }
                 ApplyFordWidthDampening(grid, cellProcessed, halfWidths, config);
-                if (riverIndex == 0 && config.uwpOwnedVisualPolicy)
-                    ApplyUwpMainRiverShoreIntersectionRepair(halfWidths, cellProcessed, baseHalfW, config);
+                if (config.uwpOwnedVisualPolicy && halfWidths != null && cellProcessed != null)
+                {
+                    if (riverIndex == 0 && !lakeFirstPipeline)
+                        ApplyUwpMainRiverShoreIntersectionRepair(halfWidths, cellProcessed, baseHalfW, config);
+                    else if (lakeFirstPipeline && riverIndex > 0)
+                        ApplyUwpMainRiverShoreIntersectionRepair(halfWidths, cellProcessed, baseHalfW, config);
+                }
                 var maskHalfWidths = CloneHalfWidths(halfWidths);
                 var meshHalfWidths = CloneHalfWidths(halfWidths);
                 ApplyMainMeshOnlyWidthScale(meshHalfWidths, config, riverIndex);
-                if (riverIndex > 0 && config.uwpOwnedVisualPolicy)
+                if (!lakeFirstPipeline && riverIndex == 0 && config.uwpOwnedVisualPolicy)
+                    SyncMainRiverMaskWidthsToMesh(maskHalfWidths, meshHalfWidths);
+                if (riverIndex > 0 && config.uwpOwnedVisualPolicy && !lakeFirstPipeline)
                     ApplyTributaryConfluenceExtraMeshWidth(
                         grid, cellProcessed, meshHalfWidths, config, riverIndex, cellSize);
+                if (riverIndex > 0 && config.uwpOwnedVisualPolicy)
+                {
+                    ApplyTributaryLakeMouthExtraMeshWidth(
+                        grid, cellProcessed, meshHalfWidths, config, riverIndex);
+                    ApplyTributaryLakeMouthVisualHalfWidths(
+                        grid, cellProcessed, meshHalfWidths, config, riverIndex);
+                }
+
+                // Lake-first frozen carve: la máscara debe cubrir el mismo corredor que mesh/carve.
+                if (lakeFirstPipeline && riverIndex > 0 && config.uwpOwnedVisualPolicy)
+                {
+                    ApplyTributaryConfluenceExtraMeshWidth(
+                        grid, cellProcessed, meshHalfWidths, config, riverIndex, cellSize);
+                    ApplyTributaryConfluenceExtraMeshWidth(
+                        grid, cellProcessed, maskHalfWidths, config, riverIndex, cellSize);
+                    ApplyTributaryLakeMouthVisualHalfWidths(
+                        grid, cellProcessed, maskHalfWidths, config, riverIndex);
+                    ApplyTributaryLakeMouthExtraMeshWidth(
+                        grid, cellProcessed, maskHalfWidths, config, riverIndex);
+                    ApplyLakeFirstTributaryShoreIntersectionWidthBoost(
+                        maskHalfWidths, cellProcessed, config, riverIndex, baseHalfW, cellSize, visualMeshOnly: false);
+                    ApplyLakeFirstTributaryShoreIntersectionWidthBoost(
+                        meshHalfWidths, cellProcessed, config, riverIndex, baseHalfW, cellSize, visualMeshOnly: true);
+                    AlignLakeFirstTributaryMeshToCarveReach(
+                        meshHalfWidths, cellProcessed, config, riverIndex, cellSize);
+                    float maskAvgBefore = 0f;
+                    for (int wi = 0; wi < maskHalfWidths.Count; wi++)
+                        maskAvgBefore += maskHalfWidths[wi];
+                    if (maskHalfWidths.Count > 0)
+                        maskAvgBefore /= maskHalfWidths.Count;
+                    ScaleLakeFirstTributaryCarveMaskHalfWidths(maskHalfWidths);
+                    if (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork)
+                    {
+                        float maskAvgAfter = 0f;
+                        for (int wi = 0; wi < maskHalfWidths.Count; wi++)
+                            maskAvgAfter += maskHalfWidths[wi];
+                        if (maskHalfWidths.Count > 0)
+                            maskAvgAfter /= maskHalfWidths.Count;
+                        Debug.Log(
+                            $"[LakeFirstTributaryCarveWidth] riverIndex={riverIndex} carveMul={LakeFirstTributaryCarveWidthMul:F2} " +
+                            $"maskHalfAvgBefore={maskAvgBefore:F3} maskHalfAvgAfter={maskAvgAfter:F3} seed={config.seed}");
+                    }
+                }
+                else if (!lakeFirstPipeline && riverIndex > 0 && config.uwpOwnedVisualPolicy)
+                {
+                    SyncTributaryMeshWidthsToMask(meshHalfWidths, maskHalfWidths, riverIndex);
+                }
                 surface.HalfWidthsWorld = meshHalfWidths ?? halfWidths;
                 surface.MaskHalfWidthsWorld = maskHalfWidths ?? halfWidths;
 
                 int maskCells = RasterStripCellSpaceToMask(
-                    combinedMask, w, h, cellProcessed, maskHalfWidths ?? halfWidths, cellSize, marginCells);
+                    combinedMask, w, h, cellProcessed, maskHalfWidths ?? halfWidths, cellSize,
+                    lakeFirstPipeline && riverIndex > 0 ? marginCells + 1.4f : marginCells);
+                if (riverIndex == 0 && config.uwpOwnedVisualPolicy)
+                    mainOnlyMask = CloneBoolMask(combinedMask, w, h);
                 if (logDetail)
                 {
                     Debug.Log(
@@ -12973,12 +14487,32 @@ namespace Project.Gameplay.Map.Generator
             }
 
             int maskBefore = CountMaskTrue(combinedMask, w, h);
-            MorphologicalClose1(combinedMask, w, h);
+            int oppositePruned = 0;
+            int mainCoreRestored = 0;
+            int skippedMouthPruned = 0;
+            if (!lakeFirstPipeline)
+            {
+                oppositePruned = PruneConfluenceOppositeBankMask(combinedMask, w, h, grid, config, surfaces);
+                if (config.uwpOwnedVisualPolicy && mainOnlyMask != null)
+                    mainCoreRestored = ProtectMainRiverMaskCore(combinedMask, mainOnlyMask, grid, config);
+                if (config.uwpOwnedVisualPolicy)
+                    skippedMouthPruned = PruneSkippedTributaryConfluenceMouthMask(combinedMask, w, h, grid, config, surfaces);
+                if (!config.uwpOwnedVisualPolicy)
+                    MorphologicalClose1(combinedMask, w, h);
+            }
+            else if (config.uwpOwnedVisualPolicy)
+            {
+                MorphologicalClose1(combinedMask, w, h);
+            }
+
             int maskAfter = CountMaskTrue(combinedMask, w, h);
-            if (logDetail || config.uwpOwnedVisualPolicy)
+            if (logDetail || config.uwpOwnedVisualPolicy || lakeFirstPipeline)
             {
                 Debug.Log(
-                    $"[RiverVisualContinuity] uwp={(config.uwpOwnedVisualPolicy ? 1 : 0)} holesFilled={Mathf.Max(0, maskAfter - maskBefore)} strayRemoved=0 " +
+                    $"[RiverVisualContinuity] uwp={(config.uwpOwnedVisualPolicy ? 1 : 0)} lakeFirst={(lakeFirstPipeline ? 1 : 0)} " +
+                    $"holesFilled={Mathf.Max(0, maskAfter - maskBefore)} " +
+                    $"oppositeBankPruned={oppositePruned} skippedMouthPruned={skippedMouthPruned} " +
+                    $"mainCoreRestored={mainCoreRestored} strayRemoved=0 " +
                     $"maskCellsBefore={maskBefore} maskCellsAfter={maskAfter}");
             }
 
@@ -12987,6 +14521,57 @@ namespace Project.Gameplay.Map.Generator
             grid.RiverVisualSurfacesBuilt = true;
             ResetUwpSurfaceAuditFields(grid);
             return true;
+        }
+
+        const float UwpDegenerateTributaryMinLengthWorldM = 3f;
+        const int UwpDegenerateTributaryMaxFinalPoints = 3;
+
+        public static bool IsUwpDegenerateTributary(List<Vector2> finalPath, float cellSizeWorld)
+        {
+            if (finalPath == null || finalPath.Count == 0)
+                return true;
+            if (finalPath.Count <= UwpDegenerateTributaryMaxFinalPoints)
+                return true;
+            float lengthWorld = ComputePolylineLengthCells(finalPath) * Mathf.Max(0.01f, cellSizeWorld);
+            return lengthWorld < UwpDegenerateTributaryMinLengthWorldM;
+        }
+
+        static void ApplyUwpDegenerateTributarySkip(
+            RiverVisualSurfaceData surface,
+            int riverIndex,
+            List<Vector2> finalPath,
+            float cellSizeWorld)
+        {
+            if (surface == null)
+                return;
+            surface.Skipped = true;
+            surface.SkipReason = "degenerate_tributary";
+            surface.MeshBuilt = false;
+            surface.CarveApplied = false;
+            surface.CrossfordApplied = false;
+            surface.LengthMesh = 0f;
+            surface.LengthCarve = 0f;
+            float lengthWorld = ComputePolylineLengthCells(finalPath) * Mathf.Max(0.01f, cellSizeWorld);
+            Debug.Log(
+                $"[UWP_SKIP_DEGENERATE_TRIBUTARY] riverIndex={riverIndex} finalPts={finalPath?.Count ?? 0} " +
+                $"length={lengthWorld:F2} reason=degenerate_tributary");
+        }
+
+        static bool UwpCachedSurfacesHaveUnskippedDegenerateTributary(GridSystem grid, MapGenConfig config)
+        {
+            if (config == null || !config.uwpOwnedVisualPolicy || grid?.RiverVisualSurfaces == null)
+                return false;
+            float cellSize = grid.CellSizeWorld;
+            for (int i = 1; i < grid.RiverVisualSurfaces.Count; i++)
+            {
+                RiverVisualSurfaceData surface = grid.RiverVisualSurfaces[i];
+                if (surface == null || surface.Skipped)
+                    continue;
+                if (IsUwpDegenerateTributary(surface.FinalCenterlineCells, cellSize))
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -13006,6 +14591,7 @@ namespace Project.Gameplay.Map.Generator
 
             grid.RiverVisualSurfaceCacheFrozen = true;
             ResetUwpSurfaceAuditFields(grid);
+            AuditUwpFrozenTributaryGhostRisk(grid, config);
             if (config.debugLogs || config.debugHydrologyNetwork)
             {
                 Debug.Log(
@@ -13014,6 +14600,128 @@ namespace Project.Gameplay.Map.Generator
             }
 
             return true;
+        }
+
+        const int UwpGhostRiskBboxExcessThresholdCells = 4;
+
+        static void AuditUwpFrozenTributaryGhostRisk(GridSystem grid, MapGenConfig config)
+        {
+            if (grid?.RiverVisualSurfaces == null || grid.RiverVisualSurfaceMask == null || config == null)
+                return;
+            if (!grid.RiverVisualSurfaceCacheFrozen)
+                return;
+
+            bool[,] mask = grid.RiverVisualSurfaceMask;
+            int w = grid.Width;
+            int h = grid.Height;
+            if (mask.GetLength(0) != w || mask.GetLength(1) != h)
+                return;
+
+            float cellSize = Mathf.Max(0.01f, grid.CellSizeWorld);
+            bool logDetail = config.debugLogs || config.debugHydrologyNetwork;
+
+            for (int i = 0; i < grid.RiverVisualSurfaces.Count; i++)
+            {
+                RiverVisualSurfaceData surface = grid.RiverVisualSurfaces[i];
+                if (surface == null || surface.Skipped || surface.RiverIndex <= 0)
+                    continue;
+
+                var finalLine = surface.FinalCenterlineCells;
+                if (finalLine == null || finalLine.Count < 2)
+                    continue;
+
+                int rawPts = surface.RawFunctionalCenterlineCells?.Count ?? 0;
+                int finalPts = finalLine.Count;
+                TryResolveTributaryJoinIndexFromFinalPath(
+                    grid, config, finalLine, surface.RiverIndex, out int confluenceIdx);
+
+                float meshHalfSum = 0f;
+                int meshHalfCount = 0;
+                if (surface.HalfWidthsWorld != null)
+                {
+                    for (int hi = 0; hi < surface.HalfWidthsWorld.Count; hi++)
+                    {
+                        meshHalfSum += surface.HalfWidthsWorld[hi];
+                        meshHalfCount++;
+                    }
+                }
+
+                float maskHalfSum = 0f;
+                int maskHalfCount = 0;
+                if (surface.MaskHalfWidthsWorld != null)
+                {
+                    for (int hi = 0; hi < surface.MaskHalfWidthsWorld.Count; hi++)
+                    {
+                        maskHalfSum += surface.MaskHalfWidthsWorld[hi];
+                        maskHalfCount++;
+                    }
+                }
+
+                float meshHalfAvg = meshHalfCount > 0 ? meshHalfSum / meshHalfCount : 0f;
+                float maskHalfAvg = maskHalfCount > 0 ? maskHalfSum / maskHalfCount : meshHalfAvg;
+                float maskHalfCells = maskHalfAvg / cellSize;
+
+                float fMinX = float.MaxValue, fMaxX = float.MinValue;
+                float fMinZ = float.MaxValue, fMaxZ = float.MinValue;
+                for (int pi = 0; pi < finalLine.Count; pi++)
+                {
+                    fMinX = Mathf.Min(fMinX, finalLine[pi].x);
+                    fMaxX = Mathf.Max(fMaxX, finalLine[pi].x);
+                    fMinZ = Mathf.Min(fMinZ, finalLine[pi].y);
+                    fMaxZ = Mathf.Max(fMaxZ, finalLine[pi].y);
+                }
+
+                float attribRadius = maskHalfCells + 2f;
+                float attribRadiusSq = attribRadius * attribRadius;
+                int maskCells = 0;
+                float mMinX = float.MaxValue, mMaxX = float.MinValue;
+                float mMinZ = float.MaxValue, mMaxZ = float.MinValue;
+                bool hasMaskBbox = false;
+
+                for (int z = 0; z < h; z++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        if (!mask[x, z])
+                            continue;
+                        Vector2 p = new Vector2(x + 0.5f, z + 0.5f);
+                        if (DistanceSqToPolylineCellSpace(p, finalLine) > attribRadiusSq)
+                            continue;
+                        maskCells++;
+                        hasMaskBbox = true;
+                        mMinX = Mathf.Min(mMinX, x);
+                        mMaxX = Mathf.Max(mMaxX, x);
+                        mMinZ = Mathf.Min(mMinZ, z);
+                        mMaxZ = Mathf.Max(mMaxZ, z);
+                    }
+                }
+
+                if (logDetail)
+                {
+                    Debug.Log(
+                        $"[UWP HYDRO TRIB AUDIT] trib={surface.RiverIndex} rawPts={rawPts} finalPts={finalPts} " +
+                        $"maskCells={maskCells} meshHalfAvg={meshHalfAvg:F3} maskHalfAvg={maskHalfAvg:F3} " +
+                        $"confluenceIdx={confluenceIdx}");
+                }
+
+                if (!hasMaskBbox)
+                    continue;
+
+                float pad = maskHalfCells + UwpGhostRiskBboxExcessThresholdCells;
+                float excessMinX = Mathf.Max(0f, (fMinX - pad) - mMinX);
+                float excessMaxX = Mathf.Max(0f, mMaxX - (fMaxX + pad));
+                float excessMinZ = Mathf.Max(0f, (fMinZ - pad) - mMinZ);
+                float excessMaxZ = Mathf.Max(0f, mMaxZ - (fMaxZ + pad));
+                float excess = Mathf.Max(Mathf.Max(excessMinX, excessMaxX), Mathf.Max(excessMinZ, excessMaxZ));
+                if (excess <= UwpGhostRiskBboxExcessThresholdCells)
+                    continue;
+
+                Debug.LogWarning(
+                    $"[UWP HYDRO GHOST RISK] trib={surface.RiverIndex} rawPts={rawPts} finalPts={finalPts} " +
+                    $"maskCells={maskCells} meshHalfAvg={meshHalfAvg:F3} maskHalfAvg={maskHalfAvg:F3} " +
+                    $"confluenceIdx={confluenceIdx} bboxExcessCells={excess:F1} threshold={UwpGhostRiskBboxExcessThresholdCells} " +
+                    $"finalBbox=({fMinX:F1},{fMinZ:F1})-({fMaxX:F1},{fMaxZ:F1}) maskBbox=({mMinX},{mMinZ})-({mMaxX},{mMaxZ})");
+            }
         }
 
         static void ResetUwpSurfaceAuditFields(GridSystem grid)
@@ -13178,10 +14886,49 @@ namespace Project.Gameplay.Map.Generator
             float mul = riverIndex == 0
                 ? Mathf.Clamp(config.riverSurfaceMainMeshOnlyWidthMul, 1f, 2.5f)
                 : Mathf.Clamp(config.riverSurfaceTributaryMeshOnlyWidthMul, 1f, 2.5f);
+            if (riverIndex > 0 && config.uwpLakeFirstHydrologyPipeline)
+                mul = Mathf.Max(mul, 1.24f);
             if (mul <= 1.001f)
                 return;
             for (int i = 0; i < halfWidths.Count; i++)
                 halfWidths[i] = Mathf.Max(0.02f, halfWidths[i] * mul);
+        }
+
+        static List<Vector2> DensifyLakeFirstCenterlineForMask(List<Vector2> line, float spacingCells)
+        {
+            if (line == null || line.Count < 2)
+                return line;
+
+            spacingCells = Mathf.Clamp(spacingCells, 0.35f, 0.9f);
+            float total = 0f;
+            for (int i = 1; i < line.Count; i++)
+                total += Vector2.Distance(line[i], line[i - 1]);
+            if (total < spacingCells * 0.75f)
+                return line;
+
+            int samples = Mathf.Clamp(Mathf.CeilToInt(total / spacingCells) + 1, line.Count, 320);
+            var densified = new List<Vector2>(samples);
+            float step = total / (samples - 1);
+            float acc = 0f;
+            int seg = 0;
+            for (int s = 0; s < samples; s++)
+            {
+                float target = s * step;
+                while (seg < line.Count - 2)
+                {
+                    float segLen = Vector2.Distance(line[seg], line[seg + 1]);
+                    if (acc + segLen >= target)
+                        break;
+                    acc += segLen;
+                    seg++;
+                }
+
+                float localLen = Vector2.Distance(line[seg], line[seg + 1]);
+                float t = localLen > 1e-6f ? (target - acc) / localLen : 0f;
+                densified.Add(Vector2.Lerp(line[seg], line[seg + 1], Mathf.Clamp01(t)));
+            }
+
+            return densified.Count >= 2 ? densified : line;
         }
 
         static int RasterStripCellSpaceToMask(

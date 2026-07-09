@@ -519,6 +519,9 @@ namespace Project.Gameplay.Map.Generator
                         Gizmos.DrawLine(new Vector3(badA[i].x, y + 0.1f, badA[i].z), new Vector3(badB[i].x, y + 0.1f, badB[i].z));
                 }
             }
+
+            UwpLakeFirstHydrologyDebugOverlay.DrawGizmos(_grid, c, y);
+            UwpTributaryCarveDebugAudit.DrawGizmos(_grid, c);
         }
     }
 }

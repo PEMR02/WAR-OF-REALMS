@@ -326,6 +326,9 @@ namespace Project.Gameplay.Map.Generator
 
             // Ríos: descenso simple (SimpleRiverPathGenerator); opcional evitar solapes; vados = River transitable + riverFord.
             int riverCount = Mathf.Min(config.riverCount, 8);
+            bool lakeFirstPipeline = config.uwpLakeFirstHydrologyPipeline;
+            int riversToPlaceLoop = lakeFirstPipeline ? 1 : riverCount;
+            grid.LakeFirstWaterGraph = null;
             if (config.uwpOwnedVisualPolicy || config.riverLogPlacementFailureSummary)
             {
                 UnityEngine.Debug.LogWarning(
@@ -360,7 +363,7 @@ namespace Project.Gameplay.Map.Generator
 
             SimpleRiverPathGenerator.TryLogHeightmapSummaryOnce(grid, config);
 
-            for (int i = 0; i < riverCount; i++)
+            for (int i = 0; i < riversToPlaceLoop; i++)
             {
                 bool placed = false;
                 int attemptsUsed = 0;
@@ -780,19 +783,22 @@ namespace Project.Gameplay.Map.Generator
                     $"colocados tras pase cruce={hydrologyPlacedFallback}, no colocados={hydrologyNotPlaced}, allowFallbackCrossing={config.allowFallbackCrossing}");
             }
 
-            TryFillMissingTributaryRivers(
-                grid,
-                config,
-                rng,
-                riverCount,
-                ref waterCells,
-                riverOccupiedCells,
-                ref riverOccAabbValid,
-                ref riverOccMinX,
-                ref riverOccMaxX,
-                ref riverOccMinZ,
-                ref riverOccMaxZ,
-                ref hydrologyPlacedFallback);
+            if (!lakeFirstPipeline)
+            {
+                TryFillMissingTributaryRivers(
+                    grid,
+                    config,
+                    rng,
+                    riverCount,
+                    ref waterCells,
+                    riverOccupiedCells,
+                    ref riverOccAabbValid,
+                    ref riverOccMinX,
+                    ref riverOccMaxX,
+                    ref riverOccMinZ,
+                    ref riverOccMaxZ,
+                    ref hydrologyPlacedFallback);
+            }
 
             if (config.uwpOwnedVisualPolicy || config.riverLogPlacementFailureSummary)
             {
@@ -944,8 +950,25 @@ namespace Project.Gameplay.Map.Generator
             if (config.mergeRiverCellsTouchingLake)
                 MergeRiverCellsTouchingLake(grid);
 
-            if (config.lakeRiverConnectorMaxPerMap > 0)
+            if (lakeFirstPipeline)
+            {
+                UwpLakeFirstHydrologyBuilder.BuildAndApply(
+                    grid,
+                    config,
+                    rng,
+                    riverCount,
+                    ref waterCells,
+                    riverOccupiedCells,
+                    ref riverOccAabbValid,
+                    ref riverOccMinX,
+                    ref riverOccMaxX,
+                    ref riverOccMinZ,
+                    ref riverOccMaxZ);
+            }
+            else if (config.lakeRiverConnectorMaxPerMap > 0)
+            {
                 EnforceSingleTributaryPerLakeComponent(grid, config);
+            }
 
             if (swLakePipe != null)
                 WaterGenPerfDiag.MsLakesAbsorbMerge = swLakePipe.Elapsed.TotalMilliseconds;
@@ -3999,6 +4022,122 @@ namespace Project.Gameplay.Map.Generator
                 $"componentsTouchingCenterline={touchingCenterline} componentsTouchingLakeBody={touchingLakeBody} " +
                 $"fordsCount={fordsCount} fordsAlignedToCenterline={fordsNearCenterline} maxCenterlineHeightRise={maxHeightRise:F4} " +
                 $"heightRiseEvents={heightRiseEvents} visualMaskCells={maskCells} suspectedTerrainMismatch={suspectedTerrainMismatch} valid={valid}");
+        }
+
+        /// <summary>Aplica tributario validado por <see cref="UwpLakeFirstHydrologyBuilder"/> (Fase4 lake-first).</summary>
+        internal static int ApplyLakeFirstValidatedTributary(
+            GridSystem grid,
+            MapGenConfig config,
+            IRng rng,
+            int riverSlotIndex,
+            List<Vector2Int> path,
+            List<Vector2> centerline,
+            HashSet<long> riverOccupiedCells,
+            ref bool riverOccAabbValid,
+            ref int riverOccMinX,
+            ref int riverOccMaxX,
+            ref int riverOccMinZ,
+            ref int riverOccMaxZ)
+        {
+            if (grid == null || config == null || path == null || path.Count < 2 || centerline == null || centerline.Count < 2)
+                return 0;
+
+            if (grid.RiverCenterlinesCellSpace == null)
+                grid.RiverCenterlinesCellSpace = new List<List<Vector2>>();
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int added = 0;
+            int riverIdBeforeAdd = grid.RiverCenterlinesCellSpace != null ? grid.RiverCenterlinesCellSpace.Count : 0;
+            int visualRiverRadiusCells = VisualRiverRasterRadiusCells(true, config);
+            int riverNoiseCompiledBackup = config.riverWidthNoiseAmplitudeCells;
+            config.riverWidthRadiusCells = visualRiverRadiusCells;
+
+            grid.RiverCenterlinesCellSpace.Add(new List<Vector2>(centerline));
+            float cs = grid.CellSizeWorld;
+            Vector3 o = grid.Origin;
+            var world = new List<Vector3>(centerline.Count);
+            for (int pi = 0; pi < centerline.Count; pi++)
+            {
+                var p = centerline[pi];
+                world.Add(new Vector3(o.x + p.x * cs, o.y, o.z + p.y * cs));
+            }
+
+            if (grid.RiverCenterlinesWorld == null)
+                grid.RiverCenterlinesWorld = new List<List<Vector3>>();
+            grid.RiverCenterlinesWorld.Add(world);
+
+            var fordCells = SimpleRiverPathGenerator.BuildFordAlongPath(path, config, rng, w, h);
+            s_fordPackedScratch.Clear();
+            if (fordCells != null)
+            {
+                for (int fi = 0; fi < fordCells.Count; fi++)
+                    s_fordPackedScratch.Add(PackCellLong(fordCells[fi]));
+            }
+
+            for (int pi = 0; pi < path.Count; pi++)
+            {
+                var c = path[pi];
+                if (!grid.InBoundsCell(c.x, c.y))
+                    continue;
+                ref var cell = ref grid.GetCell(c);
+                if (cell.type != CellType.Land)
+                    continue;
+                bool isFord = s_fordPackedScratch.Contains(PackCellLong(c));
+                cell.type = CellType.River;
+                cell.riverFord = isFord;
+                cell.walkable = isFord;
+                cell.buildable = false;
+                cell.waterTraverse = isFord ? WaterTraverseMode.FordShallow : WaterTraverseMode.SwimNavigable;
+                added++;
+            }
+
+            if (visualRiverRadiusCells <= 0)
+                config.riverWidthNoiseAmplitudeCells = 0;
+            added += ExpandRiverWidthAroundPath(grid, path, config, riverSlotIndex);
+            config.riverWidthNoiseAmplitudeCells = riverNoiseCompiledBackup;
+
+            if (fordCells != null && fordCells.Count > 0 && config.riverFordCorridorRadiusCells > 0)
+                ApplyRiverFordCorridor(grid, fordCells, config.riverFordCorridorRadiusCells);
+
+            CollectRiverCorridorPackedInto(path, config, w, h, s_riverCorridorPackedScratch);
+            foreach (long k in s_riverCorridorPackedScratch)
+            {
+                RiverOccupiedAddPackedCell(
+                    riverOccupiedCells,
+                    ref riverOccAabbValid,
+                    ref riverOccMinX,
+                    ref riverOccMaxX,
+                    ref riverOccMinZ,
+                    ref riverOccMaxZ,
+                    k);
+            }
+
+            if (grid.HydrologyNetwork != null)
+            {
+                int? parentRiver = 0;
+                float joinDistSq = 0f;
+                Vector2Int joinCell = path[path.Count - 1];
+                parentRiver = TryResolveParentRiverAtJoin(grid, joinCell, riverIdBeforeAdd, out joinDistSq);
+                grid.HydrologyNetwork.AddRiver(new HydrologyRiverRecord
+                {
+                    RiverId = riverIdBeforeAdd,
+                    RiverClass = RiverClass.Tributary,
+                    ParentRiverId = parentRiver,
+                    BasinId = 0,
+                    EstimatedFlow01 = 0.55f,
+                    WidthClass = 0,
+                    JoinVertexIndex = path.Count - 1,
+                    StartCell = path[0],
+                    EndCell = joinCell,
+                    AcceptedLengthCells = path.Count,
+                    HierarchyFromConfluenceTrim = true,
+                    HierarchyReason = "lake_first_validated",
+                });
+            }
+
+            config.riverWidthRadiusCells = visualRiverRadiusCells;
+            return added;
         }
     }
 }

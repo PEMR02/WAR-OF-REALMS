@@ -3330,15 +3330,35 @@ namespace Project.Gameplay.Map.Generator
 
             bool hasPrefabs = crossingPrefabs != null && crossingPrefabs.Count > 0;
 
+            bool skipDecorOutsideVisualMask = config.uwpOwnedVisualPolicy &&
+                                              grid.RiverVisualSurfaceCacheFrozen &&
+                                              grid.RiverVisualSurfaceMask != null &&
+                                              grid.RiverVisualSurfaceMask.GetLength(0) == grid.Width &&
+                                              grid.RiverVisualSurfaceMask.GetLength(1) == grid.Height;
+            bool[,] rivMask = skipDecorOutsideVisualMask ? grid.RiverVisualSurfaceMask : null;
+            int skippedDecorOutsideMask = 0;
+
             var unassigned = new HashSet<Vector2Int>();
             for (int z = 0; z < grid.Height; z++)
             {
                 for (int x = 0; x < grid.Width; x++)
                 {
                     ref var cd = ref grid.GetCell(x, z);
-                    if (cd.type == CellType.River && cd.riverFord)
-                        unassigned.Add(new Vector2Int(x, z));
+                    if (cd.type != CellType.River || !cd.riverFord)
+                        continue;
+                    if (rivMask != null && !rivMask[x, z])
+                    {
+                        skippedDecorOutsideMask++;
+                        continue;
+                    }
+                    unassigned.Add(new Vector2Int(x, z));
                 }
+            }
+
+            if (skippedDecorOutsideMask > 0)
+            {
+                Debug.Log(
+                    $"[UWP_SKIP_FORD_DECOR_OUTSIDE_VISUAL_MASK] cells={skippedDecorOutsideMask}");
             }
 
             if (unassigned.Count == 0)
@@ -3891,6 +3911,21 @@ namespace Project.Gameplay.Map.Generator
 
             for (int riverId = 0; riverId < centerlines; riverId++)
             {
+                if (config.uwpOwnedVisualPolicy &&
+                    grid.RiverVisualSurfaceCacheFrozen &&
+                    grid.RiverVisualSurfaces != null &&
+                    riverId < grid.RiverVisualSurfaces.Count &&
+                    grid.RiverVisualSurfaces[riverId] != null &&
+                    grid.RiverVisualSurfaces[riverId].Skipped)
+                {
+                    string skipReason = grid.RiverVisualSurfaces[riverId].SkipReason;
+                    if (string.IsNullOrEmpty(skipReason))
+                        skipReason = "skipped";
+                    Debug.Log(
+                        $"[UWP_SKIP_DEGENERATE_TRIBUTARY_FORD] riverIndex={riverId} reason={skipReason}");
+                    continue;
+                }
+
                 var line = lines[riverId];
                 int rawPoints = line != null ? line.Count : 0;
                 if (line == null || line.Count < 2)
@@ -5546,6 +5581,8 @@ namespace Project.Gameplay.Map.Generator
                 return 0;
 
             int layers = Mathf.Clamp(config.lakeRiverMouthBlendCells + 2, 2, 8);
+            if (config.uwpLakeFirstHydrologyPipeline)
+                layers = Mathf.Clamp(layers + 4, layers, 12);
             bool[,] rivMask = grid.RiverVisualSurfaceMask;
             var q = new Queue<Vector2Int>();
             var seen = new bool[rectW, rectH];
@@ -5599,6 +5636,87 @@ namespace Project.Gameplay.Map.Generator
             }
 
             return added;
+        }
+
+        /// <summary>Lake-first: ensancha máscara MS del lago hacia el centro desde la boca del tributario.</summary>
+        static int ExpandLakeFirstTributaryIngressIntoCoarseMask(
+            bool[,] mask,
+            int rectW,
+            int rectH,
+            int rectMinX,
+            int rectMinZ,
+            GridSystem grid,
+            MapGenConfig config)
+        {
+            if (mask == null || grid == null || config == null || !config.uwpLakeFirstHydrologyPipeline)
+                return 0;
+            var graph = grid.LakeFirstWaterGraph;
+            if (graph?.Tributaries == null || grid.LakeBodyComponents == null)
+                return 0;
+
+            int added = 0;
+            int ingressRadius = Mathf.Clamp(config.lakeRiverMouthBlendCells + 3, 4, 8);
+            for (int ti = 0; ti < graph.Tributaries.Count; ti++)
+            {
+                var trib = graph.Tributaries[ti];
+                if (!trib.Accepted || trib.LakeComponentIndex < 0 ||
+                    trib.LakeComponentIndex >= grid.LakeBodyComponents.Count)
+                    continue;
+
+                var comp = grid.LakeBodyComponents[trib.LakeComponentIndex];
+                if (comp == null || comp.Count == 0)
+                    continue;
+
+                Vector2 centroid = ComputeLakeFirstComponentCentroid(comp);
+                Vector2 mouth = new Vector2(trib.LakeOutletCell.x + 0.5f, trib.LakeOutletCell.y + 0.5f);
+                for (int k = 0; k <= 12; k++)
+                {
+                    float t = k / 12f;
+                    Vector2 p = Vector2.Lerp(mouth, centroid, 0.06f + t * 0.52f);
+                    int cx = Mathf.FloorToInt(p.x);
+                    int cz = Mathf.FloorToInt(p.y);
+                    for (int dz = -ingressRadius; dz <= ingressRadius; dz++)
+                    {
+                        for (int dx = -ingressRadius; dx <= ingressRadius; dx++)
+                        {
+                            if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) > ingressRadius)
+                                continue;
+                            int gx = cx + dx;
+                            int gz = cz + dz;
+                            int lx = gx - rectMinX;
+                            int lz = gz - rectMinZ;
+                            if ((uint)lx >= (uint)rectW || (uint)lz >= (uint)rectH)
+                                continue;
+                            if (mask[lx, lz])
+                                continue;
+                            ref var cell = ref grid.GetCell(gx, gz);
+                            if (cell.type != CellType.Water && cell.type != CellType.River)
+                                continue;
+                            mask[lx, lz] = true;
+                            added++;
+                        }
+                    }
+                }
+            }
+
+            return added;
+        }
+
+        static Vector2 ComputeLakeFirstComponentCentroid(HashSet<long> comp)
+        {
+            if (comp == null || comp.Count == 0)
+                return Vector2.zero;
+            Vector2 sum = Vector2.zero;
+            int n = 0;
+            foreach (long pk in comp)
+            {
+                int x = (int)(pk >> 32);
+                int z = (int)(pk & 0xffffffffL);
+                sum += new Vector2(x + 0.5f, z + 0.5f);
+                n++;
+            }
+
+            return n > 0 ? sum / n : Vector2.zero;
         }
 
         static int CleanupLakeMSComponents(
@@ -6018,6 +6136,12 @@ namespace Project.Gameplay.Map.Generator
                 out int remNoBody);
             FillInteriorHolesInLakeMask(coarseMask, rectW, rectH);
             ExpandLakeMouthIntoCoarseMask(coarseMask, rectW, rectH, rectMinX, rectMinZ, grid, config);
+            if (config.uwpLakeFirstHydrologyPipeline)
+            {
+                int ingressAdded = ExpandLakeFirstTributaryIngressIntoCoarseMask(
+                    coarseMask, rectW, rectH, rectMinX, rectMinZ, grid, config);
+                expandedCells += ingressAdded;
+            }
             SmoothLakeCoarseMaskMajority(coarseMask, rectW, rectH, 3, 5);
             finalCells = CountTrueInCoarseMask(coarseMask, rectW, rectH);
             s_lakeMSFinalCells = finalCells;

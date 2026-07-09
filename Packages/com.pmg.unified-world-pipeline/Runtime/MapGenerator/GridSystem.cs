@@ -41,6 +41,11 @@ namespace Project.Gameplay.Map.Generator
         /// </summary>
         public bool RiverVisualSurfaceCacheFrozen { get; set; }
 
+        /// <summary>
+        /// UWP post-freeze: ex-corredor funcional de tributarios skipped fuera de <see cref="RiverVisualSurfaceMask"/>.
+        /// </summary>
+        public bool[,] UwpSkippedTributaryFunctionalMask { get; set; }
+
         /// <summary>Invalida cache visual (p. ej. antes de regenerar mapa).</summary>
         public void ClearRiverVisualSurfaceCache()
         {
@@ -48,6 +53,7 @@ namespace Project.Gameplay.Map.Generator
             RiverVisualSurfaceCacheFrozen = false;
             RiverVisualSurfaces = null;
             RiverVisualSurfaceMask = null;
+            UwpSkippedTributaryFunctionalMask = null;
         }
 
         /// <summary>Confluencias tributario→principal registradas tras generación (visual/terreno; no altera CellData).</summary>
@@ -81,6 +87,9 @@ namespace Project.Gameplay.Map.Generator
 
         /// <summary>Por componente de lago: índice del único tributario autorizado (-1 = ninguno).</summary>
         public List<int> LakeComponentTributaryOwnerRiverIndex { get; set; }
+
+        /// <summary>UWP lake-first: grafo hidrológico validado (main, lagos, tributarios).</summary>
+        public UwpWaterGraph LakeFirstWaterGraph { get; set; }
 
         /// <summary>
         /// Subconjunto de boca de lago (embudo conector): el MS de lago las incluye aunque solapen máscara de ribbon.
