@@ -25,6 +25,11 @@ Entorno: Ubuntu 24.04 headless (sin display físico, sin GPU). El proyecto es **
 - Tests EditMode: `UNITY_BIN=/opt/unity/6000.4.5f1/Editor/Unity bash /opt/unity-setup/run-tests.sh` (usa `-runTests -testPlatform EditMode -testResults`). Tests existentes en `Assets/_Project/01_Gameplay/Map/Editor/MapPreviewTextureBuilderTests.cs`.
 - Ejecutar el juego: en un VM headless usa batchmode con display virtual (`xvfb-run`); Play mode gráfico interactivo no está disponible sin display. Para lógica de juego, EditMode/PlayMode tests son la vía fiable.
 
+### MCP for Unity (skills de `.cursor/skills`)
+- Las skills de Unity (`ping`, `screenshot-game-view`, `gameobject-find`, etc.) usan el CLI **`unity-mcp-cli`** (ya instalado en `~/.npm-global/bin`, en el PATH vía `~/.bashrc`; alternativa: `npx unity-mcp-cli`). El plugin `com.coplaydev.unity-mcp` ya está en `Packages/manifest.json`.
+- **MCP NO evita la licencia:** el CLI habla por HTTP con un **Unity Editor vivo** que expone el bridge MCP (`unity-mcp-cli` apunta a `http://localhost:<puerto>`; sin Editor devuelve `Connection refused ... Start Unity Editor with the MCP plugin first`). Ese Editor necesita licencia activada igual que el batchmode.
+- Flujo para usar MCP en headless: activar licencia → lanzar el Editor con el bridge y mantenerlo vivo bajo display virtual, p. ej. `xvfb-run -a "$UNITY_BIN" -projectPath /workspace &` (o `unity-mcp-cli open /workspace`) → luego usar las skills / `unity-mcp-cli run-system-tool ...`.
+
 ### Notas
-- La inspección en vivo vía MCP for Unity (`localhost:8090`, ver `README.md`) solo funciona con un Editor abierto con el plugin; no está activa por defecto en el VM.
+- La inspección en vivo vía MCP for Unity (ver `README.md`) solo funciona con un Editor abierto con el plugin; no está activa por defecto en el VM.
 - El primer import del proyecto (~500MB de Assets) tarda; no lo interrumpas. `Library/` está en `.gitignore` y se regenera.
