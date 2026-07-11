@@ -162,6 +162,15 @@ namespace Project.Gameplay.Map
         [Tooltip("Masas montañosas macro (0–4 en lobby). Se aplica al MapGen tras compilar el match.")]
         [Range(0, 12)] public int lobbyMacroMountainMasses = 2;
 
+        [Tooltip("Índice de arquetipo de mapa aplicado desde el lobby (0=Continental … 3=Drylands).")]
+        [HideInInspector] public int lobbyMapArchetypeIndex;
+
+        [Tooltip("True si el jugador movió ríos/lagos/agua % tras elegir arquetipo.")]
+        [HideInInspector] public bool lobbyHydrologyDirty;
+
+        [Tooltip("True si el jugador movió montañas/relieve tras elegir arquetipo.")]
+        [HideInInspector] public bool lobbyTerrainDirty;
+
         [Header("Inicio de partida")]
         [Tooltip("Prefab del aldeano inicial (3 por jugador). Si está vacío, se usa startingVillagerUnitSO.prefab.")]
         public GameObject startingVillagerPrefab;
@@ -813,7 +822,7 @@ namespace Project.Gameplay.Map
         {
             return new MapGenerationRuntimeContext
             {
-                applySceneHydrologyOverrides = preferSceneHydrologyOverrides,
+                applySceneHydrologyOverrides = preferSceneHydrologyOverrides && lobbyHydrologyDirty,
                 sceneRiverCount = riverCount,
                 sceneLakeCount = lakeCount,
                 sceneMaxLakeCells = maxLakeCells,

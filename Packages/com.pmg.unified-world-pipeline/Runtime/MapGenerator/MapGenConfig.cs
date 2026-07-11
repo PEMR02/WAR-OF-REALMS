@@ -93,6 +93,18 @@ namespace Project.Gameplay.Map.Generator
         public bool uwpOwnedVisualPolicy = false;
         [Tooltip("Pipeline experimental lake-first: main → lagos válidos lejos del main → tributario outlet→confluencia; validación previa a raster/mesh/carve.")]
         public bool uwpLakeFirstHydrologyPipeline = false;
+        [Tooltip("Tras lake-first: tributarios InlandFeeder (interior→main) alejados de lake-spill.")]
+        public bool uwpLakeFirstSupplementalEnabled = true;
+        [Tooltip("InlandFeeder: -1 = auto según tamaño de mapa; 0 = desactivar colocación inland.")]
+        public int inlandFeederTargetCount = -1;
+        [Range(12, 48)] public int inlandFeederMinSeparationFromLakeTribCells = 24;
+        [Range(8, 32)] public int inlandFeederMinConfluenceSpacingCells = 16;
+        [Tooltip("InlandFeeder/HeadwaterFeeder: decor PF_Stone en origen interior (mismo prefab que vados).")]
+        public bool inlandFeederSourceDecorEnabled = true;
+        [Range(2, 14)] public int inlandFeederSourceDecorCells = 10;
+        [Range(6, 64)] public int inlandFeederSourceDecorStoneCount = 10;
+        [Tooltip("HeadwaterFeeder: -1 = auto; 0 = desactivar cauces cortos trib→trib.")]
+        public int headwaterFeederTargetCount = -1;
         [Tooltip("Gizmo overlay: main, lake outlet, tributario, confluencia y carve path del pipeline lake-first.")]
         public bool debugDrawLakeFirstHydrologyOverlay = false;
         [Tooltip("Auditoría boca lago→tributario: gizmos terreno vs floorH, máscara y log [TributaryCarveMouthAudit].")]

@@ -70,6 +70,18 @@ namespace Project.Gameplay.Map.Generator
                 for (int pi = 0; pi < count; pi++)
                     RecordPoint(outH, grid, mask, w, h, ri, pi, finalLine, floorH, surface, pi / (float)Mathf.Max(1, finalLine.Count - 1));
 
+                // Headwater: el dique está en el extremo join (along alto), no en el origen.
+                bool headwater = UwpTributaryOriginUtility.GetOrigin(grid, ri) == UwpTributaryOriginKind.HeadwaterFeeder;
+                if (headwater && finalLine.Count > mouthSpan)
+                {
+                    int joinStart = Mathf.Max(0, finalLine.Count - mouthSpan);
+                    for (int pi = joinStart; pi < finalLine.Count; pi++)
+                    {
+                        float along = pi / (float)Mathf.Max(1, finalLine.Count - 1);
+                        RecordPoint(outH, grid, mask, w, h, ri, pi, finalLine, floorH, surface, along);
+                    }
+                }
+
                 if (rawLine != null && rawLine.Count >= 2)
                 {
                     int rawCount = Mathf.Min(6, rawLine.Count);

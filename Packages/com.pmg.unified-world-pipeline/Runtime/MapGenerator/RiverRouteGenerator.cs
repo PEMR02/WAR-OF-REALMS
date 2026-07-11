@@ -63,6 +63,14 @@ namespace Project.Gameplay.Map.Generator
             return Mathf.Clamp(Mathf.RoundToInt(m * 0.18f), 22, 34);
         }
 
+        static int ResolveMainPairBudgetMs(int w, int h, MapGenConfig config)
+        {
+            int minDim = Mathf.Min(w, h);
+            if (config != null && config.uwpLakeFirstHydrologyPipeline && minDim >= 320)
+                return Mathf.Clamp(160 + minDim / 6, 200, 300);
+            return MainPairBudgetMs;
+        }
+
         static int BorderMargin(int w, int h) =>
             Mathf.Max(8, Mathf.RoundToInt(Mathf.Min(w, h) * 0.08f));
 
@@ -321,22 +329,66 @@ namespace Project.Gameplay.Map.Generator
             Vector2Int start,
             Vector2Int goal,
             List<Vector2Int> path,
+            RiverMainPattern mainPattern,
             out string rejectReason)
         {
             rejectReason = null;
             if (config == null || path == null || path.Count < 2)
                 return true;
 
+            int dsb = MinChebyshevToMapEdge(start, w, h);
+            int dgb = MinChebyshevToMapEdge(goal, w, h);
+            int minDim = Mathf.Min(w, h);
+            bool lakeFirstLargeLegacyPolicy = config.uwpLakeFirstHydrologyPipeline && minDim >= 320;
+            bool lakeFirstLargeTierB = !lakeFirstLargeLegacyPolicy &&
+                config.uwpLakeFirstHydrologyPipeline &&
+                minDim >= 320 &&
+                (mainPattern == RiverMainPattern.HighlandToBorder ||
+                 mainPattern == RiverMainPattern.InteriorToBorder);
+
+            if (config.uwpLakeFirstHydrologyPipeline && !lakeFirstLargeLegacyPolicy)
+            {
+                if (lakeFirstLargeTierB)
+                {
+                    if (dgb != 0)
+                    {
+                        rejectReason = "lake_first_large_requires_goal_at_border";
+                        return false;
+                    }
+                }
+                else if (dsb != 0 || dgb != 0)
+                {
+                    rejectReason = "lake_first_requires_both_border_endpoints";
+                    return false;
+                }
+            }
+
             float mapDiag = Mathf.Sqrt(w * (float)w + h * (float)h);
             float pathDiagRatio = path.Count / Mathf.Max(1f, mapDiag);
-            if (pathDiagRatio < Mathf.Clamp(config.riverMainMinPathToMapDiagRatio, 0.25f, 0.75f))
+            float minRatioRequired = Mathf.Clamp(config.riverMainMinPathToMapDiagRatio, 0.25f, 0.75f);
+            if (lakeFirstLargeLegacyPolicy)
+                minRatioRequired = Mathf.Min(minRatioRequired, 0.36f);
+            else if (config.uwpLakeFirstHydrologyPipeline && minDim >= 320 &&
+                mainPattern == RiverMainPattern.BorderToBorder)
+                minRatioRequired = Mathf.Min(minRatioRequired, 0.36f);
+            if (pathDiagRatio < minRatioRequired)
             {
                 rejectReason = "path_too_short_vs_diag";
                 return false;
             }
 
             float centrality = MainRouteCenterMissNormalized(path, w, h);
-            if (Mathf.Min(w, h) >= 48 && centrality > 0.30f)
+            float centralityLimit = 0.30f;
+            if (config.uwpLakeFirstHydrologyPipeline && !lakeFirstLargeLegacyPolicy)
+            {
+                centralityLimit = lakeFirstLargeTierB
+                    ? 0.55f
+                    : (dsb == 0 && dgb == 0
+                        ? (minDim >= 320 && mainPattern == RiverMainPattern.BorderToBorder ? 0.52f : 0.48f)
+                        : 0.30f);
+            }
+
+            if (Mathf.Min(w, h) >= 48 && centrality > centralityLimit)
             {
                 rejectReason = "path_misses_central_map_band";
                 return false;
@@ -344,7 +396,6 @@ namespace Project.Gameplay.Map.Generator
 
             if (config.lakeCount <= 0 && config.riverMainRetryIfSourceTooFarFromBorder)
             {
-                int dsb = MinChebyshevToMapEdge(start, w, h);
                 int maxSrc = Mathf.Clamp(config.riverMainMaxSourceDistanceFromBorderWhenNoLakeCells, 0, 48);
                 if (dsb > maxSrc)
                 {
@@ -506,6 +557,103 @@ namespace Project.Gameplay.Map.Generator
 
             // Downhill ya entregó centerline utilizable.
             if (centerlineCellSpace == null && pathCells != null && pathCells.Count >= 2)
+            {
+                centerlineCellSpace = new List<Vector2>(pathCells.Count);
+                for (int i = 0; i < pathCells.Count; i++)
+                {
+                    var c = pathCells[i];
+                    centerlineCellSpace.Add(new Vector2(c.x + 0.5f, c.y + 0.5f));
+                }
+
+                fordCells = SimpleRiverPathGenerator.BuildFordAlongPath(pathCells, config, rng, w, h);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>HeadwaterFeeder: cauce corto que une a un tributario receptor (no al troncal).</summary>
+        public static bool TryPlaceUwpHeadwaterFeederRoute(
+            GridSystem grid,
+            MapGenConfig config,
+            IRng rng,
+            int riverSlot,
+            int receiverRiverIndex,
+            int riverAttempt,
+            HashSet<long> occupiedRiverCells,
+            out List<Vector2Int> pathCells,
+            out List<Vector2> centerlineCellSpace,
+            out List<Vector2Int> fordCells,
+            out string rejectReason)
+        {
+            pathCells = null;
+            centerlineCellSpace = null;
+            fordCells = null;
+            rejectReason = null;
+
+            if (grid == null || config == null || rng == null || receiverRiverIndex <= 0 ||
+                grid.RiverCenterlinesCellSpace == null || receiverRiverIndex >= grid.RiverCenterlinesCellSpace.Count)
+            {
+                rejectReason = "invalid_receiver";
+                return false;
+            }
+
+            LastTributaryConfluencePlanValid = false;
+            int w = grid.Width;
+            int h = grid.Height;
+            // Headwater: permitir cruzar corredor ocupado ligero; el filtro de join ya evita against-current.
+            if (!TryPlaceTributaryProceduralHybrid(
+                    grid,
+                    config,
+                    w,
+                    h,
+                    rng,
+                    riverSlot,
+                    riverAttempt,
+                    avoidCrossingCorridor: false,
+                    occupiedRiverCells,
+                    logRoute: false,
+                    out _,
+                    out pathCells,
+                    out _,
+                    out _,
+                    out rejectReason,
+                    receiverRiverIndex,
+                    headwaterFeederPlacement: true))
+            {
+                rejectReason = string.IsNullOrEmpty(rejectReason) ? "headwater_procedural_exhausted" : rejectReason;
+                return false;
+            }
+
+            int maxCells = Mathf.Clamp(Mathf.RoundToInt(Mathf.Min(w, h) * 0.48f), 40, 128);
+            if (pathCells != null && pathCells.Count > maxCells)
+            {
+                // Conservar la cola hacia la confluencia; acortar desde la fuente.
+                int remove = pathCells.Count - maxCells;
+                pathCells.RemoveRange(0, remove);
+                if (pathCells.Count < 8)
+                {
+                    rejectReason = "headwater_too_long";
+                    pathCells = null;
+                    return false;
+                }
+            }
+
+            if (TryFinalizeTributaryRouteArtifacts(
+                    grid,
+                    config,
+                    rng,
+                    riverSlot,
+                    w,
+                    h,
+                    pathCells,
+                    relaxedMinLength: true,
+                    out centerlineCellSpace,
+                    out fordCells,
+                    out rejectReason))
+                return true;
+
+            if (pathCells != null && pathCells.Count >= 2)
             {
                 centerlineCellSpace = new List<Vector2>(pathCells.Count);
                 for (int i = 0; i < pathCells.Count; i++)
@@ -1847,7 +1995,7 @@ namespace Project.Gameplay.Map.Generator
             int lateralLog = LateralDeltaForLog(w, h, start, goal);
             bool meanderTried = false;
             string waypointFailReason = null;
-            long pairDeadline = MonotonicMs() + MainPairBudgetMs;
+            long pairDeadline = MonotonicMs() + ResolveMainPairBudgetMs(w, h, routeConfig);
 
             if (TryBuildWaypointSegmentedMainPath(
                     grid,
@@ -3655,7 +3803,9 @@ namespace Project.Gameplay.Map.Generator
             out List<Vector2Int> path,
             out Vector2Int logStart,
             out bool touchesRiver,
-            out string rejectReason)
+            out string rejectReason,
+            int receiverRiverIndex = 0,
+            bool headwaterFeederPlacement = false)
         {
             expandedNodes = 0;
             path = null;
@@ -3664,26 +3814,45 @@ namespace Project.Gameplay.Map.Generator
             rejectReason = null;
 
             var candidatePlans = new List<RiverConfluencePlan>(64);
-            int candidateCount = RiverConfluenceUtility.BuildConfluenceCandidatePlanList(grid, config, rng, candidatePlans);
+            int candidateCount = receiverRiverIndex > 0
+                ? RiverConfluenceUtility.BuildConfluenceCandidatePlanListForReceiver(
+                    grid, config, rng, receiverRiverIndex, candidatePlans)
+                : RiverConfluenceUtility.BuildConfluenceCandidatePlanList(grid, config, rng, candidatePlans);
             if (candidateCount < 1)
             {
                 rejectReason = "no_candidates";
                 return false;
             }
 
-            int candLimit = config != null && config.uwpOwnedVisualPolicy
+            int candLimit = headwaterFeederPlacement
                 ? Mathf.Min(
-                    Mathf.Clamp(Mathf.Max(config.riverTributaryProceduralCandidatesPerSlot, 8), 4, 24),
+                    Mathf.Clamp(Mathf.Max(config.riverTributaryProceduralCandidatesPerSlot, 16), 8, 32),
                     candidatePlans.Count)
-                : Mathf.Min(
-                    Mathf.Clamp(Mathf.Max(config.riverTributaryProceduralCandidatesPerSlot, 24), 4, 64),
-                    candidatePlans.Count);
-            int proceduralMin = Mathf.Clamp(config.riverTributaryProceduralMinCells, 6, 24);
-            int maxSourceDist = Mathf.Clamp(
-                Mathf.Max(config.riverTributaryProceduralMaxSourceDistCells, Mathf.RoundToInt(Mathf.Min(w, h) * 0.40f)),
-                16,
-                128);
-            var recvOcc = RiverDendriticUtility.BuildOccupiedFromRiverIndex(grid, 0, config);
+                : config != null && config.uwpOwnedVisualPolicy
+                    ? Mathf.Min(
+                        Mathf.Clamp(Mathf.Max(config.riverTributaryProceduralCandidatesPerSlot, 8), 4, 24),
+                        candidatePlans.Count)
+                    : Mathf.Min(
+                        Mathf.Clamp(Mathf.Max(config.riverTributaryProceduralCandidatesPerSlot, 24), 4, 64),
+                        candidatePlans.Count);
+            int proceduralMin = headwaterFeederPlacement
+                ? Mathf.Clamp(config.riverTributaryProceduralMinCells, 6, 18)
+                : receiverRiverIndex > 0
+                    ? Mathf.Clamp(config.riverTributaryProceduralMinCells, 4, 10)
+                    : Mathf.Clamp(config.riverTributaryProceduralMinCells, 6, 24);
+            int maxSourceDist = headwaterFeederPlacement
+                ? Mathf.Clamp(
+                    Mathf.Max(config.riverTributaryProceduralMaxSourceDistCells, Mathf.RoundToInt(Mathf.Min(w, h) * 0.28f)),
+                    14,
+                    72)
+                : receiverRiverIndex > 0
+                    ? Mathf.Clamp(Mathf.RoundToInt(Mathf.Min(w, h) * 0.22f), 10, 56)
+                    : Mathf.Clamp(
+                        Mathf.Max(config.riverTributaryProceduralMaxSourceDistCells, Mathf.RoundToInt(Mathf.Min(w, h) * 0.40f)),
+                        16,
+                        128);
+            int recvIdx = receiverRiverIndex > 0 ? receiverRiverIndex : 0;
+            var recvOcc = RiverDendriticUtility.BuildOccupiedFromRiverIndex(grid, recvIdx, config);
             int joinTail = Mathf.Clamp(config.riverTributaryJoinTailCells, 6, 20);
 
             float bestSoft = float.MaxValue;
@@ -3698,7 +3867,9 @@ namespace Project.Gameplay.Map.Generator
             {
                 int ci = (ciStart + ciRaw) % candLimit;
                 RiverConfluencePlan plan = candidatePlans[ci];
-                int sourcesPerConf = Mathf.Clamp(config.riverTributarySourcesPerConfluence, 3, 12);
+                int sourcesPerConf = headwaterFeederPlacement
+                    ? Mathf.Clamp(Mathf.Max(config.riverTributarySourcesPerConfluence, 6), 6, 16)
+                    : Mathf.Clamp(config.riverTributarySourcesPerConfluence, 3, 12);
 
                 for (int si = 0; si < sourcesPerConf; si++)
                 {
@@ -3726,6 +3897,17 @@ namespace Project.Gameplay.Map.Generator
                         confPt);
                     if (srcDist < 10f || srcDist > maxSourceDist)
                         continue;
+
+                    if (headwaterFeederPlacement)
+                    {
+                        Vector2 down = plan.ReceiverDownstreamDir.sqrMagnitude > 1e-6f
+                            ? plan.ReceiverDownstreamDir.normalized
+                            : Vector2.right;
+                        Vector2 srcDir = (new Vector2(source.x + 0.5f, source.y + 0.5f) - confPt).normalized;
+                        // Hemisferio no-downstream (~60°): evita uniones contra corriente sin vaciar el pool.
+                        if (Vector2.Dot(srcDir, down) > 0.50f)
+                            continue;
+                    }
 
                     if (riverSlot > 1 && ScoreTributarySourceSeparationPenalty(grid, riverSlot, source) > 2.5f)
                         continue;
@@ -3831,13 +4013,38 @@ namespace Project.Gameplay.Map.Generator
                         finalCenterline.Count - 1,
                         plan.ReceiverDownstreamDir);
 
-                    if (!RiverDendriticUtility.ValidateFinalConfluenceAngle(
-                            config,
-                            finalCenterline,
-                            finalCenterline.Count - 1,
-                            plan.ReceiverDownstreamDir,
-                            out float finalJoinAngleDeg,
-                            out string finalAngleReject))
+                    float finalJoinAngleDeg;
+                    string finalAngleReject;
+                    bool angleOk = RiverDendriticUtility.ValidateFinalConfluenceAngle(
+                        config,
+                        finalCenterline,
+                        finalCenterline.Count - 1,
+                        plan.ReceiverDownstreamDir,
+                        out finalJoinAngleDeg,
+                        out finalAngleReject);
+                    if (!angleOk && headwaterFeederPlacement)
+                    {
+                        Vector2 tribIn = RiverDendriticUtility.TributaryIncomingAt(
+                            finalCenterline, finalCenterline.Count - 1);
+                        finalJoinAngleDeg = RiverDendriticUtility.ComputeDirectedJoinAngleDeg(
+                            plan.ReceiverDownstreamDir, tribIn);
+                        bool isParallel = finalJoinAngleDeg < 20f || finalJoinAngleDeg > 160f;
+                        bool isTJunction = finalJoinAngleDeg >= 88f && finalJoinAngleDeg <= 92f;
+                        angleOk = RiverDendriticUtility.IsJoinAngleLooseAcceptable(
+                            config, finalJoinAngleDeg, isParallel, isTJunction);
+                        Vector2 downN = plan.ReceiverDownstreamDir.sqrMagnitude > 1e-6f
+                            ? plan.ReceiverDownstreamDir.normalized
+                            : Vector2.right;
+                        if (angleOk && Vector2.Dot(downN, tribIn) < 0f)
+                        {
+                            angleOk = false;
+                            finalAngleReject = "join_against_receiver_flow";
+                        }
+                        else if (angleOk)
+                            finalAngleReject = null;
+                    }
+
+                    if (!angleOk)
                     {
                         if (logRoute)
                         {
@@ -3892,7 +4099,10 @@ namespace Project.Gameplay.Map.Generator
 
                 bool betterCandidate =
                     soft < bestSoft - 0.05f ||
-                    (Mathf.Abs(soft - bestSoft) <= 0.05f && procPath.Count > bestLength);
+                    (Mathf.Abs(soft - bestSoft) <= 0.05f &&
+                     (headwaterFeederPlacement
+                         ? procPath.Count < bestLength
+                         : procPath.Count > bestLength));
 
                 if (betterCandidate)
                 {

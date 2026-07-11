@@ -3254,6 +3254,7 @@ namespace Project.Gameplay.Map.Generator
                     bool mouthZone = along >= 0.78f || along <= 0.22f;
                     bool lakeFirstMidCarveBoost = frozenTribCarve &&
                         config.uwpLakeFirstHydrologyPipeline &&
+                        UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex) &&
                         along >= 0.50f && along <= 0.76f;
 
                     float halfW = fallbackHalfW;
@@ -3287,10 +3288,18 @@ namespace Project.Gameplay.Map.Generator
                         (frozenCarve && config.uwpLakeFirstHydrologyPipeline && riverIndex > 0 &&
                          (mouthZone || TerrainCellNearLakeBody(grid, px, pz, 5)));
                     bool lakeMouthLandCarve = frozenTribCarve && config.uwpLakeFirstHydrologyPipeline &&
+                        UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex) &&
                         along <= 0.28f && IsLandCellAdjacentToLakeWater(grid, px, pz);
-                    bool effectiveRequireMask = requireMask && !lakeMouthLandCarve;
+                    // Headwater: en la boca hacia el receptor el centerline puede quedar fuera de máscara
+                    // (funcional vs Final meander). Sin bypass queda dique de tierra / Height01After alto.
+                    bool headwaterJoinLandCarve = frozenTribCarve && config.uwpLakeFirstHydrologyPipeline &&
+                        UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder &&
+                        along >= 0.70f;
+                    bool effectiveRequireMask = requireMask && !lakeMouthLandCarve && !headwaterJoinLandCarve;
+                    if (headwaterJoinLandCarve)
+                        radius = Mathf.Max(radius, endpointRadius);
                     bool forceFullDepth = frozenTribCarve || midBody;
-                    bool stampForceFullDepth = forceFullDepth || lakeFirstMidCarveBoost;
+                    bool stampForceFullDepth = forceFullDepth || lakeFirstMidCarveBoost || headwaterJoinLandCarve;
                     float stampFloorH = floorH;
                     if (lakeFirstMidCarveBoost)
                     {
@@ -3349,7 +3358,13 @@ namespace Project.Gameplay.Map.Generator
                 if (sourceLine == null || sourceLine.Count < 2)
                     continue;
 
-                List<Vector2> carveLine = DensifyUwpTributaryCarvePolyline(sourceLine);
+                bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
+                float densifyStep = 0.38f;
+                if (frozenCarve &&
+                    config.uwpLakeFirstHydrologyPipeline &&
+                    UwpTributaryOriginUtility.GetOrigin(grid, ri) == UwpTributaryOriginKind.HeadwaterFeeder)
+                    densifyStep = 0.28f;
+                List<Vector2> carveLine = DensifyUwpTributaryCarvePolyline(sourceLine, densifyStep);
 
                 float ribbonFull = ri == 0 ? mainFull : tribFull;
                 float fallbackHalfW = ribbonFull * 0.5f * cellSize;
@@ -3360,7 +3375,6 @@ namespace Project.Gameplay.Map.Generator
                     ? Mathf.Max(bodyRad + 1, Mathf.CeilToInt(mainFull * 0.22f))
                     : endpointRadius;
 
-                bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
                 bool useMeshHalfWidths = grid.RiverVisualSurfaces != null &&
                     ri < grid.RiverVisualSurfaces.Count &&
                     !grid.RiverVisualSurfaces[ri].Skipped &&
@@ -3435,6 +3449,9 @@ namespace Project.Gameplay.Map.Generator
 
             for (int ri = 1; ri < grid.RiverVisualSurfaces.Count; ri++)
             {
+                if (!UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, ri))
+                    continue;
+
                 var surface = grid.RiverVisualSurfaces[ri];
                 if (surface.Skipped || surface.FinalCenterlineCells == null || surface.FinalCenterlineCells.Count < 2)
                     continue;

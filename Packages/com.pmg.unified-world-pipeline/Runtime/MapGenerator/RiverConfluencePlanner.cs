@@ -159,6 +159,107 @@ namespace Project.Gameplay.Map.Generator
             return false;
         }
 
+        /// <summary>Candidatos de confluencia sobre un receptor distinto del troncal (tributario→tributario).</summary>
+        public static int BuildConfluenceCandidatesForReceiver(
+            GridSystem grid,
+            MapGenConfig config,
+            int receiverRiverIndex,
+            List<int> outCenterlineIndices)
+        {
+            outCenterlineIndices?.Clear();
+            if (outCenterlineIndices == null || grid?.RiverCenterlinesCellSpace == null ||
+                receiverRiverIndex <= 0 || receiverRiverIndex >= grid.RiverCenterlinesCellSpace.Count ||
+                config == null || !config.riverConfluenceEnabled)
+                return 0;
+
+            var recv = grid.RiverCenterlinesCellSpace[receiverRiverIndex];
+            if (recv == null || recv.Count < 6)
+                return 0;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int minFromEnds = Mathf.Max(3, config.riverConfluenceMinDistanceFromMainEndpointsCells / 2);
+            int spacing = Mathf.Max(6, config.riverConfluenceMinSpacingCells / 2);
+            int fordRad = Mathf.Max(0, config.riverConfluenceAvoidFordRadiusCells);
+            var existing = grid.RiverConfluences;
+
+            for (int i = minFromEnds; i <= recv.Count - 1 - minFromEnds; i++)
+            {
+                int cx = Mathf.Clamp(Mathf.RoundToInt(recv[i].x), 0, w - 1);
+                int cz = Mathf.Clamp(Mathf.RoundToInt(recv[i].y), 0, h - 1);
+                int snapR = config.uwpOwnedVisualPolicy ? 3 : 2;
+                if (!TrySnapToNearestRiverCell(grid, cx, cz, snapR, out int sx, out int sz))
+                    continue;
+                cx = sx;
+                cz = sz;
+                if (IsTooCloseToExistingConfluence(cx, cz, existing, spacing))
+                    continue;
+                if (fordRad > 0 && CellNearFord(grid, cx, cz, fordRad))
+                    continue;
+                if (!HasLandApproachNeighbor(grid, cx, cz, w, h))
+                    continue;
+
+                outCenterlineIndices.Add(i);
+            }
+
+            return outCenterlineIndices.Count;
+        }
+
+        public static int BuildConfluenceCandidatePlanListForReceiver(
+            GridSystem grid,
+            MapGenConfig config,
+            IRng rng,
+            int receiverRiverIndex,
+            List<RiverConfluencePlan> outPlans)
+        {
+            outPlans?.Clear();
+            if (outPlans == null || grid == null || config == null || !config.riverConfluenceEnabled ||
+                receiverRiverIndex <= 0 || grid.RiverCenterlinesCellSpace == null ||
+                receiverRiverIndex >= grid.RiverCenterlinesCellSpace.Count)
+                return 0;
+
+            var recv = grid.RiverCenterlinesCellSpace[receiverRiverIndex];
+            if (recv == null || recv.Count < 6)
+                return 0;
+
+            var indices = new List<int>(32);
+            if (BuildConfluenceCandidatesForReceiver(grid, config, receiverRiverIndex, indices) < 1)
+                return 0;
+
+            for (int i = indices.Count - 1; i > 0; i--)
+            {
+                int j = rng != null ? rng.NextInt(0, i + 1) : i;
+                (indices[i], indices[j]) = (indices[j], indices[i]);
+            }
+
+            int w = grid.Width;
+            int h = grid.Height;
+            for (int k = 0; k < indices.Count; k++)
+            {
+                int recvIdx = indices[k];
+                int cx = Mathf.Clamp(Mathf.RoundToInt(recv[recvIdx].x), 0, w - 1);
+                int cz = Mathf.Clamp(Mathf.RoundToInt(recv[recvIdx].y), 0, h - 1);
+                if (!TrySnapToNearestRiverCell(grid, cx, cz, config.uwpOwnedVisualPolicy ? 3 : 2, out cx, out cz))
+                    continue;
+                Vector2 downstream = ReceiverDownstreamAt(recv, recvIdx);
+                if (downstream.sqrMagnitude < 1e-6f)
+                    continue;
+                downstream.Normalize();
+                outPlans.Add(new RiverConfluencePlan
+                {
+                    ReceiverId = receiverRiverIndex,
+                    ConfluenceCell = new Vector2Int(cx, cz),
+                    ReceiverDownstreamDir = downstream,
+                    MainCenterlineIndex = recvIdx,
+                    DistFromReceiverStart = recvIdx,
+                    DistFromReceiverEnd = recv.Count - 1 - recvIdx,
+                    Valid = true
+                });
+            }
+
+            return outPlans.Count;
+        }
+
         public static int BuildConfluenceCandidatePlanList(
             GridSystem grid,
             MapGenConfig config,
@@ -289,7 +390,8 @@ namespace Project.Gameplay.Map.Generator
             List<Vector2Int> path,
             List<Vector2> tributaryCenterline,
             Vector2Int joinCell,
-            string source)
+            string source,
+            int receiverRiverIndex = 0)
         {
             if (grid == null || config == null || !config.riverConfluenceEnabled ||
                 tributaryRiverIndex <= 0 || path == null || path.Count < 2)
@@ -298,16 +400,20 @@ namespace Project.Gameplay.Map.Generator
             if (grid.RiverConfluences == null)
                 grid.RiverConfluences = new List<RiverConfluenceNode>();
 
-            var mainLine = grid.RiverCenterlinesCellSpace[0];
-            if (mainLine == null || mainLine.Count < 2)
+            int recvIdx = receiverRiverIndex <= 0 ? 0 : receiverRiverIndex;
+            if (grid.RiverCenterlinesCellSpace == null || recvIdx >= grid.RiverCenterlinesCellSpace.Count)
                 return false;
 
-            int mainClIdx = ClosestCenterlineIndex(mainLine, joinCell);
+            var recvLine = grid.RiverCenterlinesCellSpace[recvIdx];
+            if (recvLine == null || recvLine.Count < 2)
+                return false;
+
+            int mainClIdx = ClosestCenterlineIndex(recvLine, joinCell);
             int tribClIdx = tributaryCenterline != null && tributaryCenterline.Count > 0
                 ? ClosestCenterlineIndex(tributaryCenterline, joinCell)
                 : path.Count - 1;
 
-            Vector2 recvDown = ReceiverDownstreamAt(mainLine, mainClIdx).normalized;
+            Vector2 recvDown = ReceiverDownstreamAt(recvLine, mainClIdx).normalized;
             Vector2 tribIn = RiverDendriticUtility.TributaryIncomingAt(tributaryCenterline, tribClIdx);
             float angle = RiverDendriticUtility.ComputeDirectedJoinAngleDeg(recvDown, tribIn);
             bool angleOk = RiverDendriticUtility.IsJoinAngleAcceptable(config, angle, out bool isParallel, out bool isTJunction);
@@ -323,12 +429,12 @@ namespace Project.Gameplay.Map.Generator
                 {
                     string rejectReason = isParallel ? "join_angle_parallel" : (isTJunction ? "join_angle_90" : "join_angle_out_of_range");
                     Debug.Log(
-                        $"[RiverConfluenceRejected] source={source} main=0 tributary={tributaryRiverIndex} " +
+                        $"[RiverConfluenceRejected] source={source} main={recvIdx} tributary={tributaryRiverIndex} " +
                         $"cell=({joinCell.x},{joinCell.y}) angleDeg={angle:F1} rejectReason={rejectReason} mergeR={mergeR}");
                     RiverDendriticUtility.LogRiverConfluenceGeometryAudit(
                         config,
                         tributaryRiverIndex,
-                        0,
+                        recvIdx,
                         angle,
                         recvDown,
                         tribIn,
@@ -343,7 +449,7 @@ namespace Project.Gameplay.Map.Generator
 
             grid.RiverConfluences.Add(new RiverConfluenceNode
             {
-                MainRiverIndex = 0,
+                MainRiverIndex = recvIdx,
                 TributaryRiverIndex = tributaryRiverIndex,
                 Cell = joinCell,
                 MainCenterlineIndex = mainClIdx,
@@ -356,12 +462,12 @@ namespace Project.Gameplay.Map.Generator
             if (config.riverConfluenceDebugLogs || config.debugLogs || config.debugHydrologyNetwork)
             {
                 Debug.Log(
-                    $"[RiverConfluenceCreated] source={source} main=0 tributary={tributaryRiverIndex} " +
+                    $"[RiverConfluenceCreated] source={source} main={recvIdx} tributary={tributaryRiverIndex} " +
                     $"cell=({joinCell.x},{joinCell.y}) angleDeg={angle:F1} valid={(valid ? 1 : 0)} mergeR={mergeR}");
                 RiverDendriticUtility.LogRiverConfluenceGeometryAudit(
                     config,
                     tributaryRiverIndex,
-                    0,
+                    recvIdx,
                     angle,
                     recvDown,
                     tribIn,

@@ -756,6 +756,14 @@ namespace Project.Gameplay.Map.Generator
                 wbs *= 0.45f;
             }
 
+            if (config.uwpLakeFirstHydrologyPipeline && config.riverMainAllowBorderToBorder && hasBorderExitPool)
+            {
+                wb = Mathf.Max(wb, 2.5f);
+                wl *= 0.22f;
+                wbs *= 0.28f;
+                wi *= 0.32f;
+            }
+
             var scored = new List<(RiverMainPattern p, float key)>();
 
             void Offer(RiverMainPattern p, float weight)
@@ -830,22 +838,31 @@ namespace Project.Gameplay.Map.Generator
             return arr;
         }
 
-        static bool TryBuildMainRiverTypedAnchorsFirst(
+        /// <summary>Intenta colocar main river por lote de patrones (Tier A/B lake-first).</summary>
+        static bool TryMainRiverPatternBatch(
+            IReadOnlyList<RiverMainPattern> patterns,
+            string spanTier,
+            int minDim,
             GridSystem grid,
             int w,
             int h,
             MapGenConfig config,
             IRng rng,
+            List<Vector2Int> borderExits,
+            List<Vector2Int> highlandSprings,
+            List<Vector2Int> mountainSprings,
+            List<Vector2Int> interiorBasins,
+            IReadOnlyList<Vector2Int> lakeList,
             int riverSlot,
             int riverAttempt,
+            bool logRoute,
             bool avoidCrossingCorridor,
             HashSet<long> occupiedRiverCells,
-            bool logRoute,
             bool isMainRiver,
             int minMain,
             int maxMain,
-            int borderInsetCells,
-            int cornerExcludedCells,
+            ref int pairIndex,
+            ref int policyRetryCount,
             out int expandedNodes,
             out float finalCost,
             out float sumNearRiverPen,
@@ -864,52 +881,17 @@ namespace Project.Gameplay.Map.Generator
             logGoal = default;
             rejectReason = null;
 
-            BuildMainAnchorPools(
-                grid,
-                w,
-                h,
-                config,
-                rng,
-                borderInsetCells,
-                cornerExcludedCells,
-                logRoute || config.debugHydrologyNetwork || config.debugLogs,
-                out List<Vector2Int> borderExits,
-                out List<Vector2Int> highlandSprings,
-                out List<Vector2Int> mountainSprings,
-                out List<Vector2Int> interiorBasins,
-                out bool anyMountain);
-
-            var lakeList = grid.PlannedLakeSinkCandidates;
-            int lakeN = lakeList != null ? lakeList.Count : 0;
-
-            if (logRoute || config.debugHydrologyNetwork || config.debugLogs)
+            for (int pi = 0; pi < patterns.Count; pi++)
             {
-                UnityEngine.Debug.Log(
-                    $"[RiverAnchorCandidates] highland={highlandSprings.Count} mountain={mountainSprings.Count} " +
-                    $"border={borderExits.Count} lakeSink={lakeN} basin={interiorBasins.Count} anyMountainCell={(anyMountain ? 1 : 0)}");
-            }
-
-            bool hasHigh = highlandSprings.Count > 0;
-            bool hasMt = mountainSprings.Count > 0;
-            bool hasBas = interiorBasins.Count > 0;
-            bool hasLake = lakeN > 0;
-
-            RiverMainPattern[] order = BuildWeightedPatternOrder(
-                rng,
-                config,
-                hasMt,
-                hasLake,
-                hasHigh,
-                hasBas,
-                borderExits.Count > 0);
-
-            int pairIndex = 0;
-            int policyRetryCount = 0;
-            foreach (RiverMainPattern pat in order)
-            {
+                RiverMainPattern pat = patterns[pi];
                 int tries = pat == RiverMainPattern.BorderToBorder
-                    ? 28
-                    : (pat == RiverMainPattern.HighlandToLake || pat == RiverMainPattern.BorderToLake ? 22 : 16);
+                    ? (config.uwpLakeFirstHydrologyPipeline
+                        ? (minDim >= 320 ? 52 : 40)
+                        : 28)
+                    : (config.uwpLakeFirstHydrologyPipeline && spanTier == "B" &&
+                       (pat == RiverMainPattern.HighlandToBorder || pat == RiverMainPattern.InteriorToBorder)
+                        ? 24
+                        : (pat == RiverMainPattern.HighlandToLake || pat == RiverMainPattern.BorderToLake ? 22 : 16));
                 for (int k = 0; k < tries; k++)
                 {
                     if (!TryPickEndpointsForPattern(
@@ -966,7 +948,8 @@ namespace Project.Gameplay.Map.Generator
                             gk,
                             config))
                     {
-                        if (!TryValidateMainRouteForPolicy(config, w, h, logStart, logGoal, path, out string policyReject))
+                        if (!TryValidateMainRouteForPolicy(
+                                config, w, h, logStart, logGoal, path, pat, out string policyReject))
                         {
                             policyRetryCount++;
                             rejectReason = policyReject;
@@ -1000,7 +983,16 @@ namespace Project.Gameplay.Map.Generator
                         NoteLastMainRouteAnchorsForBorderStretch(pat, sk, gk);
 
                         if (logRoute || config.debugHydrologyNetwork || config.debugLogs)
+                        {
                             LogRiverMainPattern(riverSlot, riverAttempt, pat, sk, gk, logStart, logGoal, grid, w, h);
+                            if (config.uwpLakeFirstHydrologyPipeline && !string.IsNullOrEmpty(spanTier))
+                            {
+                                int degraded = spanTier == "B" ? 1 : 0;
+                                UnityEngine.Debug.Log(
+                                    $"[LakeFirstMainSpan] mainSpanTier={spanTier} mainSpanDegraded={degraded} " +
+                                    $"pattern={pat} minDim={minDim} pathCells={path.Count} seed={config.seed}");
+                            }
+                        }
 
                         if (config.riverMainEndpointAuditEnabled)
                         {
@@ -1039,6 +1031,186 @@ namespace Project.Gameplay.Map.Generator
             return false;
         }
 
+        static bool TryBuildMainRiverTypedAnchorsFirst(
+            GridSystem grid,
+            int w,
+            int h,
+            MapGenConfig config,
+            IRng rng,
+            int riverSlot,
+            int riverAttempt,
+            bool avoidCrossingCorridor,
+            HashSet<long> occupiedRiverCells,
+            bool logRoute,
+            bool isMainRiver,
+            int minMain,
+            int maxMain,
+            int borderInsetCells,
+            int cornerExcludedCells,
+            out int expandedNodes,
+            out float finalCost,
+            out float sumNearRiverPen,
+            out float sumHeightBias,
+            out List<Vector2Int> path,
+            out Vector2Int logStart,
+            out Vector2Int logGoal,
+            out string rejectReason,
+            IReadOnlyList<RiverMainPattern> lakeFirstTierPatterns = null,
+            string lakeFirstSpanTier = null)
+        {
+            expandedNodes = 0;
+            finalCost = 0f;
+            sumNearRiverPen = 0f;
+            sumHeightBias = 0f;
+            path = null;
+            logStart = default;
+            logGoal = default;
+            rejectReason = null;
+
+            BuildMainAnchorPools(
+                grid,
+                w,
+                h,
+                config,
+                rng,
+                borderInsetCells,
+                cornerExcludedCells,
+                logRoute || config.debugHydrologyNetwork || config.debugLogs,
+                out List<Vector2Int> borderExits,
+                out List<Vector2Int> highlandSprings,
+                out List<Vector2Int> mountainSprings,
+                out List<Vector2Int> interiorBasins,
+                out bool anyMountain);
+
+            var lakeList = grid.PlannedLakeSinkCandidates;
+            int lakeN = lakeList != null ? lakeList.Count : 0;
+
+            if (logRoute || config.debugHydrologyNetwork || config.debugLogs)
+            {
+                UnityEngine.Debug.Log(
+                    $"[RiverAnchorCandidates] highland={highlandSprings.Count} mountain={mountainSprings.Count} " +
+                    $"border={borderExits.Count} lakeSink={lakeN} basin={interiorBasins.Count} anyMountainCell={(anyMountain ? 1 : 0)}");
+            }
+
+            bool hasHigh = highlandSprings.Count > 0;
+            bool hasMt = mountainSprings.Count > 0;
+            bool hasBas = interiorBasins.Count > 0;
+            bool hasLake = lakeN > 0;
+
+            RiverMainPattern[] order = BuildWeightedPatternOrder(
+                rng,
+                config,
+                hasMt,
+                hasLake,
+                hasHigh,
+                hasBas,
+                borderExits.Count > 0);
+
+            int pairIndex = 0;
+            int policyRetryCount = 0;
+            int minDim = Mathf.Min(w, h);
+
+            if (config.uwpLakeFirstHydrologyPipeline)
+            {
+                IReadOnlyList<RiverMainPattern> tierPatterns;
+                string spanTier;
+                if (lakeFirstTierPatterns != null)
+                {
+                    tierPatterns = lakeFirstTierPatterns;
+                    spanTier = string.IsNullOrEmpty(lakeFirstSpanTier) ? "B" : lakeFirstSpanTier;
+                }
+                else if (minDim >= 320)
+                {
+                    tierPatterns = order;
+                    spanTier = "L";
+                }
+                else
+                {
+                    tierPatterns = new[] { RiverMainPattern.BorderToBorder };
+                    spanTier = "A";
+                }
+
+                if (TryMainRiverPatternBatch(
+                        tierPatterns,
+                        spanTier,
+                        minDim,
+                        grid,
+                        w,
+                        h,
+                        config,
+                        rng,
+                        borderExits,
+                        highlandSprings,
+                        mountainSprings,
+                        interiorBasins,
+                        lakeList,
+                        riverSlot,
+                        riverAttempt,
+                        logRoute,
+                        avoidCrossingCorridor,
+                        occupiedRiverCells,
+                        isMainRiver,
+                        minMain,
+                        maxMain,
+                        ref pairIndex,
+                        ref policyRetryCount,
+                        out expandedNodes,
+                        out finalCost,
+                        out sumNearRiverPen,
+                        out sumHeightBias,
+                        out path,
+                        out logStart,
+                        out logGoal,
+                        out rejectReason))
+                    return true;
+
+                if (lakeFirstTierPatterns == null &&
+                    (logRoute || config.debugHydrologyNetwork || config.debugLogs))
+                {
+                    UnityEngine.Debug.Log(
+                        $"[LakeFirstMainSpan] mainSpanTier=A failed minDim={minDim} delegating=legacy_C seed={config.seed}");
+                }
+
+                return false;
+            }
+
+            if (TryMainRiverPatternBatch(
+                    order,
+                    null,
+                    minDim,
+                    grid,
+                    w,
+                    h,
+                    config,
+                    rng,
+                    borderExits,
+                    highlandSprings,
+                    mountainSprings,
+                    interiorBasins,
+                    lakeList,
+                    riverSlot,
+                    riverAttempt,
+                    logRoute,
+                    avoidCrossingCorridor,
+                    occupiedRiverCells,
+                    isMainRiver,
+                    minMain,
+                    maxMain,
+                    ref pairIndex,
+                    ref policyRetryCount,
+                    out expandedNodes,
+                    out finalCost,
+                    out sumNearRiverPen,
+                    out sumHeightBias,
+                    out path,
+                    out logStart,
+                    out logGoal,
+                    out rejectReason))
+                return true;
+
+            return false;
+        }
+
         static bool TryBuildMainBorderRouteLegacyBody(
             GridSystem grid,
             int w,
@@ -1056,6 +1228,7 @@ namespace Project.Gameplay.Map.Generator
             int margin,
             int cornerExcluded,
             int edgeInset,
+            int randomPairBudget,
             out int expandedNodes,
             out float finalCost,
             out float sumNearRiverPen,
@@ -1083,8 +1256,9 @@ namespace Project.Gameplay.Map.Generator
             List<Vector2Int> chosenPath = null;
             Vector2Int chosenStart = default;
             Vector2Int chosenGoal = default;
+            int pairBudget = randomPairBudget > 0 ? randomPairBudget : RandomAnchorPairsMax;
 
-            for (int pair = 0; pair < RandomAnchorPairsMax; pair++)
+            for (int pair = 0; pair < pairBudget; pair++)
             {
                 Vector2Int start;
                 Vector2Int goal;
@@ -1154,6 +1328,7 @@ namespace Project.Gameplay.Map.Generator
                         RiverAnchorKind.BorderExit);
 
                     if (logRoute || (config != null && (config.debugHydrologyNetwork || config.debugLogs)))
+                    {
                         LogRiverMainPattern(
                             riverSlot,
                             riverAttempt,
@@ -1165,6 +1340,14 @@ namespace Project.Gameplay.Map.Generator
                             grid,
                             w,
                             h);
+                        if (config != null && config.uwpLakeFirstHydrologyPipeline)
+                        {
+                            int minDimLegacy = Mathf.Min(w, h);
+                            UnityEngine.Debug.Log(
+                                $"[LakeFirstMainSpan] mainSpanTier=C mainSpanDegraded=0 " +
+                                $"pattern=BorderToBorder minDim={minDimLegacy} pathCells={path?.Count ?? 0} seed={config.seed}");
+                        }
+                    }
                     return true;
                 }
 
@@ -1232,6 +1415,7 @@ namespace Project.Gameplay.Map.Generator
                         RiverAnchorKind.BorderExit);
 
                     if (logRoute || (config != null && (config.debugHydrologyNetwork || config.debugLogs)))
+                    {
                         LogRiverMainPattern(
                             riverSlot,
                             riverAttempt,
@@ -1243,6 +1427,14 @@ namespace Project.Gameplay.Map.Generator
                             grid,
                             w,
                             h);
+                        if (config != null && config.uwpLakeFirstHydrologyPipeline)
+                        {
+                            int minDimLegacy = Mathf.Min(w, h);
+                            UnityEngine.Debug.Log(
+                                $"[LakeFirstMainSpan] mainSpanTier=C mainSpanDegraded=0 " +
+                                $"pattern=BorderToBorder minDim={minDimLegacy} pathCells={path?.Count ?? 0} seed={config.seed}");
+                        }
+                    }
                     return true;
                 }
 
@@ -1286,6 +1478,16 @@ namespace Project.Gameplay.Map.Generator
             out Vector2Int logGoal,
             out string rejectReason)
         {
+            expandedNodes = 0;
+            finalCost = 0f;
+            sumNearRiverPen = 0f;
+            sumHeightBias = 0f;
+            path = null;
+            logStart = default;
+            logGoal = default;
+            rejectReason = null;
+
+            int minDim = Mathf.Min(w, h);
             int minMain = ResolveMainMinPathCells(config, w, h);
             int maxMain = ResolveMainMaxPathCells(config, w, h);
             int margin = BorderMargin(w, h);
@@ -1294,6 +1496,74 @@ namespace Project.Gameplay.Map.Generator
             int borderInset = config != null
                 ? Mathf.Clamp(config.riverMainBorderExitInsetCells, 0, Mathf.Min(w, h) / 3)
                 : 0;
+            bool lakeFirstLarge = config != null && config.uwpLakeFirstHydrologyPipeline && minDim >= 320;
+            int legacyPairBudget = lakeFirstLarge ? Mathf.Clamp(minDim / 24, 16, 28) : 0;
+
+            if (lakeFirstLarge)
+            {
+                if (logRoute || config.debugHydrologyNetwork || config.debugLogs)
+                {
+                    UnityEngine.Debug.Log(
+                        $"[LakeFirstMainSpan] mainSpanTier=C preferred minDim={minDim} pairBudget={legacyPairBudget} seed={config.seed}");
+                }
+
+                if (TryBuildMainBorderRouteLegacyBody(
+                        grid,
+                        w,
+                        h,
+                        config,
+                        rng,
+                        riverSlot,
+                        riverAttempt,
+                        avoidCrossingCorridor,
+                        occupiedRiverCells,
+                        logRoute,
+                        isMainRiver,
+                        minMain,
+                        maxMain,
+                        margin,
+                        cornerExcluded,
+                        edgeInset,
+                        legacyPairBudget,
+                        out expandedNodes,
+                        out finalCost,
+                        out sumNearRiverPen,
+                        out sumHeightBias,
+                        out path,
+                        out logStart,
+                        out logGoal,
+                        out rejectReason))
+                    return true;
+
+                if (config != null &&
+                    TryBuildMainRiverTypedAnchorsFirst(
+                        grid,
+                        w,
+                        h,
+                        config,
+                        rng,
+                        riverSlot,
+                        riverAttempt,
+                        avoidCrossingCorridor,
+                        occupiedRiverCells,
+                        logRoute,
+                        isMainRiver,
+                        minMain,
+                        maxMain,
+                        borderInset,
+                        Mathf.Max(cornerExcluded, borderInset),
+                        out expandedNodes,
+                        out finalCost,
+                        out sumNearRiverPen,
+                        out sumHeightBias,
+                        out path,
+                        out logStart,
+                        out logGoal,
+                        out rejectReason))
+                    return true;
+
+                return false;
+            }
 
             if (config != null &&
                 TryBuildMainRiverTypedAnchorsFirst(
@@ -1322,31 +1592,35 @@ namespace Project.Gameplay.Map.Generator
                     out rejectReason))
                 return true;
 
-            return TryBuildMainBorderRouteLegacyBody(
-                grid,
-                w,
-                h,
-                config,
-                rng,
-                riverSlot,
-                riverAttempt,
-                avoidCrossingCorridor,
-                occupiedRiverCells,
-                logRoute,
-                isMainRiver,
-                minMain,
-                maxMain,
-                margin,
-                cornerExcluded,
-                edgeInset,
-                out expandedNodes,
-                out finalCost,
-                out sumNearRiverPen,
-                out sumHeightBias,
-                out path,
-                out logStart,
-                out logGoal,
-                out rejectReason);
+            if (TryBuildMainBorderRouteLegacyBody(
+                    grid,
+                    w,
+                    h,
+                    config,
+                    rng,
+                    riverSlot,
+                    riverAttempt,
+                    avoidCrossingCorridor,
+                    occupiedRiverCells,
+                    logRoute,
+                    isMainRiver,
+                    minMain,
+                    maxMain,
+                    margin,
+                    cornerExcluded,
+                    edgeInset,
+                    legacyPairBudget,
+                    out expandedNodes,
+                    out finalCost,
+                    out sumNearRiverPen,
+                    out sumHeightBias,
+                    out path,
+                    out logStart,
+                    out logGoal,
+                    out rejectReason))
+                return true;
+
+            return false;
         }
 
         public static void PrioritizePlannedLakeSinksNearTerminus(GridSystem grid, Vector2Int goalLand)

@@ -3500,6 +3500,145 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
+        /// <summary>
+        /// Lake-first InlandFeeder/HeadwaterFeeder: PF_Stone en orillas del origen interior (estilo vados).
+        /// </summary>
+        private static void ScatterInlandFeederSourceDecoration(
+            GridSystem grid,
+            MapGenConfig config,
+            float waterY,
+            float cellSize,
+            List<GameObject> crossingPrefabs,
+            Dictionary<GameObject, List<Matrix4x4>> crossingMatsByPrefab)
+        {
+            if (grid == null || config == null || !config.uwpLakeFirstHydrologyPipeline ||
+                !config.inlandFeederSourceDecorEnabled)
+                return;
+            if (crossingPrefabs == null || crossingPrefabs.Count == 0 || crossingMatsByPrefab == null)
+                return;
+            if (grid.RiverOriginKinds == null || grid.RiverCenterlinesCellSpace == null)
+                return;
+
+            int decorCells = Mathf.Clamp(config.inlandFeederSourceDecorCells, 2, 14);
+            int stoneCount = Mathf.Clamp(config.inlandFeederSourceDecorStoneCount, 4, 64);
+            float yOff = Mathf.Max(0f, config.riverCrossingDecorYOffset);
+            float bankOffMin = cellSize * 1.05f;
+            float bankOffMax = cellSize * 1.65f;
+            float minSpacing = cellSize * 1.85f;
+            float minSpacingSq = minSpacing * minSpacing;
+            int prefabCount = crossingPrefabs.Count;
+
+            for (int ri = 0; ri < grid.RiverCenterlinesCellSpace.Count; ri++)
+            {
+                var originKind = UwpTributaryOriginUtility.GetOrigin(grid, ri);
+                if (originKind != UwpTributaryOriginKind.InlandFeeder &&
+                    originKind != UwpTributaryOriginKind.HeadwaterFeeder)
+                    continue;
+
+                List<Vector2> path = null;
+                if (grid.RiverVisualSurfacesBuilt && grid.RiverVisualSurfaces != null &&
+                    ri < grid.RiverVisualSurfaces.Count)
+                {
+                    var surface = grid.RiverVisualSurfaces[ri];
+                    if (!surface.Skipped && surface.FinalCenterlineCells != null &&
+                        surface.FinalCenterlineCells.Count >= 2)
+                        path = surface.FinalCenterlineCells;
+                }
+
+                if (path == null)
+                    path = grid.RiverCenterlinesCellSpace[ri];
+                if (path == null || path.Count < 2)
+                    continue;
+
+                int sourceIdx = 0;
+                int span = Mathf.Min(decorCells, path.Count);
+                int blobKey = ri ^ (config.seed * 919) ^ ((int)originKind * 131);
+                var placed = new List<Vector3>(stoneCount);
+
+                int cols = Mathf.Max(3, Mathf.RoundToInt(Mathf.Sqrt(stoneCount * 1.35f)));
+                int rows = Mathf.Max(2, Mathf.CeilToInt(stoneCount / (float)cols));
+                while (cols * rows < stoneCount)
+                    cols++;
+
+                int placedCount = 0;
+                for (int slot = 0; slot < cols * rows && placedCount < stoneCount; slot++)
+                {
+                    int ix = slot % cols;
+                    int iz = slot / cols;
+                    uint h = FordDecorHash(config.seed, blobKey, slot ^ (ix * 31337) ^ (iz * 7919));
+
+                    float ju = ((h & 1023) / 1024f) * 0.62f + 0.19f;
+                    float jv = (((h >> 10) & 1023) / 1024f) * 0.62f + 0.19f;
+                    float u = (ix + ju) / cols;
+                    float v = (iz + jv) / rows;
+
+                    int cellOffset = Mathf.Clamp(Mathf.FloorToInt(u * span), 0, span - 1);
+                    int pathIdx = sourceIdx == 0 ? cellOffset : (path.Count - 1 - cellOffset);
+
+                    Vector2 p = path[pathIdx];
+                    Vector2 pPrev = pathIdx > 0 ? path[pathIdx - 1] : p;
+                    Vector2 pNext = path[Mathf.Min(pathIdx + 1, path.Count - 1)];
+                    Vector2 dir = pNext - (pathIdx > 0 ? pPrev : p);
+                    if (dir.sqrMagnitude < 1e-6f)
+                        dir = new Vector2(1f, 0f);
+                    dir.Normalize();
+                    Vector2 perp = new Vector2(-dir.y, dir.x);
+
+                    float side = v < 0.5f ? -1f : 1f;
+                    float bankT = Mathf.Abs(v - 0.5f) * 2f;
+                    float bankDist = Mathf.Lerp(bankOffMin, bankOffMax, bankT);
+                    float wx = grid.Origin.x + p.x * cellSize + perp.x * side * bankDist;
+                    float wz = grid.Origin.z + p.y * cellSize + perp.y * side * bankDist;
+
+                    int cx = Mathf.FloorToInt(p.x + perp.x * side * (bankDist / cellSize));
+                    int cz = Mathf.FloorToInt(p.y + perp.y * side * (bankDist / cellSize));
+                    if (grid.InBoundsCell(cx, cz))
+                    {
+                        var cd = grid.GetCell(cx, cz);
+                        if (cd.type == CellType.Water || cd.type == CellType.River)
+                            continue;
+                    }
+
+                    var candidate = new Vector3(wx, waterY + yOff, wz);
+
+                    bool tooClose = false;
+                    for (int pi = 0; pi < placed.Count; pi++)
+                    {
+                        float dx = placed[pi].x - candidate.x;
+                        float dz = placed[pi].z - candidate.z;
+                        if (dx * dx + dz * dz < minSpacingSq)
+                        {
+                            tooClose = true;
+                            break;
+                        }
+                    }
+
+                    if (tooClose)
+                        continue;
+
+                    float yaw = ((h >> 8) & 255) / 255f * 360f;
+                    float sc = 0.72f + ((h >> 20) & 63) / 63f * 0.32f;
+                    int prefabIndex = (int)(h % (uint)prefabCount);
+                    var prefab = crossingPrefabs[prefabIndex];
+                    if (prefab == null)
+                        continue;
+
+                    if (!crossingMatsByPrefab.TryGetValue(prefab, out var mats))
+                    {
+                        mats = new List<Matrix4x4>();
+                        crossingMatsByPrefab[prefab] = mats;
+                    }
+
+                    mats.Add(Matrix4x4.TRS(
+                        candidate,
+                        Quaternion.Euler(0f, yaw, 0f),
+                        Vector3.one * sc));
+                    placed.Add(candidate);
+                    placedCount++;
+                }
+            }
+        }
+
         private static bool IsValidCrossingBankCell(GridSystem grid, int x, int z)
         {
             if (!grid.InBoundsCell(x, z))
@@ -4751,11 +4890,33 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
+            if (config.inlandFeederSourceDecorEnabled && config.uwpLakeFirstHydrologyPipeline)
+            {
+                var inlandPrefabs = CollectCrossingDecorationPrefabs(config);
+                if (inlandPrefabs.Count > 0)
+                {
+                    int before = 0;
+                    foreach (var kv in crossingMatsByPrefab)
+                        before += kv.Value != null ? kv.Value.Count : 0;
+                    ScatterInlandFeederSourceDecoration(
+                        grid, config, waterY, cellSize, inlandPrefabs, crossingMatsByPrefab);
+                    int after = 0;
+                    foreach (var kv in crossingMatsByPrefab)
+                        after += kv.Value != null ? kv.Value.Count : 0;
+                    if (after > before)
+                    {
+                        Debug.LogWarning(
+                            $"[InlandFeederSourceDecor] stones={after - before} prefab=PF_Stone cells={config.inlandFeederSourceDecorCells} seed={config.seed}");
+                    }
+                }
+            }
+
             foreach (var kv in crossingMatsByPrefab)
             {
                 if (kv.Key == null || kv.Value == null || kv.Value.Count == 0) continue;
                 CombineDecorationMatrices(parent, $"Water_CrossingDecor_{kv.Key.name}", kv.Value, kv.Key, waterLayer);
             }
+
             if (crossingMatsByPrefab.Count > 0)
             {
                 int created = 0;

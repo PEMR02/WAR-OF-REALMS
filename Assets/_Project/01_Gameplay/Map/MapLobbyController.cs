@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using Project.Gameplay.Map.CleanWaterPipeline;
+using Project.Gameplay.Map.Generation;
 using Project.Gameplay.Map.Generator;
 
 namespace Project.Gameplay.Map
@@ -89,6 +90,11 @@ namespace Project.Gameplay.Map
             _gen = generator;
             EnsureUiBuilt();
             PullFromGenerator();
+            if (PlayerPrefs.HasKey(PrefsPrefix + "theme"))
+            {
+                int savedTheme = Mathf.Clamp(PlayerPrefs.GetInt(PrefsPrefix + "theme", 0), 0, MapArchetypeCatalog.Count - 1);
+                ApplyArchetype(savedTheme, persistSelection: false);
+            }
             _root.SetActive(true);
         }
 
@@ -343,17 +349,38 @@ namespace Project.Gameplay.Map
             AddSectionTitle(parent, "Terreno e hidrología");
             AddIntStepper(parent, "Montañas", 0, 12,
                 () => _gen != null ? _gen.lobbyMacroMountainMasses : 2,
-                v => { if (_gen != null) _gen.lobbyMacroMountainMasses = v; },
+                v =>
+                {
+                    if (_gen != null)
+                    {
+                        _gen.lobbyMacroMountainMasses = v;
+                        _gen.lobbyTerrainDirty = true;
+                    }
+                },
                 v => $"{v}",
                 out _mtnValueLabel);
             AddIntStepper(parent, "Ríos", 0, 8,
                 () => _gen != null ? _gen.riverCount : 3,
-                v => { if (_gen != null) _gen.riverCount = v; },
+                v =>
+                {
+                    if (_gen != null)
+                    {
+                        _gen.riverCount = v;
+                        _gen.lobbyHydrologyDirty = true;
+                    }
+                },
                 v => $"{v}",
                 out _riverValueLabel);
             AddIntStepper(parent, "Lagos", 0, 12,
                 () => _gen != null ? _gen.lakeCount : 2,
-                v => { if (_gen != null) _gen.lakeCount = v; },
+                v =>
+                {
+                    if (_gen != null)
+                    {
+                        _gen.lakeCount = v;
+                        _gen.lobbyHydrologyDirty = true;
+                    }
+                },
                 v => $"{v}",
                 out _lakeValueLabel);
             _waterPercentUi = _gen != null && _gen.waterHeightRelative >= 0f && _gen.waterHeightRelative <= 1f
@@ -364,7 +391,11 @@ namespace Project.Gameplay.Map
                 v =>
                 {
                     _waterPercentUi = v;
-                    if (_gen != null) _gen.waterHeightRelative = Mathf.Clamp01(v / 100f);
+                    if (_gen != null)
+                    {
+                        _gen.waterHeightRelative = Mathf.Clamp01(v / 100f);
+                        _gen.lobbyHydrologyDirty = true;
+                    }
                 },
                 v => $"{v / 100f:0.00}",
                 out _waterValueLabel);
@@ -595,17 +626,17 @@ namespace Project.Gameplay.Map
             AddBody(aside.transform,
                 "Atajos de tuning coherente con el generador alpha/legacy. Puedes afinar después con los controles.", 11);
 
-            string[] names = { "Alpha Neutral", "Highlands", "Wetlands", "Drylands" };
+            string[] names = { "Lake First Continental", "Highlands", "Wetlands", "Drylands" };
             string[] descs = {
-                "Base técnica equilibrada; macro relieve según slider.",
+                "Base Lake First: 3 ríos, 2 lagos, relieve equilibrado.",
                 "Más relieve, más piedra y montañas.",
                 "Más agua, ríos/lagos y bosque.",
-                "Menos agua; llanuras más secas y amplias."
+                "Casi sin ríos; llanuras secas y amplias."
             };
             for (int i = 0; i < names.Length; i++)
             {
                 int idx = i;
-                CreateThemeButton(aside.transform, names[i], descs[i], () => ApplyTheme(idx));
+                CreateThemeButton(aside.transform, names[i], descs[i], () => ApplyArchetype(idx));
             }
 
             AddSectionTitle(aside.transform, "Leyenda");
@@ -931,6 +962,7 @@ namespace Project.Gameplay.Map
             _lobbyPlayerCountIndex = Mathf.Clamp(_gen.playerCount, 1, 4) - 1;
             _gen.mapCellSizeWorld = LobbyWorldCellSizeMeters;
             _spawnUiIndex = Mathf.Clamp(_gen.lobbySpawnPatternUi, 0, 2);
+            _selectedThemeIndex = Mathf.Clamp(_gen.lobbyMapArchetypeIndex, 0, MapArchetypeCatalog.Count - 1);
 
             _waterPercentUi = _gen.waterHeightRelative >= 0f && _gen.waterHeightRelative <= 1f
                 ? Mathf.RoundToInt(_gen.waterHeightRelative * 100f)
@@ -973,6 +1005,8 @@ namespace Project.Gameplay.Map
                 else ais++;
             }
             _summaryBody.text =
+                $"Arquetipo\t{MapArchetypeCatalog.GetDisplayName(_selectedThemeIndex)}\n" +
+                $"Pipeline\t{RiverPipelineShortLabel(_gen.riverWaterPlayPipeline)}\n" +
                 $"Mapa\t{w} × {w}\n" +
                 $"Plazas\t{pc} ({humans} humanos · {ais} IA)\n" +
                 $"Ríos\t{_gen.riverCount}\n" +
@@ -1056,41 +1090,31 @@ namespace Project.Gameplay.Map
                 _gen.globalAnimals = Vector2Int.zero;
         }
 
-        void ApplyTheme(int idx)
+        void ApplyArchetype(int idx, bool persistSelection = true)
         {
             if (_gen == null) return;
-            _selectedThemeIndex = idx;
-            switch (idx)
-            {
-                case 1:
-                    _gen.terrainFlatness = 0.42f;
-                    _gen.heightMultiplier = 11f;
-                    _gen.lobbyMacroMountainMasses = Mathf.Max(_gen.lobbyMacroMountainMasses, 3);
-                    _gen.globalStone = ScaleVec(_gen.globalStone, 1.15f);
-                    _gen.riverCount = Mathf.Max(1, _gen.riverCount - 1);
-                    break;
-                case 2:
-                    _gen.riverCount = Mathf.Min(8, _gen.riverCount + 1);
-                    _gen.lakeCount = Mathf.Min(12, _gen.lakeCount + 1);
-                    _gen.waterHeightRelative = Mathf.Clamp01(_gen.waterHeightRelative + 0.06f);
-                    _gen.globalTrees = ScaleVec(_gen.globalTrees, 1.2f);
-                    _gen.terrainFlatness = Mathf.Min(0.72f, _gen.terrainFlatness + 0.06f);
-                    break;
-                case 3:
-                    _gen.riverCount = Mathf.Max(0, _gen.riverCount - 1);
-                    _gen.lakeCount = Mathf.Max(0, _gen.lakeCount - 1);
-                    _gen.waterHeightRelative = Mathf.Clamp01(_gen.waterHeightRelative - 0.07f);
-                    _gen.terrainFlatness = Mathf.Min(0.85f, _gen.terrainFlatness + 0.08f);
-                    _gen.heightMultiplier = Mathf.Max(5f, _gen.heightMultiplier - 1.5f);
-                    break;
-                default:
-                    break;
-            }
+            _selectedThemeIndex = Mathf.Clamp(idx, 0, MapArchetypeCatalog.Count - 1);
 
-            PullFromGenerator();
+            var snap = MapArchetypeCatalog.Get(_selectedThemeIndex);
+            MapArchetypeCatalog.ApplyToGenerator(_gen, _selectedThemeIndex);
+
+            _forestTier = snap.forestTier;
+            _goldTier = snap.goldTier;
+            _stoneTier = snap.stoneTier;
+            _animalsOn = snap.animalsOn;
+            _waterPercentUi = Mathf.RoundToInt(snap.waterHeightRelative * 100f);
+
             UpdateSnapFromGenerator();
             ApplyResourceTiers();
+            RefreshSliderLabels();
             RefreshSummary();
+            RefreshRiverPipelineToggle();
+
+            if (persistSelection)
+                PlayerPrefs.SetInt(PrefsPrefix + "theme", _selectedThemeIndex);
+
+            if (_statusText != null)
+                _statusText.text = $"Arquetipo: {MapArchetypeCatalog.GetDisplayName(_selectedThemeIndex)} (Lake First).";
         }
 
         void UpdateSnapFromGenerator()
@@ -1172,6 +1196,12 @@ namespace Project.Gameplay.Map
         void OnStartGameClicked()
         {
             PushToGenerator();
+            if (_gen != null)
+            {
+                if (_gen.riverWaterPlayPipeline != RuntimeRiverWaterPipelineMode.HydroGraphV2 &&
+                    _gen.riverWaterPlayPipeline != RuntimeRiverWaterPipelineMode.LegacyCurrent)
+                    _gen.riverWaterPlayPipeline = RuntimeRiverWaterPipelineMode.LakeFirstHydrology;
+            }
             if (_statusText != null)
                 _statusText.text = "Generando mapa… (30–90 s, revisa consola [MapGen])";
             if (_root != null)

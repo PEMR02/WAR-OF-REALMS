@@ -91,6 +91,9 @@ namespace Project.Gameplay.Map.Generator
         /// <summary>UWP lake-first: grafo hidrológico validado (main, lagos, tributarios).</summary>
         public UwpWaterGraph LakeFirstWaterGraph { get; set; }
 
+        /// <summary>Origen hidrológico por índice de río (lake-spill, inland-feeder, etc.).</summary>
+        public List<UwpTributaryOriginKind> RiverOriginKinds { get; set; }
+
         /// <summary>
         /// Subconjunto de boca de lago (embudo conector): el MS de lago las incluye aunque solapen máscara de ribbon.
         /// </summary>

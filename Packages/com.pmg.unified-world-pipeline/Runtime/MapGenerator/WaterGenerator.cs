@@ -308,6 +308,8 @@ namespace Project.Gameplay.Map.Generator
             int waterCells = 0;
             grid.RiverCenterlinesCellSpace = new List<List<Vector2>>();
             grid.RiverCenterlinesWorld = new List<List<Vector3>>();
+            grid.RiverOriginKinds = new List<UwpTributaryOriginKind>();
+            UwpTributaryOriginUtility.Clear(grid);
             grid.HydrologyMainRiverPattern = null;
             grid.HydrologyMainRiverTerminusCell = null;
             grid.HydrologyNetwork = new HydrologyNetworkGraph();
@@ -327,7 +329,10 @@ namespace Project.Gameplay.Map.Generator
             // Ríos: descenso simple (SimpleRiverPathGenerator); opcional evitar solapes; vados = River transitable + riverFord.
             int riverCount = Mathf.Min(config.riverCount, 8);
             bool lakeFirstPipeline = config.uwpLakeFirstHydrologyPipeline;
-            int riversToPlaceLoop = lakeFirstPipeline ? 1 : riverCount;
+            bool placeRivers = riverCount > 0;
+            int riversToPlaceLoop = 0;
+            if (placeRivers)
+                riversToPlaceLoop = lakeFirstPipeline ? 1 : riverCount;
             grid.LakeFirstWaterGraph = null;
             if (config.uwpOwnedVisualPolicy || config.riverLogPlacementFailureSummary)
             {
@@ -619,6 +624,10 @@ namespace Project.Gameplay.Map.Generator
                                     world.Add(new Vector3(o.x + p.x * cs, o.y, o.z + p.y * cs));
                                 }
                                 grid.RiverCenterlinesWorld.Add(world);
+                                UwpTributaryOriginUtility.SetOrigin(
+                                    grid,
+                                    riverIdBeforeAdd,
+                                    i == 0 ? UwpTributaryOriginKind.None : UwpTributaryOriginKind.None);
                             }
 
                             if (config.debugDrawRiverPathInScene && dbgMacro != null && dbgSmooth != null)
@@ -950,13 +959,25 @@ namespace Project.Gameplay.Map.Generator
             if (config.mergeRiverCellsTouchingLake)
                 MergeRiverCellsTouchingLake(grid);
 
-            if (lakeFirstPipeline)
+            if (lakeFirstPipeline && placeRivers)
             {
                 UwpLakeFirstHydrologyBuilder.BuildAndApply(
                     grid,
                     config,
                     rng,
                     riverCount,
+                    ref waterCells,
+                    riverOccupiedCells,
+                    ref riverOccAabbValid,
+                    ref riverOccMinX,
+                    ref riverOccMaxX,
+                    ref riverOccMinZ,
+                    ref riverOccMaxZ);
+
+                UwpLakeFirstSupplementalHydrologyBuilder.BuildAndApply(
+                    grid,
+                    config,
+                    rng,
                     ref waterCells,
                     riverOccupiedCells,
                     ref riverOccAabbValid,
@@ -4133,6 +4154,154 @@ namespace Project.Gameplay.Map.Generator
                     AcceptedLengthCells = path.Count,
                     HierarchyFromConfluenceTrim = true,
                     HierarchyReason = "lake_first_validated",
+                });
+            }
+
+            UwpTributaryOriginUtility.SetOrigin(grid, riverIdBeforeAdd, UwpTributaryOriginKind.LakeSpill);
+
+            config.riverWidthRadiusCells = visualRiverRadiusCells;
+            return added;
+        }
+
+        /// <summary>Aplica tributario supplementario (InlandFeeder / HeadwaterFeeder) tras lake-first.</summary>
+        internal static int ApplySupplementalValidatedTributary(
+            GridSystem grid,
+            MapGenConfig config,
+            IRng rng,
+            int riverSlotIndex,
+            UwpTributaryOriginKind originKind,
+            List<Vector2Int> path,
+            List<Vector2> centerline,
+            List<Vector2Int> fordCells,
+            HashSet<long> riverOccupiedCells,
+            ref bool riverOccAabbValid,
+            ref int riverOccMinX,
+            ref int riverOccMaxX,
+            ref int riverOccMinZ,
+            ref int riverOccMaxZ,
+            int receiverRiverIndex = 0)
+        {
+            if (grid == null || config == null || path == null || path.Count < 2 || centerline == null || centerline.Count < 2)
+                return 0;
+
+            if (grid.RiverCenterlinesCellSpace == null)
+                grid.RiverCenterlinesCellSpace = new List<List<Vector2>>();
+
+            int w = grid.Width;
+            int h = grid.Height;
+            int added = 0;
+            int riverIdBeforeAdd = grid.RiverCenterlinesCellSpace.Count;
+            int visualRiverRadiusCells = VisualRiverRasterRadiusCells(true, config);
+            int riverNoiseCompiledBackup = config.riverWidthNoiseAmplitudeCells;
+            config.riverWidthRadiusCells = originKind == UwpTributaryOriginKind.HeadwaterFeeder
+                ? Mathf.Clamp(Mathf.Max(1, visualRiverRadiusCells / 3), 1, 2)
+                : visualRiverRadiusCells;
+
+            grid.RiverCenterlinesCellSpace.Add(new List<Vector2>(centerline));
+            float cs = grid.CellSizeWorld;
+            Vector3 o = grid.Origin;
+            var world = new List<Vector3>(centerline.Count);
+            for (int pi = 0; pi < centerline.Count; pi++)
+            {
+                var p = centerline[pi];
+                world.Add(new Vector3(o.x + p.x * cs, o.y, o.z + p.y * cs));
+            }
+
+            if (grid.RiverCenterlinesWorld == null)
+                grid.RiverCenterlinesWorld = new List<List<Vector3>>();
+            grid.RiverCenterlinesWorld.Add(world);
+
+            s_fordPackedScratch.Clear();
+            if (fordCells != null)
+            {
+                for (int fi = 0; fi < fordCells.Count; fi++)
+                    s_fordPackedScratch.Add(PackCellLong(fordCells[fi]));
+            }
+
+            for (int pi = 0; pi < path.Count; pi++)
+            {
+                var c = path[pi];
+                if (!grid.InBoundsCell(c.x, c.y))
+                    continue;
+                ref var cell = ref grid.GetCell(c);
+                if (cell.type != CellType.Land)
+                    continue;
+                bool isFord = s_fordPackedScratch.Contains(PackCellLong(c));
+                cell.type = CellType.River;
+                cell.riverFord = isFord;
+                cell.walkable = isFord;
+                cell.buildable = false;
+                cell.waterTraverse = isFord ? WaterTraverseMode.FordShallow : WaterTraverseMode.SwimNavigable;
+                added++;
+            }
+
+            if (visualRiverRadiusCells <= 0)
+                config.riverWidthNoiseAmplitudeCells = 0;
+            added += ExpandRiverWidthAroundPath(grid, path, config, riverSlotIndex);
+            config.riverWidthNoiseAmplitudeCells = riverNoiseCompiledBackup;
+
+            if (fordCells != null && fordCells.Count > 0 && config.riverFordCorridorRadiusCells > 0)
+                ApplyRiverFordCorridor(grid, fordCells, config.riverFordCorridorRadiusCells);
+
+            CollectRiverCorridorPackedInto(path, config, w, h, s_riverCorridorPackedScratch);
+            foreach (long k in s_riverCorridorPackedScratch)
+            {
+                RiverOccupiedAddPackedCell(
+                    riverOccupiedCells,
+                    ref riverOccAabbValid,
+                    ref riverOccMinX,
+                    ref riverOccMaxX,
+                    ref riverOccMinZ,
+                    ref riverOccMaxZ,
+                    k);
+            }
+
+            UwpTributaryOriginUtility.SetOrigin(grid, riverIdBeforeAdd, originKind);
+            RiverDendriticUtility.EnsureRiverMetadata(grid);
+            int receiverId = receiverRiverIndex > 0
+                ? receiverRiverIndex
+                : (originKind == UwpTributaryOriginKind.HeadwaterFeeder ? 1 : 0);
+            var role = RiverDendriticUtility.RoleForPlacement(
+                riverIdBeforeAdd,
+                receiverId,
+                path.Count,
+                grid.RiverCenterlinesCellSpace[0]?.Count ?? 0);
+            while (grid.RiverDendriticRoles.Count <= riverIdBeforeAdd)
+                grid.RiverDendriticRoles.Add(RiverDendriticRole.SecondaryTributary);
+            while (grid.RiverReceiverIds.Count <= riverIdBeforeAdd)
+                grid.RiverReceiverIds.Add(0);
+            while (grid.RiverWidthRatioToMain.Count <= riverIdBeforeAdd)
+                grid.RiverWidthRatioToMain.Add(1f);
+            grid.RiverDendriticRoles[riverIdBeforeAdd] = role;
+            grid.RiverReceiverIds[riverIdBeforeAdd] = receiverId;
+            grid.RiverWidthRatioToMain[riverIdBeforeAdd] = RiverDendriticUtility.WidthRatioToMain(config, role);
+
+            if (grid.HydrologyNetwork != null)
+            {
+                Vector2Int joinCell = RiverRouteGenerator.LastTributaryConfluencePlanValid
+                    ? RiverRouteGenerator.LastTributaryConfluencePlan.ConfluenceCell
+                    : path[path.Count - 1];
+                int? parentRiver = TryResolveParentRiverAtJoin(grid, joinCell, riverIdBeforeAdd, out _);
+                var riverClass = originKind == UwpTributaryOriginKind.HeadwaterFeeder
+                    ? RiverClass.Creek
+                    : RiverClass.Tributary;
+                string reason = originKind == UwpTributaryOriginKind.HeadwaterFeeder
+                    ? "headwater_feeder"
+                    : "inland_feeder";
+                grid.HydrologyNetwork.AddRiver(new HydrologyRiverRecord
+                {
+                    RiverId = riverIdBeforeAdd,
+                    RiverClass = riverClass,
+                    ParentRiverId = parentRiver,
+                    BasinId = 0,
+                    EstimatedFlow01 = originKind == UwpTributaryOriginKind.HeadwaterFeeder ? 0.28f : 0.42f,
+                    WidthClass = 0,
+                    JoinVertexIndex = path.Count - 1,
+                    StartCell = path[0],
+                    EndCell = joinCell,
+                    AcceptedLengthCells = path.Count,
+                    HierarchyFromConfluenceTrim = true,
+                    HierarchyReason = reason,
                 });
             }
 

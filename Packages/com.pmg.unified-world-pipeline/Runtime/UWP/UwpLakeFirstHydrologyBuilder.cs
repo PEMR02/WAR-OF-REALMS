@@ -52,7 +52,7 @@ namespace Project.Gameplay.Map.Generator
             graph.MainCenterlineCells = new List<Vector2>(mainCl);
             graph.FinalCenterlineByRiverIndex[0] = new List<Vector2>(mainCl);
 
-            var lakeComponents = SelectIntentionalLakeComponents(grid, config, out int rawLakeComponents);
+            var lakeComponents = SelectIntentionalLakeComponents(grid, config, mainCl, out int rawLakeComponents);
             graph.Report.LakeCandidates = rawLakeComponents;
 
             int minLakeDist = config.lakeValidateSeparationFromMainRiver
@@ -120,10 +120,13 @@ namespace Project.Gameplay.Map.Generator
             }
 
             tributaryPlacementOrder.Sort((a, b) => b.distMain.CompareTo(a.distMain));
-            for (int tribPass = 0; tribPass < 2 && nextRiverIndex <= maxTribSlots; tribPass++)
+            for (int tribPass = 0; tribPass < 3 && nextRiverIndex <= maxTribSlots; tribPass++)
             {
                 if (tribPass == 1)
                     tributaryPlacementOrder.Sort((a, b) => a.distMain.CompareTo(b.distMain));
+
+                int passMinTribCells = tribPass >= 2 ? Mathf.Max(8, (minTribCells * 3) / 4) : minTribCells;
+                int confluenceWindow = tribPass == 0 ? 4 : (tribPass == 1 ? 6 : 10);
 
                 for (int ti = 0; ti < tributaryPlacementOrder.Count; ti++)
                 {
@@ -145,7 +148,7 @@ namespace Project.Gameplay.Map.Generator
                         mainCl,
                         lakeNode.OutletCell,
                         minFromMainEnds,
-                        minTribCells,
+                        passMinTribCells,
                         claimedConfluenceCells,
                         ref waterCells,
                         riverOccupiedCells,
@@ -158,7 +161,7 @@ namespace Project.Gameplay.Map.Generator
                         maxTribSlots,
                         lakeNode,
                         graph,
-                        confluenceWindowCells: tribPass == 0 ? 4 : 6);
+                        confluenceWindowCells: confluenceWindow);
                 }
             }
 
@@ -220,12 +223,15 @@ namespace Project.Gameplay.Map.Generator
                     goalPacked.Add(PackCell(g.x, g.y));
                 }
 
+                int distOutletCand = Chebyshev(outlet, cand.cell);
+                int adaptiveMinTribCells = Mathf.Max(8, Mathf.Min(minTribCells, distOutletCand));
+
                 if (!TryBuildTributaryPath(
                         grid,
                         outlet,
                         goalPacked,
                         comp,
-                        minTribCells,
+                        adaptiveMinTribCells,
                         out List<Vector2Int> pathCells,
                         out Vector2Int confluence,
                         out string pathFail))
@@ -309,9 +315,12 @@ namespace Project.Gameplay.Map.Generator
                 graph.Report.TributariesAccepted++;
 
                 graph.FinalCenterlineByRiverIndex[riverSlot] = new List<Vector2>(tribEdge.CenterlineCells);
+                EnsureLakeOwnerIndexCapacity(grid, compIdx);
                 grid.LakeComponentTributaryOwnerRiverIndex[compIdx] = riverSlot;
                 lakeNode.OwnerTributaryRiverIndex = riverSlot;
                 claimedConfluenceCells.Add(PackCell(confluence.x, confluence.y));
+
+                UwpTributaryOriginUtility.SetOrigin(grid, riverSlot, UwpTributaryOriginKind.LakeSpill);
 
                 RiverConfluenceUtility.TryRegisterFromPlacement(
                     grid,
@@ -331,6 +340,261 @@ namespace Project.Gameplay.Map.Generator
             return false;
         }
 
+        /// <summary>
+        /// Supplemental: si un inland se acerca a un lago sin spill, intenta LakeSpill outlet→main
+        /// sin borrar el lago. Reutiliza el mismo placement que lake-first.
+        /// </summary>
+        public static bool TryPromoteSpillForUnownedLake(
+            GridSystem grid,
+            MapGenConfig config,
+            IRng rng,
+            int lakeComponentIndex,
+            HashSet<long> claimedConfluenceCells,
+            ref int waterCells,
+            HashSet<long> riverOccupiedCells,
+            ref bool riverOccAabbValid,
+            ref int riverOccMinX,
+            ref int riverOccMaxX,
+            ref int riverOccMinZ,
+            ref int riverOccMaxZ)
+        {
+            if (grid == null || config == null || rng == null)
+                return false;
+
+            var graph = grid.LakeFirstWaterGraph;
+            if (graph?.Lakes == null ||
+                lakeComponentIndex < 0 ||
+                lakeComponentIndex >= graph.Lakes.Count)
+                return false;
+
+            var lakeNode = graph.Lakes[lakeComponentIndex];
+            if (lakeNode == null ||
+                lakeNode.OwnerTributaryRiverIndex >= 0 ||
+                lakeNode.BodyCellsPacked == null ||
+                lakeNode.BodyCellsPacked.Count == 0)
+                return false;
+
+            if (grid.RiverCenterlinesCellSpace == null || grid.RiverCenterlinesCellSpace.Count == 0)
+                return false;
+
+            var mainCl = grid.RiverCenterlinesCellSpace[0];
+            if (mainCl == null || mainCl.Count < 2)
+                return false;
+
+            if (!lakeNode.OutletValid)
+            {
+                if (!TryBuildLakeOutlet(
+                        lakeNode.BodyCellsPacked, mainCl, grid, out Vector2Int outlet, out _))
+                    return false;
+                lakeNode.OutletCell = outlet;
+                lakeNode.OutletValid = true;
+            }
+
+            int nextRiverIndex = grid.RiverCenterlinesCellSpace.Count;
+            int maxTribSlots = Mathf.Clamp(config.riverCount - 1, 0, MaxTributarySlots);
+            if (nextRiverIndex > maxTribSlots)
+                return false;
+
+            int minTribCells = Mathf.Max(14, config.riverVisualMinSurfacePieceLengthCells * 2);
+            int minFromMainEnds = Mathf.Max(4, config.riverConfluenceMinDistanceFromMainEndpointsCells);
+            var claimed = claimedConfluenceCells ?? new HashSet<long>();
+
+            return TryPlaceTributaryForLake(
+                grid,
+                config,
+                rng,
+                lakeNode.BodyCellsPacked,
+                lakeComponentIndex,
+                mainCl,
+                lakeNode.OutletCell,
+                minFromMainEnds,
+                minTribCells,
+                claimed,
+                ref waterCells,
+                riverOccupiedCells,
+                ref riverOccAabbValid,
+                ref riverOccMinX,
+                ref riverOccMaxX,
+                ref riverOccMinZ,
+                ref riverOccMaxZ,
+                ref nextRiverIndex,
+                maxTribSlots,
+                lakeNode,
+                graph,
+                confluenceWindowCells: 10);
+        }
+
+        /// <summary>
+        /// Supplemental: registra lagos reales desde LakeBodyCellsPacked (aunque lake-first
+        /// no los haya seleccionado) y devuelve el más cercano no-owned al path.
+        /// </summary>
+        public static bool TryFindOrRegisterNearbyUnownedLake(
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2Int> path,
+            int nearCells,
+            out int lakeComponentIndex)
+        {
+            lakeComponentIndex = -1;
+            if (grid == null || path == null || path.Count == 0 || nearCells <= 0)
+                return false;
+
+            var graph = grid.LakeFirstWaterGraph;
+            if (graph == null)
+            {
+                graph = new UwpWaterGraph { Seed = config != null ? config.seed : 0 };
+                grid.LakeFirstWaterGraph = graph;
+            }
+
+            EnsureLakeNodesFromPackedBodies(grid, graph, config);
+
+            int bestDist = int.MaxValue;
+            int bestIdx = -1;
+            int step = Mathf.Max(1, path.Count / 20);
+            for (int li = 0; li < graph.Lakes.Count; li++)
+            {
+                var lake = graph.Lakes[li];
+                if (lake == null ||
+                    lake.OwnerTributaryRiverIndex >= 0 ||
+                    lake.BodyCellsPacked == null ||
+                    lake.BodyCellsPacked.Count == 0)
+                    continue;
+
+                for (int i = 0; i < path.Count; i += step)
+                {
+                    int d = MinChebyshevCellToPackedBody(path[i], lake.BodyCellsPacked, nearCells);
+                    if (d < bestDist)
+                    {
+                        bestDist = d;
+                        bestIdx = li;
+                        if (bestDist == 0)
+                            break;
+                    }
+                }
+
+                if (bestDist == 0)
+                    break;
+            }
+
+            if (bestIdx < 0 || bestDist > nearCells)
+                return false;
+
+            lakeComponentIndex = bestIdx;
+            return true;
+        }
+
+        static void EnsureLakeNodesFromPackedBodies(GridSystem grid, UwpWaterGraph graph, MapGenConfig config)
+        {
+            if (grid == null || graph == null)
+                return;
+
+            var all = BuildLakeBodyComponents(grid);
+            if (all.Count == 0)
+                return;
+
+            int minCells = 6;
+            if (config != null)
+                minCells = Mathf.Clamp(Mathf.RoundToInt(config.maxLakeCells / 48f), 6, 16);
+
+            if (grid.LakeBodyComponents == null)
+                grid.LakeBodyComponents = new List<HashSet<long>>();
+            if (grid.LakeComponentTributaryOwnerRiverIndex == null)
+                grid.LakeComponentTributaryOwnerRiverIndex = new List<int>();
+
+            for (int i = 0; i < all.Count; i++)
+            {
+                var comp = all[i];
+                if (comp == null || comp.Count < minCells)
+                    continue;
+                if (LakeGraphAlreadyHasBody(graph, comp))
+                    continue;
+
+                int compIdx = graph.Lakes.Count;
+                ComputeComponentSeed(comp, out int sx, out int sz);
+                var lakeNode = new UwpLakeGraphNode
+                {
+                    ComponentIndex = compIdx,
+                    CellCount = comp.Count,
+                    BodyCellsPacked = comp,
+                    SeedCellX = sx,
+                    SeedCellZ = sz,
+                    Accepted = true,
+                    RejectReason = "supplemental_registered"
+                };
+                if (grid.RiverCenterlinesCellSpace != null &&
+                    grid.RiverCenterlinesCellSpace.Count > 0 &&
+                    grid.RiverCenterlinesCellSpace[0] != null)
+                {
+                    lakeNode.DistanceToMainCells = MinChebyshevComponentToMain(
+                        comp,
+                        grid.RiverCenterlinesCellSpace[0],
+                        grid.Width,
+                        grid.Height);
+                }
+
+                graph.Lakes.Add(lakeNode);
+                while (grid.LakeBodyComponents.Count <= compIdx)
+                    grid.LakeBodyComponents.Add(null);
+                grid.LakeBodyComponents[compIdx] = comp;
+                EnsureLakeOwnerIndexCapacity(grid, compIdx);
+            }
+        }
+
+        static bool LakeGraphAlreadyHasBody(UwpWaterGraph graph, HashSet<long> comp)
+        {
+            if (graph?.Lakes == null || comp == null || comp.Count == 0)
+                return false;
+            long probe = 0;
+            foreach (long pk in comp)
+            {
+                probe = pk;
+                break;
+            }
+
+            for (int i = 0; i < graph.Lakes.Count; i++)
+            {
+                var body = graph.Lakes[i]?.BodyCellsPacked;
+                if (body != null && body.Contains(probe))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static void EnsureLakeOwnerIndexCapacity(GridSystem grid, int compIdx)
+        {
+            if (grid == null || compIdx < 0)
+                return;
+            if (grid.LakeComponentTributaryOwnerRiverIndex == null)
+                grid.LakeComponentTributaryOwnerRiverIndex = new List<int>();
+            while (grid.LakeComponentTributaryOwnerRiverIndex.Count <= compIdx)
+                grid.LakeComponentTributaryOwnerRiverIndex.Add(-1);
+        }
+
+        static int MinChebyshevCellToPackedBody(Vector2Int cell, HashSet<long> body, int maxScan)
+        {
+            if (body == null || body.Count == 0)
+                return maxScan + 1;
+            long self = PackCell(cell.x, cell.y);
+            if (body.Contains(self))
+                return 0;
+
+            int best = maxScan + 1;
+            for (int dz = -maxScan; dz <= maxScan; dz++)
+            {
+                for (int dx = -maxScan; dx <= maxScan; dx++)
+                {
+                    int d = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz));
+                    if (d == 0 || d >= best)
+                        continue;
+                    if (body.Contains(PackCell(cell.x + dx, cell.y + dz)))
+                        best = d;
+                }
+            }
+
+            return best;
+        }
+
         static void TrimExtraCenterlines(GridSystem grid)
         {
             if (grid.RiverCenterlinesCellSpace == null)
@@ -347,6 +611,7 @@ namespace Project.Gameplay.Map.Generator
         static List<HashSet<long>> SelectIntentionalLakeComponents(
             GridSystem grid,
             MapGenConfig config,
+            List<Vector2> mainCl,
             out int rawComponentCount)
         {
             rawComponentCount = 0;
@@ -359,18 +624,54 @@ namespace Project.Gameplay.Map.Generator
             if (maxLakes <= 0)
                 return new List<HashSet<long>>();
 
-            int minCells = Mathf.Max(24, config.maxLakeCells / 16);
-            var ranked = new List<HashSet<long>>();
+            int minCells = Mathf.Clamp(Mathf.RoundToInt(config.maxLakeCells / 32f), 10, 22);
+            int maxCells = Mathf.Max(minCells + 8, Mathf.RoundToInt(config.maxLakeCells * 0.85f));
+            int minLakeDist = config.lakeValidateSeparationFromMainRiver
+                ? config.lakeMinChebyshevDistanceFromMainRiverCells
+                : 8;
+            int softLakeDist = Mathf.Max(14, Mathf.RoundToInt(minLakeDist * 0.62f));
+
+            var candidates = new List<(HashSet<long> comp, int cells, int distMain, float score)>();
             for (int i = 0; i < all.Count; i++)
             {
-                if (all[i].Count >= minCells)
-                    ranked.Add(all[i]);
+                int cells = all[i].Count;
+                if (cells < minCells || cells > maxCells)
+                    continue;
+
+                int distMain = mainCl != null && mainCl.Count > 1
+                    ? MinChebyshevComponentToMain(all[i], mainCl, grid.Width, grid.Height)
+                    : 999;
+                float distWeight = distMain >= minLakeDist ? 1.65f : (distMain >= softLakeDist ? 0.55f : 0.12f);
+                float score = cells * distWeight;
+                candidates.Add((all[i], cells, distMain, score));
             }
 
-            ranked.Sort((a, b) => b.Count.CompareTo(a.Count));
+            candidates.Sort((a, b) => b.score.CompareTo(a.score));
+
             var selected = new List<HashSet<long>>();
-            for (int i = 0; i < ranked.Count && selected.Count < maxLakes; i++)
-                selected.Add(ranked[i]);
+            for (int pass = 0; pass < 2 && selected.Count < maxLakes; pass++)
+            {
+                int distFloor = pass == 0 ? minLakeDist : softLakeDist;
+                for (int i = 0; i < candidates.Count && selected.Count < maxLakes; i++)
+                {
+                    if (candidates[i].distMain < distFloor)
+                        continue;
+                    if (selected.Contains(candidates[i].comp))
+                        continue;
+                    selected.Add(candidates[i].comp);
+                }
+            }
+
+            if (selected.Count < maxLakes)
+            {
+                for (int i = 0; i < candidates.Count && selected.Count < maxLakes; i++)
+                {
+                    if (selected.Contains(candidates[i].comp))
+                        continue;
+                    selected.Add(candidates[i].comp);
+                }
+            }
+
             return selected;
         }
 
@@ -971,8 +1272,8 @@ namespace Project.Gameplay.Map.Generator
             if (centerline == null || centerline.Count < 4 || w < 2 || h < 2)
                 return;
 
-            float amp = 0.72f;
-            float freq = 3.8f;
+            float amp = centerline.Count < 36 ? 0.26f : 0.52f;
+            float freq = centerline.Count < 36 ? 5.2f : 3.8f;
             float acc = 0f;
             var trial = new List<Vector2>(centerline);
             for (int i = 1; i < trial.Count - 1; i++)
