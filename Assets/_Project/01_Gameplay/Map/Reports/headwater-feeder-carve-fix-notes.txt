@@ -1,0 +1,76 @@
+HeadwaterFeeder ↔ Tributary — notas de estabilización
+Generado: 2026-07-11
+Estado visual (seed de prueba): OK — sin islas, orilla blanca, unión Y limpia, vados OK.
+
+==============================================================================
+1. SÍNTOMA
+==============================================================================
+- Río HeadwaterFeeder (arroyo) que desemboca en un Tributary.
+- Mesh de agua discontinuo: "charcos" / "islas" de terreno dentro del cauce.
+- Orilla blanca irregular o ausente en tramos.
+- Unión Y con terreno expuesto o mesh que no llega al receptor.
+- Vados: a veces se secaban al limitar el carve; luego OK si no se toca fordMul.
+
+==============================================================================
+2. CAUSA RAÍZ (no era profundidad variable)
+==============================================================================
+- floorH del carve YA es constante por río (ResolveUwpRiverCarveFloor01).
+- Headwater usa uniformFlatChannelFloor = true (mismo floor plano que frozen trib).
+- Las "islas" eran celdas DENTRO del mesh pero FUERA de la máscara de carve.
+- Stamp (StampUniformUwpFloorDisk) con requireMask solo talla celdas de la máscara.
+- Perfil erróneo ApplyLakeFirstHeadwaterCarveToMeshGrowthProfile ponía
+  carve = 50%→90% del mesh → anillo ancho de mesh sin tallar → terreno asoma.
+
+El "crecimiento orgánico" correcto es el ANCHO del canal completo (mesh+carve),
+no encoger el carve respecto al mesh.
+
+==============================================================================
+3. INTENTOS QUE FALLARON / REGRESIONES A EVITAR
+==============================================================================
+- Afinar solo constantes de ancho sin cubrir la huella del mesh → islas.
+- FloorToInt en radio headwater → radio 1 con half≈1.05–1.35 → crestas.
+- Limitar carve de vados a 90% del mesh → vados secos (revertido).
+- fordMul/fordFloorDelta en headwater → lecho sube y corta el arroyo
+  (headwater usa stampFordDelta=0, stampFordMul=1; otros ríos sin cambio).
+- Ingress de centerline en orden inverso o en línea recta → mesh plegado en Y.
+- SyncLakeFirstHeadwaterMeshToCarveMask después del join widen → pisa boost;
+  hay que reaplicar ApplyLakeFirstHeadwaterReceiverJoinMeshWiden tras Sync.
+
+==============================================================================
+4. FIX FINAL (mínimo)
+==============================================================================
+Archivo principal:
+  Packages/.../Runtime/MapGenerator/RiverSurfaceMeshBuilder.cs
+
+ApplyLakeFirstHeadwaterCarveToMeshGrowthProfile:
+  - carve ≈ mesh / LakeFirstHeadwaterMeshOverCarveMul (~0.77) en el cuerpo
+    → margen de orilla FINO y CONSTANTE (orilla blanca sin islas).
+  - en boca (along ≥ 0.82) ratio → ~0.94 para cubrir la cuña Y.
+
+Soportes ya estabilizados (no tocar sin causa):
+  TerrainExporter.StampUwpTributaryCarveAlongPolyline
+    - CeilToInt radio headwater
+    - bypass requireMask en source/join/ford headwater
+    - vados: radio ≥ huella mesh; sin fordMul en headwater
+  AppendLakeFirstHeadwaterCenterlineTowardReceiverRiver
+    - ingress k=1..4 siguiendo centerline del receptor
+  ApplyLakeFirstHeadwaterReceiverJoinMeshWiden
+    - mesh join estilo inland/spill→main, reaplicado tras Sync
+  Perfil de ancho orgánico (nacimiento→cuerpo→join):
+    ApplyLakeFirstHeadwaterCarveAlongProfile + Clamp...JoinMax
+
+==============================================================================
+5. REGLA OPERATIVA
+==============================================================================
+- Profundidad: constante (floor plano). No “variar profundidad” para organicidad.
+- Ancho: crece nacimiento → desembocadura (canal completo).
+- Orilla blanca: mesh ligeramente > carve (MeshOverCarveMul), margen constante.
+- Vados headwater: carve completo bajo mesh; no subir lecho con fordMul.
+- Main / Tributary / Inland / LakeSpill: no cambiar lógica de ford/floor.
+
+==============================================================================
+6. VALIDACIÓN
+==============================================================================
+- Visual Play: headwater continuo, orilla blanca, Y limpia, vados con agua.
+- Batch 20 seeds: menú PMG → Map → RTS → Analyze 20 Map Quality (v1 worldMeters)
+  Reporte: Assets/_Project/01_Gameplay/Map/Reports/rts-map-quality-v1-worldMeters.txt

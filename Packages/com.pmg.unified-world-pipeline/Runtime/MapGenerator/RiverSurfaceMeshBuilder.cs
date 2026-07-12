@@ -1034,24 +1034,14 @@ namespace Project.Gameplay.Map.Generator
 
             bool forceInland = UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
             bool headwater = UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder;
-            if (headwater && TryResolveHeadwaterReceiverRiverIndex(grid, riverIndex, out int recvRi))
+            // Carve/máscara headwater: no ensanchar en unión — el surco se perfila aparte (estrecho→nacimiento).
+            if (headwater && forCarveMask)
+                return;
+            // Mesh headwater→receptor: mismo criterio que inland/lake-spill→main (approach + target al parent).
+            if (headwater && !forCarveMask)
             {
-                float recvHalf = ResolveRiverRibbonHalfWidthCells(config, recvRi) * cellSize;
-                float targetJoinHw = recvHalf * Mathf.Clamp(config.riverConfluenceTributaryEndWidthMul, 0.82f, 1.02f);
-                float approachCfg = Mathf.Clamp(config.riverSurfaceTributaryConfluenceApproachCells * 0.55f, 6, 16);
-                float approachDist = ResolveUwpConfluenceApproachDistCells(cellPath, approachCfg);
-                ResolveUwpConfluenceBlendRange(cellPath, fromStart: false, approachDist, out int blendStart, out int blendEnd, out int bodyRef);
-                float bodyW = halfWidths[Mathf.Clamp(bodyRef, 0, n - 1)];
-                // No aplicar MeshWidthMul aquí: el carve sincroniza máscara desde anchos plenos;
-                // el estrechamiento visual va en ApplyLakeFirstHeadwaterCarveLikeInland.
-
-                for (int i = blendStart; i <= blendEnd; i++)
-                {
-                    float t = ConfluenceTaper01AlongPath(cellPath, i, blendStart, blendEnd, fromStart: false);
-                    float desired = Mathf.Lerp(bodyW, targetJoinHw, Mathf.SmoothStep(0f, 1f, t));
-                    halfWidths[i] = Mathf.Max(halfWidths[i], desired);
-                }
-
+                ApplyLakeFirstHeadwaterReceiverJoinMeshWiden(
+                    grid, halfWidths, cellPath, config, riverIndex, cellSize);
                 return;
             }
 
@@ -3895,13 +3885,22 @@ namespace Project.Gameplay.Map.Generator
         const int LakeFirstInlandSourceEmergenceMinCells = 6;
         const int LakeFirstInlandSourceEmergenceMaxCells = 16;
         const float LakeFirstInlandSourceWidthMinMul = 0.14f;
-        /// <summary>Headwater: taper de ancho en origen (suave; no ×0.14 inland que fragmentaba máscara).</summary>
-        const float LakeFirstHeadwaterSourceWidthMinMulMask = 0.48f;
-        const float LakeFirstHeadwaterSourceWidthMinMulMesh = 0.34f;
-        const float LakeFirstHeadwaterCarveMinHalfCells = 0.48f;
-        const float LakeFirstHeadwaterSourceMinHalfCells = 0.38f;
-        const float LakeFirstHeadwaterMeshWidthMul = 0.42f;
-        const float LakeFirstHeadwaterMeshMinHalfMul = 0.32f;
+        /// <summary>
+        /// Headwater = arroyo continuo: cuerpo ~1.2–1.4 celdas (más estrecho que inland, sin fragmentar).
+        /// Mesh ligeramente por encima del carve para orilla blanca.
+        /// </summary>
+        const float LakeFirstHeadwaterSourceWidthMinMulMask = 0.62f;
+        const float LakeFirstHeadwaterCarveMinHalfCells = 1.05f;
+        const float LakeFirstHeadwaterSourceMinHalfCells = 0.95f;
+        const float LakeFirstHeadwaterCarveBodyMaxCells = 1.35f;
+        const float LakeFirstHeadwaterCarveJoinMaxCells = 1.55f;
+        const float LakeFirstHeadwaterCarveBodyMul = 0.72f;
+        const float LakeFirstHeadwaterMeshOverCarveMul = 1.3f;
+        const float LakeFirstHeadwaterMeshMinHalfMul = 1.05f;
+        const float LakeFirstHeadwaterSourceTaperAlongEnd = 0.55f;
+        const float LakeFirstHeadwaterSourceTaperSpanWorldCells = 20f;
+        const int LakeFirstHeadwaterSourceTaperMinCells = 14;
+        const int LakeFirstHeadwaterSourceTaperMaxCells = 40;
 
         static bool TryResolveHeadwaterReceiverRiverIndex(GridSystem grid, int riverIndex, out int receiverRiverIndex)
         {
@@ -4064,6 +4063,9 @@ namespace Project.Gameplay.Map.Generator
                 !UsesSupplementalFeederSourceEmergence(grid, riverIndex) ||
                 centers == null || cellPath == null ||
                 centers.Count != cellPath.Count || centers.Count < 3)
+                return;
+            // Headwater: no hundir el ribbon bajo el terreno (provoca charcos / tramos enterrados).
+            if (IsLakeFirstHeadwaterFeeder(grid, riverIndex))
                 return;
 
             int sourceIdx = ResolveLakeFirstInlandFeederSourcePathIndex(grid, config, cellPath, riverIndex);
@@ -9598,8 +9600,7 @@ namespace Project.Gameplay.Map.Generator
         }
 
         /// <summary>
-        /// Headwater carve = contrato continuo inland/lake-spill + taper suave de ancho hacia el origen
-        /// (solo half-width; no toca profundidad/floorH). Evita minMul×0.14 que fragmentaba máscara.
+        /// Headwater arroyo: estrecha máscara/carve en todo el tramo; mesh cubre el surco (orilla blanca).
         /// </summary>
         static void ApplyLakeFirstHeadwaterCarveLikeInland(
             List<float> meshHalfWidths,
@@ -9610,29 +9611,165 @@ namespace Project.Gameplay.Map.Generator
             int riverIndex,
             float cellSize)
         {
-            if (meshHalfWidths == null || maskHalfWidths == null)
+            if (meshHalfWidths == null || maskHalfWidths == null || cellPath == null)
                 return;
 
-            SyncLakeFirstInlandMaskToLakeSpillCarve(meshHalfWidths, maskHalfWidths);
             ScaleLakeFirstTributaryCarveMaskHalfWidths(maskHalfWidths);
 
-            float minHalf = Mathf.Max(0.08f, cellSize * LakeFirstHeadwaterCarveMinHalfCells);
+            // Factor arroyo: baja el ancho superior del carve (no solo tip).
             for (int i = 0; i < maskHalfWidths.Count; i++)
-                maskHalfWidths[i] = Mathf.Max(maskHalfWidths[i], minHalf);
+                maskHalfWidths[i] = Mathf.Max(0.02f, maskHalfWidths[i] * LakeFirstHeadwaterCarveBodyMul);
 
-            float meshFloor = Mathf.Max(0.08f, cellSize * LakeFirstHeadwaterMeshMinHalfMul);
-            for (int i = 0; i < meshHalfWidths.Count; i++)
-            {
-                meshHalfWidths[i] = Mathf.Max(0.02f, meshHalfWidths[i] * LakeFirstHeadwaterMeshWidthMul);
-                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], meshFloor);
-            }
+            float minBody = Mathf.Max(0.08f, cellSize * LakeFirstHeadwaterCarveMinHalfCells);
+            for (int i = 0; i < maskHalfWidths.Count; i++)
+                maskHalfWidths[i] = Mathf.Max(maskHalfWidths[i], minBody);
 
             ApplyLakeFirstHeadwaterSourceWidthTaper(
                 maskHalfWidths, cellPath, grid, config, riverIndex, cellSize,
                 LakeFirstHeadwaterSourceWidthMinMulMask, LakeFirstHeadwaterSourceMinHalfCells);
-            ApplyLakeFirstHeadwaterSourceWidthTaper(
-                meshHalfWidths, cellPath, grid, config, riverIndex, cellSize,
-                LakeFirstHeadwaterSourceWidthMinMulMesh, LakeFirstHeadwaterMeshMinHalfMul);
+            ApplyLakeFirstHeadwaterCarveAlongProfile(maskHalfWidths, cellPath, cellSize);
+            ClampLakeFirstHeadwaterCarveHalfWidths(maskHalfWidths, cellPath, cellSize);
+
+            SyncLakeFirstHeadwaterMeshToCarveMask(meshHalfWidths, maskHalfWidths, cellSize);
+        }
+
+        /// <summary>Tope duro de half-width: cuerpo arroyo; join ensancha máscara/carve para la esquina Y.</summary>
+        static void ClampLakeFirstHeadwaterCarveHalfWidths(
+            List<float> maskHalfWidths,
+            List<Vector2> cellPath,
+            float cellSize)
+        {
+            if (maskHalfWidths == null || cellPath == null || maskHalfWidths.Count < 2 ||
+                maskHalfWidths.Count != cellPath.Count)
+                return;
+
+            float tipMin = cellSize * LakeFirstHeadwaterSourceMinHalfCells;
+            float bodyMax = cellSize * LakeFirstHeadwaterCarveBodyMaxCells;
+            float joinMax = cellSize * LakeFirstHeadwaterCarveJoinMaxCells;
+            float total = PolylineLengthCellSpace(cellPath);
+            if (total < 1e-4f)
+                return;
+
+            float acc = 0f;
+            for (int i = 0; i < maskHalfWidths.Count; i++)
+            {
+                if (i > 0)
+                    acc += Vector2.Distance(cellPath[i], cellPath[i - 1]);
+                float along = acc / total;
+                if (along >= 0.82f)
+                {
+                    // Subir máscara en la boca (Clamp solo no ensancha). Cubre la cuña Y sin flare a ancho del receptor.
+                    float t = Mathf.SmoothStep(0f, 1f, (along - 0.82f) / 0.18f);
+                    float joinTarget = Mathf.Lerp(bodyMax, joinMax, t);
+                    maskHalfWidths[i] = Mathf.Clamp(
+                        Mathf.Max(maskHalfWidths[i], joinTarget), tipMin, joinMax);
+                }
+                else
+                {
+                    maskHalfWidths[i] = Mathf.Clamp(maskHalfWidths[i], tipMin, bodyMax);
+                }
+            }
+        }
+
+        /// <summary>Refuerza estrecho en el primer tramo (nacimiento→cuerpo).</summary>
+        static void ApplyLakeFirstHeadwaterCarveAlongProfile(
+            List<float> maskHalfWidths,
+            List<Vector2> cellPath,
+            float cellSize)
+        {
+            if (maskHalfWidths == null || cellPath == null || maskHalfWidths.Count < 3 ||
+                maskHalfWidths.Count != cellPath.Count)
+                return;
+
+            int n = maskHalfWidths.Count;
+            float total = PolylineLengthCellSpace(cellPath);
+            if (total < 1e-4f)
+                return;
+
+            int bodyIdx = Mathf.Clamp(Mathf.RoundToInt((n - 1) * 0.55f), 0, n - 1);
+            float bodyCap = cellSize * LakeFirstHeadwaterCarveBodyMaxCells;
+            float bodyW = Mathf.Min(
+                Mathf.Max(maskHalfWidths[bodyIdx], cellSize * LakeFirstHeadwaterCarveMinHalfCells),
+                bodyCap);
+            float tipW = Mathf.Max(cellSize * LakeFirstHeadwaterSourceMinHalfCells, bodyW * LakeFirstHeadwaterSourceWidthMinMulMask);
+
+            float acc = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0)
+                    acc += Vector2.Distance(cellPath[i], cellPath[i - 1]);
+                float along = acc / total;
+                if (along >= LakeFirstHeadwaterSourceTaperAlongEnd)
+                {
+                    maskHalfWidths[i] = Mathf.Min(maskHalfWidths[i], bodyW);
+                    continue;
+                }
+
+                float t = Mathf.SmoothStep(0f, 1f, along / LakeFirstHeadwaterSourceTaperAlongEnd);
+                maskHalfWidths[i] = Mathf.Lerp(tipW, bodyW, t);
+            }
+        }
+
+        /// <summary>Mesh cubre el carve arroyo (ligeramente más ancho → orilla blanca continua).</summary>
+        static void SyncLakeFirstHeadwaterMeshToCarveMask(
+            List<float> meshHalfWidths,
+            List<float> maskHalfWidths,
+            float cellSize)
+        {
+            if (meshHalfWidths == null || maskHalfWidths == null)
+                return;
+
+            float cs = Mathf.Max(0.01f, cellSize);
+            float meshFloor = Mathf.Max(0.08f, cs * LakeFirstHeadwaterMeshMinHalfMul);
+            int n = Mathf.Min(meshHalfWidths.Count, maskHalfWidths.Count);
+            for (int i = 0; i < n; i++)
+            {
+                float carveW = Mathf.Max(cs * LakeFirstHeadwaterSourceMinHalfCells, maskHalfWidths[i]);
+                maskHalfWidths[i] = carveW;
+                // No inflar mesh al radio entero Ceil*cs (sería ~2 celdas / foam gruesa).
+                // Stamp usa Ceil+requireMask; el ribbon solo cubre la máscara + margen fino.
+                float target = carveW * LakeFirstHeadwaterMeshOverCarveMul;
+                meshHalfWidths[i] = Mathf.Max(meshFloor, target);
+            }
+        }
+
+        /// <summary>
+        /// El carve sigue al mesh con un margen de orilla fino y CONSTANTE (≈ 1/MeshOverCarveMul).
+        /// El "crecimiento" organico del arroyo viene del ancho del propio canal (mesh+carve juntos,
+        /// angosto en nacimiento y ancho en cuerpo/boca), no de encoger el carve respecto al mesh:
+        /// reducir el carve por debajo de este margen deja terreno sin tallar dentro del mesh
+        /// (las "islas" que asoman). Los vados conservan carve completo bajo el mesh en TerrainExporter.
+        /// </summary>
+        static void ApplyLakeFirstHeadwaterCarveToMeshGrowthProfile(
+            List<float> meshHalfWidths,
+            List<float> maskHalfWidths,
+            List<Vector2> cellPath,
+            float cellSize)
+        {
+            if (meshHalfWidths == null || maskHalfWidths == null || cellPath == null ||
+                meshHalfWidths.Count != maskHalfWidths.Count ||
+                maskHalfWidths.Count != cellPath.Count ||
+                cellPath.Count < 2)
+                return;
+
+            float total = PolylineLengthCellSpace(cellPath);
+            if (total < 1e-4f)
+                return;
+
+            // Margen fino y constante: carve justo por debajo del mesh. Deja orilla blanca
+            // uniforme y garantiza que el carve cubra el interior del mesh (sin islas).
+            float foamRatio = 1f / Mathf.Max(1.01f, LakeFirstHeadwaterMeshOverCarveMul);
+            float minCarveHalf = Mathf.Max(0.08f, cellSize * 0.58f);
+            float acc = 0f;
+            for (int i = 0; i < cellPath.Count; i++)
+            {
+                if (i > 0)
+                    acc += Vector2.Distance(cellPath[i], cellPath[i - 1]);
+                float along = Mathf.Clamp01(acc / total);
+                // Boca (union Y): sube el carve casi al mesh para cubrir la cuna del tributario.
+                float ratio = Mathf.Lerp(foamRatio, 0.94f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.82f, 1f, along)));
+                maskHalfWidths[i] = Mathf.Max(minCarveHalf, meshHalfWidths[i] * ratio);
+            }
         }
 
         /// <summary>Reduce half-width hacia el inicio del headwater; no modifica floor/profundidad del carve.</summary>
@@ -9654,7 +9791,7 @@ namespace Project.Gameplay.Map.Generator
             int n = halfWidths.Count;
             int sourceIdx = ResolveLakeFirstInlandFeederSourcePathIndex(grid, config, cellPath, riverIndex);
             int blend = Mathf.Min(
-                ResolveLakeFirstInlandFeederSourceBlendCount(cellPath, sourceIdx, cellSize),
+                ResolveLakeFirstHeadwaterSourceBlendCount(cellPath, sourceIdx, cellSize),
                 n - 1);
             if (blend < 2)
                 return;
@@ -9663,8 +9800,8 @@ namespace Project.Gameplay.Map.Generator
                 ? Mathf.Min(n - 1, blend)
                 : Mathf.Max(0, n - 1 - blend);
             float bodyW = halfWidths[bodyIdx];
-            float floorW = Mathf.Max(0.08f, cellSize * Mathf.Max(0.2f, minHalfCells));
-            float minW = Mathf.Max(floorW, bodyW * Mathf.Clamp(minMul, 0.2f, 0.95f));
+            float floorW = Mathf.Max(0.06f, cellSize * Mathf.Max(0.18f, minHalfCells));
+            float minW = Mathf.Max(floorW, bodyW * Mathf.Clamp(minMul, 0.12f, 0.85f));
 
             if (sourceIdx == 0)
             {
@@ -9685,6 +9822,41 @@ namespace Project.Gameplay.Map.Generator
                 t = Mathf.SmoothStep(0f, 1f, t);
                 halfWidths[i] = Mathf.Lerp(minW, bodyW, t);
             }
+        }
+
+        static int ResolveLakeFirstHeadwaterSourceBlendCount(List<Vector2> cellPath, int sourceIdx, float cellSize)
+        {
+            if (cellPath == null || cellPath.Count < 2)
+                return LakeFirstHeadwaterSourceTaperMinCells;
+
+            float targetSpanWorld = Mathf.Max(cellSize * 0.5f, cellSize * LakeFirstHeadwaterSourceTaperSpanWorldCells);
+            float acc = 0f;
+            int blend = 2;
+            if (sourceIdx == 0)
+            {
+                for (int i = 1; i < cellPath.Count; i++)
+                {
+                    acc += Vector2.Distance(cellPath[i], cellPath[i - 1]) * cellSize;
+                    blend = i + 1;
+                    if (acc >= targetSpanWorld)
+                        break;
+                }
+            }
+            else
+            {
+                for (int i = cellPath.Count - 2; i >= 0; i--)
+                {
+                    acc += Vector2.Distance(cellPath[i + 1], cellPath[i]) * cellSize;
+                    blend = cellPath.Count - i;
+                    if (acc >= targetSpanWorld)
+                        break;
+                }
+            }
+
+            return Mathf.Clamp(
+                blend,
+                LakeFirstHeadwaterSourceTaperMinCells,
+                Mathf.Min(LakeFirstHeadwaterSourceTaperMaxCells, cellPath.Count - 1));
         }
 
         /// <summary>
@@ -9739,6 +9911,12 @@ namespace Project.Gameplay.Map.Generator
                     ? (ang >= JoinAngleHardDeg ? 1.38f : (ang >= JoinAngleSmoothDeg ? 1.24f : 1.1f))
                     : (ang >= JoinAngleHardDeg ? 1.2f : (ang >= JoinAngleSmoothDeg ? 1.1f : 1.04f));
                 float mouthBoost = along <= 0.38f ? (visualMeshOnly ? 1.14f : 1.08f) : 1f;
+                // Headwater: along≈0 es el nacimiento, no boca de lago — no ensanchar el origen.
+                bool headwater = IsLakeFirstHeadwaterFeeder(grid, riverIndex);
+                if (headwater && along < 0.45f)
+                    continue;
+                if (headwater)
+                    mouthBoost = 1f;
                 bool inlandFeeder = visualMeshOnly && UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
                 float confAlong = inlandFeeder ? 0.55f : 0.62f;
                 float confBoost = along >= confAlong
@@ -9749,6 +9927,65 @@ namespace Project.Gameplay.Map.Generator
                 halfWidths[i] = Mathf.Max(
                     halfWidths[i],
                     shoreFloor * globalMul * bendBoost * mouthBoost * confBoost);
+            }
+        }
+
+        /// <summary>
+        /// Headwater→receptor: copia el criterio inland/lake-spill→main
+        /// (<see cref="ApplyLakeFirstMainJoinApproachMeshWiden"/> + target hacia half del parent).
+        /// Cubre la cuña Y del mesh sin hinchar al 100% del receptor.
+        /// </summary>
+        static void ApplyLakeFirstHeadwaterReceiverJoinMeshWiden(
+            GridSystem grid,
+            List<float> meshHalfWidths,
+            List<Vector2> cellPath,
+            MapGenConfig config,
+            int riverIndex,
+            float cellSize)
+        {
+            if (config == null || meshHalfWidths == null || cellPath == null || riverIndex <= 0 ||
+                !IsLakeFirstHeadwaterFeeder(grid, riverIndex) ||
+                !TryResolveHeadwaterReceiverRiverIndex(grid, riverIndex, out int recvRi))
+                return;
+
+            int n = Mathf.Min(meshHalfWidths.Count, cellPath.Count);
+            if (n < 4)
+                return;
+
+            float recvHalf = ResolveRiverRibbonHalfWidthCells(config, recvRi) * cellSize;
+            float endMul = Mathf.Clamp(config.riverConfluenceTributaryEndWidthMul, 0.42f, 1.22f);
+            // Inland MainJoinApproach: bodyMul 1.10 / endpointMul 1.22.
+            const float bodyMul = 1.10f;
+            float approachCfg = Mathf.Clamp(config.riverSurfaceTributaryConfluenceApproachCells, 10, 28);
+            float approachDist = ResolveUwpConfluenceApproachDistCells(cellPath, approachCfg);
+            ResolveUwpConfluenceBlendRange(
+                cellPath, fromStart: false, approachDist, out int blendStart, out int blendEnd, out int bodyRef);
+            bodyRef = Mathf.Clamp(bodyRef, 0, n - 1);
+            float bodyW = meshHalfWidths[bodyRef];
+
+            // Target: como confluence trib→main (parentHalf * endMul), acotado para no volver al flare 1.12×recv.
+            float targetJoin = Mathf.Max(bodyW * 1.22f, recvHalf * endMul * 0.68f);
+            targetJoin = Mathf.Clamp(targetJoin, bodyW * 1.14f, recvHalf * 0.82f);
+
+            for (int i = blendStart; i <= blendEnd; i++)
+            {
+                if (i < 0 || i >= n)
+                    continue;
+                float t = ConfluenceTaper01AlongPath(cellPath, i, blendStart, blendEnd, fromStart: false);
+                float desired = Mathf.Lerp(bodyW * bodyMul, targetJoin, Mathf.SmoothStep(0f, 1f, t));
+                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], desired);
+            }
+
+            for (int i = Mathf.Max(0, blendEnd + 1); i < n; i++)
+                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], targetJoin);
+
+            int cornerPts = Mathf.Clamp(Mathf.CeilToInt((blendEnd - blendStart + 1) * 0.28f), 3, 6);
+            for (int k = 0; k < cornerPts; k++)
+            {
+                int i = n - 1 - k;
+                if (i < 0)
+                    break;
+                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], targetJoin);
             }
         }
 
@@ -11367,7 +11604,7 @@ namespace Project.Gameplay.Map.Generator
                         grid, cellProcessed, halfWidths, config, riverIndex, cellSize);
 
                 if (config.uwpLakeFirstHydrologyPipeline &&
-                    UsesSupplementalFeederSourceEmergence(grid, riverIndex))
+                    UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex))
                 {
                     ApplyLakeFirstInlandFeederSourceWidthTaper(
                         halfWidths, cellProcessed, grid, config, riverIndex, cellSize);
@@ -14667,18 +14904,47 @@ namespace Project.Gameplay.Map.Generator
                 mouth = bestOn;
             }
 
-            int recvClIdx = Mathf.Clamp(bestSeg + 1, 0, sampler.Line.Count - 1);
-            Vector2 recvDown = RiverConfluenceUtility.ReceiverDownstreamAt(sampler.Line, recvClIdx);
-            if (recvDown.sqrMagnitude < 1e-8f)
-                return;
-            recvDown.Normalize();
-
             float ingress = Mathf.Clamp(sampler.CoreRadiusCells * 0.75f, 1.2f, 3.2f);
             var ingressPts = new List<Vector2>(5);
-            for (int k = 4; k >= 1; k--)
+            int ingressSeg = bestSeg;
+            Vector2 ingressCursor = bestOn;
+            float ingressStep = ingress / 4f;
+            for (int k = 1; k <= 4; k++)
             {
-                float t = k / 4f;
-                ingressPts.Add(mouth + recvDown * (ingress * t));
+                float remaining = ingressStep;
+                while (remaining > 1e-4f && ingressSeg < sampler.Line.Count - 1)
+                {
+                    Vector2 segEnd = sampler.Line[ingressSeg + 1];
+                    float segRemaining = Vector2.Distance(ingressCursor, segEnd);
+                    if (segRemaining <= 1e-4f)
+                    {
+                        ingressCursor = segEnd;
+                        ingressSeg++;
+                        continue;
+                    }
+
+                    if (remaining <= segRemaining)
+                    {
+                        ingressCursor = Vector2.Lerp(
+                            ingressCursor, segEnd, remaining / segRemaining);
+                        remaining = 0f;
+                    }
+                    else
+                    {
+                        remaining -= segRemaining;
+                        ingressCursor = segEnd;
+                        ingressSeg++;
+                    }
+                }
+
+                if (ingressPts.Count == 0 ||
+                    (ingressCursor - ingressPts[ingressPts.Count - 1]).sqrMagnitude > 1e-6f)
+                {
+                    ingressPts.Add(ingressCursor);
+                }
+
+                if (ingressSeg >= sampler.Line.Count - 1 && remaining > 1e-4f)
+                    break;
             }
 
             if (ingressPts.Count == 0)
@@ -15532,8 +15798,11 @@ namespace Project.Gameplay.Map.Generator
                     bool headwater = IsLakeFirstHeadwaterFeeder(grid, riverIndex);
                     ApplyTributaryConfluenceExtraMeshWidth(
                         grid, cellProcessed, meshHalfWidths, config, riverIndex, cellSize, forCarveMask: false);
-                    ApplyTributaryConfluenceExtraMeshWidth(
-                        grid, cellProcessed, maskHalfWidths, config, riverIndex, cellSize, forCarveMask: true);
+                    if (!headwater)
+                    {
+                        ApplyTributaryConfluenceExtraMeshWidth(
+                            grid, cellProcessed, maskHalfWidths, config, riverIndex, cellSize, forCarveMask: true);
+                    }
                     if (lakeSpill)
                     {
                         ApplyTributaryLakeMouthVisualHalfWidths(
@@ -15542,8 +15811,11 @@ namespace Project.Gameplay.Map.Generator
                             grid, cellProcessed, maskHalfWidths, config, riverIndex);
                     }
 
-                    ApplyLakeFirstTributaryShoreIntersectionWidthBoost(
-                        grid, maskHalfWidths, cellProcessed, config, riverIndex, baseHalfW, cellSize, visualMeshOnly: false);
+                    if (!headwater)
+                    {
+                        ApplyLakeFirstTributaryShoreIntersectionWidthBoost(
+                            grid, maskHalfWidths, cellProcessed, config, riverIndex, baseHalfW, cellSize, visualMeshOnly: false);
+                    }
                     ApplyLakeFirstTributaryShoreIntersectionWidthBoost(
                         grid, meshHalfWidths, cellProcessed, config, riverIndex, baseHalfW, cellSize, visualMeshOnly: true);
                     if (!headwater)
@@ -15569,6 +15841,19 @@ namespace Project.Gameplay.Map.Generator
 
                     AlignLakeFirstTributaryMeshToCarveReach(
                         grid, meshHalfWidths, cellProcessed, config, riverIndex, cellSize);
+                    // Tras Align: reafirmar taper de CARVE en nacimiento y realinear mesh al surco.
+                    if (headwater)
+                    {
+                        ApplyLakeFirstHeadwaterSourceWidthTaper(
+                            maskHalfWidths, cellProcessed, grid, config, riverIndex, cellSize,
+                            LakeFirstHeadwaterSourceWidthMinMulMask, LakeFirstHeadwaterSourceMinHalfCells);
+                        SyncLakeFirstHeadwaterMeshToCarveMask(meshHalfWidths, maskHalfWidths, cellSize);
+                        // Sync pisa boosts previos: reaplicar join mesh como inland/spill→main (hacia el receptor).
+                        ApplyLakeFirstHeadwaterReceiverJoinMeshWiden(
+                            grid, meshHalfWidths, cellProcessed, config, riverIndex, cellSize);
+                        ApplyLakeFirstHeadwaterCarveToMeshGrowthProfile(
+                            meshHalfWidths, maskHalfWidths, cellProcessed, cellSize);
+                    }
                     float maskAvgBefore = 0f;
                     for (int wi = 0; wi < maskHalfWidths.Count; wi++)
                         maskAvgBefore += maskHalfWidths[wi];
@@ -15601,7 +15886,7 @@ namespace Project.Gameplay.Map.Generator
                 if (lakeFirstPipeline && riverIndex > 0)
                 {
                     if (IsLakeFirstHeadwaterFeeder(grid, riverIndex))
-                        rasterMargin = marginCells + 1.4f;
+                        rasterMargin = Mathf.Max(0f, marginCells * 0.25f);
                     else if (UsesSupplementalFeederSourceEmergence(grid, riverIndex))
                         rasterMargin = marginCells + 0.35f;
                     else
@@ -15646,8 +15931,7 @@ namespace Project.Gameplay.Map.Generator
                 MorphologicalClose1(combinedMask, w, h);
             }
 
-            if (lakeFirstPipeline && config.uwpOwnedVisualPolicy)
-                MorphologicalClose1(combinedMask, w, h);
+            // Lake-first: sin MorphologicalClose1 (dilataba tip headwater → orilla/foam ancha).
 
             int maskAfter = CountMaskTrue(combinedMask, w, h);
             if (logDetail || config.uwpOwnedVisualPolicy || lakeFirstPipeline)

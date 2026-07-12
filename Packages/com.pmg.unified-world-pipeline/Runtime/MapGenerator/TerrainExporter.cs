@@ -3169,6 +3169,34 @@ namespace Project.Gameplay.Map.Generator
             return Mathf.Max(1, Mathf.CeilToInt(halfWidthWorld * mul / cs));
         }
 
+        /// <summary>
+        /// Headwater: Ceil para cubrir el fringe de máscara (1.05–1.35 celdas).
+        /// Floor dejaba radio=1 y crestas bajo el ribbon. Con requireMask el stamp no sale de la máscara.
+        /// </summary>
+        static int HalfWidthWorldToUwpHeadwaterCarveRadiusCells(float halfWidthWorld, float cellSizeWorld)
+        {
+            float cs = Mathf.Max(0.01f, cellSizeWorld);
+            return Mathf.Max(1, Mathf.CeilToInt(halfWidthWorld / cs - 1e-4f));
+        }
+
+        static bool TryGetUwpTributaryMeshHalfWidthWorld(
+            GridSystem grid,
+            int riverIndex,
+            int pointIndex,
+            out float halfWidthWorld)
+        {
+            halfWidthWorld = 0f;
+            if (grid?.RiverVisualSurfaces == null ||
+                riverIndex < 0 || riverIndex >= grid.RiverVisualSurfaces.Count)
+                return false;
+            var surface = grid.RiverVisualSurfaces[riverIndex];
+            if (surface == null || surface.Skipped || surface.HalfWidthsWorld == null || surface.HalfWidthsWorld.Count == 0)
+                return false;
+            int idx = Mathf.Clamp(pointIndex, 0, surface.HalfWidthsWorld.Count - 1);
+            halfWidthWorld = surface.HalfWidthsWorld[idx];
+            return halfWidthWorld > 1e-4f;
+        }
+
         static List<Vector2> DensifyUwpTributaryCarvePolyline(List<Vector2> line, float spacingCells = 0.38f)
         {
             if (line == null || line.Count < 2)
@@ -3262,9 +3290,26 @@ namespace Project.Gameplay.Map.Generator
                         TryGetUwpTributaryCarveHalfWidthWorld(grid, config, riverIndex, srcIdx, out float meshHalfW))
                         halfW = meshHalfW;
 
-                    int radius = useMeshHalfWidths
-                        ? HalfWidthWorldToUwpCarveRadiusCells(halfW, cellSize, halfWidthMul)
-                        : (mouthZone ? endpointRadius : bodyRadius);
+                    bool headwaterFeeder = frozenTribCarve && config.uwpLakeFirstHydrologyPipeline &&
+                        UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder;
+
+                    int radius;
+                    if (headwaterFeeder && useMeshHalfWidths)
+                    {
+                        radius = HalfWidthWorldToUwpHeadwaterCarveRadiusCells(halfW, cellSize);
+                        // Nunca superar el half-width del mesh (orilla blanca).
+                        if (TryGetUwpTributaryMeshHalfWidthWorld(grid, riverIndex, srcIdx, out float visualHalf))
+                        {
+                            int maxR = HalfWidthWorldToUwpHeadwaterCarveRadiusCells(visualHalf, cellSize);
+                            radius = Mathf.Min(radius, Mathf.Max(1, maxR));
+                        }
+                    }
+                    else
+                    {
+                        radius = useMeshHalfWidths
+                            ? HalfWidthWorldToUwpCarveRadiusCells(halfW, cellSize, halfWidthMul)
+                            : (mouthZone ? endpointRadius : bodyRadius);
+                    }
                     if (!frozenTribCarve)
                     {
                         if (midBody)
@@ -3290,22 +3335,50 @@ namespace Project.Gameplay.Map.Generator
                     bool lakeMouthLandCarve = frozenTribCarve && config.uwpLakeFirstHydrologyPipeline &&
                         UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex) &&
                         along <= 0.28f && IsLandCellAdjacentToLakeWater(grid, px, pz);
-                    // Headwater: en la boca hacia el receptor el centerline puede quedar fuera de máscara
-                    // (funcional vs Final meander). Sin bypass queda dique de tierra / Height01After alto.
-                    bool headwaterJoinLandCarve = frozenTribCarve && config.uwpLakeFirstHydrologyPipeline &&
-                        UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder &&
-                        along >= 0.70f;
-                    bool effectiveRequireMask = requireMask && !lakeMouthLandCarve && !headwaterJoinLandCarve;
+                    bool headwaterFordCarve = headwaterFeeder &&
+                        WaterMeshBuilder.GridCellNearFordRiverChebyshev(grid, px, pz, 1);
+                    // Headwater: bypass máscara cerca del receptor; radio mínimo = joinMax (~1.55 celdas) para la cuña Y.
+                    bool headwaterJoinLandCarve = headwaterFeeder && along >= 0.82f;
+                    bool headwaterSourceLandCarve = headwaterFeeder && along <= 0.08f;
+                    bool effectiveRequireMask = requireMask && !lakeMouthLandCarve &&
+                        !headwaterJoinLandCarve && !headwaterSourceLandCarve && !headwaterFordCarve;
+                    if (headwaterFordCarve)
+                    {
+                        // El mesh headwater es más ancho que su máscara. En vados, tallar toda
+                        // su huella evita que el lecho somero tape el ribbon y corte el agua.
+                        if (TryGetUwpTributaryMeshHalfWidthWorld(
+                                grid, riverIndex, srcIdx, out float fordMeshHalf))
+                        {
+                            radius = Mathf.Max(
+                                radius,
+                                HalfWidthWorldToUwpHeadwaterCarveRadiusCells(fordMeshHalf, cellSize));
+                        }
+                    }
                     if (headwaterJoinLandCarve)
-                        radius = Mathf.Max(radius, endpointRadius);
+                    {
+                        int joinCap = Mathf.Max(radius, 2);
+                        if (TryGetUwpTributaryCarveHalfWidthWorld(grid, config, riverIndex, srcIdx, out float joinMaskHalf))
+                            joinCap = Mathf.Max(joinCap, HalfWidthWorldToUwpHeadwaterCarveRadiusCells(joinMaskHalf, cellSize));
+                        // Mínimo ~1.55 celdas de reach en unión (constante alineada con headwater joinMax).
+                        joinCap = Mathf.Max(joinCap, Mathf.Max(2, Mathf.CeilToInt(1.55f - 1e-4f)));
+                        radius = joinCap;
+                    }
                     bool forceFullDepth = frozenTribCarve || midBody;
-                    bool stampForceFullDepth = forceFullDepth || lakeFirstMidCarveBoost || headwaterJoinLandCarve;
+                    bool stampForceFullDepth = forceFullDepth || lakeFirstMidCarveBoost ||
+                        headwaterJoinLandCarve || headwaterSourceLandCarve || headwaterFordCarve;
                     float stampFloorH = floorH;
                     if (lakeFirstMidCarveBoost)
                     {
                         float terrainY = Mathf.Max(1f, config.terrainHeightWorld);
                         stampFloorH = Mathf.Max(0f, floorH - 0.5f / terrainY);
                     }
+
+                    // Headwater: mismo floor plano que inland, pero clipado por requireMask (sin estantería fuera de máscara).
+                    bool flatFloor = frozenTribCarve;
+                    // Headwater: no estantería de vado (fordMul~0.18 sube el lecho y corta el arroyo).
+                    // Main / lake-spill / inland siguen con fordMul+delta normales.
+                    float stampFordDelta = headwaterFeeder ? 0f : fordFloorDelta;
+                    float stampFordMul = headwaterFeeder ? 1f : fordMul;
 
                     StampUniformUwpFloorDisk(
                         outH,
@@ -3314,15 +3387,15 @@ namespace Project.Gameplay.Map.Generator
                         new Vector2(p.x, p.y),
                         radius,
                         stampFloorH,
-                        fordFloorDelta,
-                        fordMul,
+                        stampFordDelta,
+                        stampFordMul,
                         config,
                         requireMask: effectiveRequireMask,
                         allowWaterCarve: allowWaterCarve,
                         forceFullDepth: stampForceFullDepth,
-                        uniformFlatChannelFloor: frozenTribCarve);
+                        uniformFlatChannelFloor: flatFloor);
                     TryApplyUniformUwpFloorAtCell(
-                        outH, grid, null, px, pz, stampFloorH, fordFloorDelta, allowWaterCarve);
+                        outH, grid, null, px, pz, stampFloorH, stampFordDelta, allowWaterCarve);
                 }
             }
         }
