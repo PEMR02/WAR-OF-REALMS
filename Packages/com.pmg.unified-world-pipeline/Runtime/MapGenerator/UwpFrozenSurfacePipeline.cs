@@ -64,6 +64,8 @@ namespace Project.Gameplay.Map.Generator
                     layers.grassTile, layers.dirtTile, layers.rockTile,
                     layers.sand, layers.sandTile, layers.sandShoreCells);
                 TerrainSplatDebugDisplay.Refresh(terrain, config);
+                // Tras carve: bajar ribbons que queden flotando para recuperar orilla blanca del material.
+                RiverSurfaceMeshBuilder.SnapBuiltRiverMeshesToTerrainContact(waterRoot, terrain, grid, config);
             }
 
             RiverSurfaceMeshBuilder.ValidateAndLogUwpWaterSurfaceFinal(grid, config, waterRoot);

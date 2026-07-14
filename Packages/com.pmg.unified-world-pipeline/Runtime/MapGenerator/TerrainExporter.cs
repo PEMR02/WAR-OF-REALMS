@@ -115,18 +115,43 @@ namespace Project.Gameplay.Map.Generator
 
             data.SetHeights(0, 0, heights);
 
-            TerrainLayer g = ApplyTileSize(grassOverride != null ? grassOverride : config.grassLayer, grassTileSize);
-            TerrainLayer d = ApplyTileSize(dirtOverride != null ? dirtOverride : config.dirtLayer, dirtTileSize);
-            TerrainLayer r = ApplyTileSize(rockOverride != null ? rockOverride : config.rockLayer, rockTileSize);
+            TerrainLayer g = ApplyTileSize(
+                grassOverride != null ? grassOverride : config.grassLayer,
+                grassTileSize.x > 0.01f || grassTileSize.y > 0.01f ? grassTileSize : new Vector2(28f, 28f));
+            TerrainLayer d = ApplyTileSize(
+                dirtOverride != null ? dirtOverride : config.dirtLayer,
+                dirtTileSize.x > 0.01f || dirtTileSize.y > 0.01f ? dirtTileSize : new Vector2(24f, 24f));
+            TerrainLayer r = ApplyTileSize(
+                rockOverride != null ? rockOverride : config.rockLayer,
+                rockTileSize.x > 0.01f || rockTileSize.y > 0.01f ? rockTileSize : new Vector2(22f, 22f));
+            if (config.grassDryLayer == null && config.grassDryBlendStrength > 1e-5f)
+            {
+                // Solo albedo de hierba seca real. Grass_02.png es máscara grayscale → NO usar como diffuse.
+                config.grassDryLayer = CreateRuntimeTerrainLayerFromProjectTexture(
+                    "Assets/_Project/05_Art/Materials/Terreno/Grass_01.jpg",
+                    "TL_Runtime_GrassDry");
+                if (config.grassDryLayer == null)
+                    config.grassDryBlendStrength = 0f;
+            }
             TerrainLayer s = ApplyTileSize(
                 sandOverride != null ? sandOverride : (config.sandLayer != null ? config.sandLayer : CreateRuntimeTerrainLayerFromProjectTexture("Packages/com.pmg.unified-world-pipeline/Content/TerrainTextures/Sand.png", "TL_Runtime_Sand")),
-                sandTileSize);
+                sandTileSize.x > 0.01f || sandTileSize.y > 0.01f ? sandTileSize : new Vector2(18f, 18f));
             TerrainLayer fordBed = null;
             if (s != null && config.riverFordBedLayer != null)
                 fordBed = ApplyTileSize(config.riverFordBedLayer, sandTileSize);
             int shoreCells = sandShoreCells > 0 ? sandShoreCells : config.sandShoreCells;
-            if (config.paintTerrainByHeight && (g != null || d != null || r != null))
+            // Orilla menos encajonada: mínimo 5 celdas de franja sand visual.
+            shoreCells = Mathf.Clamp(Mathf.Max(shoreCells, 5), 1, 8);
+
+            if (config.terrainMaterialTemplateOverride != null)
+                terrain.materialTemplate = config.terrainMaterialTemplateOverride;
+
+            // Pintar siempre que haya layers (el flag a veces queda false tras perfiles y deja todo dirt).
+            bool canPaint = g != null || d != null || r != null;
+            if (canPaint)
             {
+                if (!config.paintTerrainByHeight)
+                    Debug.LogWarning("[TerrainExporter] paintTerrainByHeight=false pero hay layers: se pinta igual.");
                 PaintTerrainByHeight(data, heights, res, config, grid, g, d, r, s, shoreCells, fordBed,
                     grassTileSize, dirtTileSize);
                 EnsureTerrainMaterialSupportsLayers(terrain);
@@ -134,12 +159,10 @@ namespace Project.Gameplay.Map.Generator
             else
             {
                 ClearSplatDebugBuffers();
-                if (config.paintTerrainByHeight && g == null && d == null && r == null)
+                if (config.paintTerrainByHeight)
                     Debug.LogWarning("TerrainExporter: Paint Terrain By Height activado pero no hay Grass/Dirt/Rock layers. Asigna Texture_Grass, Texture_Dirt, Texture_Rock en el RTS o en MapGenConfig.");
+                EnsureTerrainMaterialSupportsLayers(terrain);
             }
-
-            if (config.terrainMaterialTemplateOverride != null)
-                terrain.materialTemplate = config.terrainMaterialTemplateOverride;
 
             if (config.debugLogs)
                 Debug.Log($"Fase9 TerrainExport: heightmap {res}x{res}, size={data.size}, texturas={(g != null || d != null || r != null ? "aplicadas" : "no")}.");
@@ -232,6 +255,7 @@ namespace Project.Gameplay.Map.Generator
             float terrainY = config.terrainHeightWorld > 0f ? config.terrainHeightWorld : 50f;
             float visualOffsetWorld = UnifiedWaterField.VisualSurfaceOffsetWorld(config, terrainY);
             float visualWaterH = Mathf.Clamp01(config.waterHeight01 + visualOffsetWorld / Mathf.Max(1e-4f, terrainY));
+            // Respetar perfil RTS (band≤0.75, lip≤0.014). Floor 1.85/0.07 recreaba orilla blanca plana.
             float bankLipWorld = Mathf.Max(config.unifiedWaterTerrainBankLipWorld, config.unifiedWaterShoreTerrainOffsetWorld);
             float landLipH = Mathf.Clamp01(visualWaterH + Mathf.Max(0.015f, bankLipWorld) / Mathf.Max(1e-4f, terrainY));
             float edgeSubmergeH = Mathf.Max(0.025f, config.unifiedWaterTerrainEdgeSubmergeWorld) / Mathf.Max(1e-4f, terrainY);
@@ -271,10 +295,24 @@ namespace Project.Gameplay.Map.Generator
                     {
                         int cx = Mathf.Clamp(Mathf.RoundToInt(gxF), 0, grid.Width - 1);
                         int cz = Mathf.Clamp(Mathf.RoundToInt(gzF), 0, grid.Height - 1);
-                        if (ShouldPreserveUwpRiverChannelCarve(grid, cx, cz))
+                        // Solo preservar el LECHO (celda en máscara). El anillo adyacente DEBE subir a lip
+                        // o el mesh unificado queda separado en Y y desaparece la orilla blanca del material.
+                        if (grid.RiverVisualSurfaceMask != null &&
+                            grid.InBoundsCell(cx, cz) &&
+                            grid.RiverVisualSurfaceMask[cx, cz])
+                            continue;
+                        if (IsLandCellAdjacentToLakeWater(grid, cx, cz) &&
+                            grid.GetCell(cx, cz).type == CellType.Water)
                             continue;
 
-                        float target = Mathf.Lerp(heights[y, x], landLipH, Mathf.Clamp01(nearShore01 * 0.82f));
+                        // No re-levantar lecho ya excavado fuera de máscara (carve euclídeo main/trib).
+                        // Sin esto el lip recrea la orilla jagged de la máscara bool.
+                        float carvedChannelCeil = visualWaterH - Mathf.Max(edgeSubmergeH * 0.35f, 0.008f);
+                        if (heights[y, x] < carvedChannelCeil)
+                            continue;
+
+                        float lipPull = Mathf.Clamp01(nearShore01 * 0.92f);
+                        float target = Mathf.Lerp(heights[y, x], landLipH, lipPull);
                         heights[y, x] = Mathf.Max(heights[y, x], target);
                     }
                     adjusted++;
@@ -2765,9 +2803,29 @@ namespace Project.Gameplay.Map.Generator
 
             bool tributary = riverIndex > 0;
             float antiZ = Mathf.Max(0.02f, config.riverRibbonAntiZFightYOffsetWorld);
+            // Main: lecho bajo Snap bankBand (0.22) y FoamWidth (~0.39).
+            // Un poco más hondo que el mínimo histórico (0.50) para valle en el eje.
             float bedDepthWorld = tributary
                 ? Mathf.Max(0.052f, config.riverTerrainCarveDepthWorld * 0.58f + antiZ * 0.5f)
-                : Mathf.Max(0.038f, config.riverTerrainCarveDepthWorld * 0.44f);
+                : Mathf.Max(0.52f, config.riverTerrainCarveDepthWorld * 1.22f + antiZ * 0.5f);
+            // Headwater: lecho CONTÍNUO bajo mesh (flatFloor). Más bajo que trib genérico
+            // para no “comerse” el ribbon (charcos / foam-only).
+            if (tributary &&
+                UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder)
+            {
+                bedDepthWorld = Mathf.Max(
+                    bedDepthWorld,
+                    Mathf.Max(0.40f, config.riverTerrainCarveDepthWorld * 1.15f + antiZ * 0.6f));
+            }
+            // Inland→main: alinear profundidad de lecho con el troncal (evita escalón / “blanco”
+            // en la junta; antes trib genérico 0.58× quedaba mucho más alto que el main).
+            if (tributary &&
+                UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex))
+            {
+                bedDepthWorld = Mathf.Max(
+                    bedDepthWorld,
+                    Mathf.Max(0.42f, config.riverTerrainCarveDepthWorld * 1.05f + antiZ * 0.55f));
+            }
             float bedWorldY = surfaceY - bedDepthWorld;
             return Mathf.Clamp01((bedWorldY - grid.Origin.y) / Mathf.Max(1e-4f, terrainY));
         }
@@ -3115,7 +3173,8 @@ namespace Project.Gameplay.Map.Generator
         static float ComputeUwpCarveBellProfile01(float normalizedDist, float flatRatio, float bankPower)
         {
             float t = Mathf.Clamp01(normalizedDist);
-            flatRatio = Mathf.Clamp(flatRatio, 0.22f, 0.55f);
+            // Honrar perfil RTS (flatRatio≈0.16): núcleo estrecho + pendiente a orillas.
+            flatRatio = Mathf.Clamp(flatRatio, 0.12f, 0.55f);
             bankPower = Mathf.Clamp(bankPower, 1.2f, 2.8f);
             if (t <= flatRatio)
                 return 1f;
@@ -3170,13 +3229,13 @@ namespace Project.Gameplay.Map.Generator
         }
 
         /// <summary>
-        /// Headwater: Ceil para cubrir el fringe de máscara (1.05–1.35 celdas).
-        /// Floor dejaba radio=1 y crestas bajo el ribbon. Con requireMask el stamp no sale de la máscara.
+        /// Headwater: radio en celdas solo para bounding box del stamp.
+        /// El límite real es maxDistWorld ≈ half-width del mesh (carve ≤ mesh).
         /// </summary>
         static int HalfWidthWorldToUwpHeadwaterCarveRadiusCells(float halfWidthWorld, float cellSizeWorld)
         {
             float cs = Mathf.Max(0.01f, cellSizeWorld);
-            return Mathf.Max(1, Mathf.CeilToInt(halfWidthWorld / cs - 1e-4f));
+            return Mathf.Max(1, Mathf.CeilToInt(halfWidthWorld / cs + 0.35f));
         }
 
         static bool TryGetUwpTributaryMeshHalfWidthWorld(
@@ -3257,15 +3316,21 @@ namespace Project.Gameplay.Map.Generator
             if (outH == null || grid == null || carveLine == null || carveLine.Count < 2)
                 return;
 
-            const float spacingCells = 0.36f;
+            const float spacingCellsDefault = 0.36f;
             int w = grid.Width;
             int h = grid.Height;
             bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
             bool frozenTribCarve = frozenCarve && riverIndex > 0;
+            bool frozenMainCarve = frozenCarve && riverIndex == 0;
+            // Contrato Lake First (mismo que Headwater): floor plano + stamps euclídeos bajo mesh.
+            bool lakeFirstChannelContract = frozenCarve &&
+                config != null &&
+                config.uwpLakeFirstHydrologyPipeline;
+            // Main frozen: stamps más densos (misma idea que densify 0.28 del carve line).
+            float spacingCells = (frozenMainCarve || lakeFirstChannelContract) ? 0.28f : spacingCellsDefault;
             float halfWidthMul = frozenTribCarve
                 ? 1f
                 : (frozenCarve ? 1f : ResolveUwpCarveHalfWidthMul(config, riverIndex));
-            bool bellProfile = config != null && config.uwpCarveEuclideanBellProfileEnabled;
             bool requireMask = frozenCarve;
 
             for (int i = 0; i < carveLine.Count - 1; i++)
@@ -3293,16 +3358,29 @@ namespace Project.Gameplay.Map.Generator
                     bool headwaterFeeder = frozenTribCarve && config.uwpLakeFirstHydrologyPipeline &&
                         UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder;
 
+                    float euclidMaxDistWorld = -1f;
                     int radius;
-                    if (headwaterFeeder && useMeshHalfWidths)
+                    if (lakeFirstChannelContract && (useMeshHalfWidths || frozenMainCarve || headwaterFeeder))
                     {
-                        radius = HalfWidthWorldToUwpHeadwaterCarveRadiusCells(halfW, cellSize);
-                        // Nunca superar el half-width del mesh (orilla blanca).
-                        if (TryGetUwpTributaryMeshHalfWidthWorld(grid, riverIndex, srcIdx, out float visualHalf))
+                        // Carve = half de máscara (contrato mesh>carve).
+                        // No Max con mesh: anulaba el margen blanco en orillas (foam = mesh∩terreno).
+                        // Cabe bajo mesh para no dejar bandeja blanca sin agua (sobre-carve).
+                        float visualHalf = halfW;
+                        if (!frozenMainCarve &&
+                            useMeshHalfWidths &&
+                            TryGetUwpTributaryMeshHalfWidthWorld(grid, riverIndex, srcIdx, out float meshHalf))
                         {
-                            int maxR = HalfWidthWorldToUwpHeadwaterCarveRadiusCells(visualHalf, cellSize);
-                            radius = Mathf.Min(radius, Mathf.Max(1, maxR));
+                            // Headwater: stamp más cerca del mesh (aún ≤0.98) para cubrir ribbon estrecho.
+                            float foamMul = headwaterFeeder ? 0.98f : (1f / Mathf.Max(1.01f, 1.3f));
+                            float foamCeil = meshHalf * foamMul;
+                            float floorRatio = headwaterFeeder ? 0.95f : 0.98f;
+                            visualHalf = Mathf.Min(
+                                Mathf.Max(visualHalf, foamCeil * (headwaterFeeder ? 1f : 0.98f)),
+                                meshHalf * floorRatio);
                         }
+
+                        euclidMaxDistWorld = visualHalf + cellSize * (headwaterFeeder ? 0.12f : 0.08f);
+                        radius = Mathf.Max(1, Mathf.CeilToInt(euclidMaxDistWorld / Mathf.Max(0.01f, cellSize)));
                     }
                     else
                     {
@@ -3310,7 +3388,7 @@ namespace Project.Gameplay.Map.Generator
                             ? HalfWidthWorldToUwpCarveRadiusCells(halfW, cellSize, halfWidthMul)
                             : (mouthZone ? endpointRadius : bodyRadius);
                     }
-                    if (!frozenTribCarve)
+                    if (!frozenTribCarve && !frozenMainCarve)
                     {
                         if (midBody)
                             radius = Mathf.Max(radius, bodyRadius + 1);
@@ -3318,7 +3396,7 @@ namespace Project.Gameplay.Map.Generator
                             radius = Mathf.Max(radius, endpointRadius);
                     }
 
-                    if (!frozenTribCarve)
+                    if (!frozenTribCarve && !frozenMainCarve)
                     {
                         radius = Mathf.Max(1, Mathf.RoundToInt(radius * SampleUwpCarveLongitudinalRadiusMul(config, riverIndex, srcIdx)));
                     }
@@ -3335,37 +3413,40 @@ namespace Project.Gameplay.Map.Generator
                     bool lakeMouthLandCarve = frozenTribCarve && config.uwpLakeFirstHydrologyPipeline &&
                         UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex) &&
                         along <= 0.28f && IsLandCellAdjacentToLakeWater(grid, px, pz);
-                    bool headwaterFordCarve = headwaterFeeder &&
-                        WaterMeshBuilder.GridCellNearFordRiverChebyshev(grid, px, pz, 1);
-                    // Headwater: bypass máscara cerca del receptor; radio mínimo = joinMax (~1.55 celdas) para la cuña Y.
+                    // Headwater / lake-spill→main: bypass mask; límite = maxDistWorld (euclídeo).
                     bool headwaterJoinLandCarve = headwaterFeeder && along >= 0.82f;
-                    bool headwaterSourceLandCarve = headwaterFeeder && along <= 0.08f;
-                    bool effectiveRequireMask = requireMask && !lakeMouthLandCarve &&
-                        !headwaterJoinLandCarve && !headwaterSourceLandCarve && !headwaterFordCarve;
-                    if (headwaterFordCarve)
+                    bool lakeSpillMainJoinCarve = frozenTribCarve &&
+                        config.uwpLakeFirstHydrologyPipeline &&
+                        UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex) &&
+                        along >= 0.76f;
+                    float joinMaxDistWorld = (headwaterFeeder || lakeSpillMainJoinCarve) ? euclidMaxDistWorld : -1f;
+                    if ((headwaterJoinLandCarve || lakeSpillMainJoinCarve) && joinMaxDistWorld > 0f)
                     {
-                        // El mesh headwater es más ancho que su máscara. En vados, tallar toda
-                        // su huella evita que el lecho somero tape el ribbon y corte el agua.
-                        if (TryGetUwpTributaryMeshHalfWidthWorld(
-                                grid, riverIndex, srcIdx, out float fordMeshHalf))
-                        {
-                            radius = Mathf.Max(
-                                radius,
-                                HalfWidthWorldToUwpHeadwaterCarveRadiusCells(fordMeshHalf, cellSize));
-                        }
+                        // Cuña Y trib↔main: acompañar mesh con margen foam (no stamp = mesh).
+                        float meshHalfJoin = joinMaxDistWorld - cellSize * 0.08f;
+                        if (TryGetUwpTributaryMeshHalfWidthWorld(grid, riverIndex, srcIdx, out float mh))
+                            meshHalfJoin = mh;
+                        float recvHalfWorld = Mathf.Max(
+                            0.01f,
+                            config.riverVisualRibbonFullWidthCellsMain * 0.5f * cellSize);
+                        float foamCeil = meshHalfJoin * (1f / Mathf.Max(1.01f, 1.3f));
+                        float joinReach = Mathf.Max(
+                            foamCeil + cellSize * 0.10f,
+                            Mathf.Max(
+                                foamCeil * (lakeSpillMainJoinCarve ? 1.06f : 1.03f),
+                                Mathf.Max(recvHalfWorld * 0.28f, cellSize * 1.05f)));
+                        float joinCap = foamCeil * (lakeSpillMainJoinCarve ? 1.10f : 1.06f) + cellSize * 0.12f;
+                        joinMaxDistWorld = Mathf.Min(joinReach, joinCap);
+                        // Nunca superar el overhang de foam del mesh.
+                        joinMaxDistWorld = Mathf.Min(joinMaxDistWorld, meshHalfJoin * 0.98f);
+                        euclidMaxDistWorld = joinMaxDistWorld;
+                        radius = Mathf.Max(1, Mathf.CeilToInt(joinMaxDistWorld / Mathf.Max(0.01f, cellSize)));
                     }
-                    if (headwaterJoinLandCarve)
-                    {
-                        int joinCap = Mathf.Max(radius, 2);
-                        if (TryGetUwpTributaryCarveHalfWidthWorld(grid, config, riverIndex, srcIdx, out float joinMaskHalf))
-                            joinCap = Mathf.Max(joinCap, HalfWidthWorldToUwpHeadwaterCarveRadiusCells(joinMaskHalf, cellSize));
-                        // Mínimo ~1.55 celdas de reach en unión (constante alineada con headwater joinMax).
-                        joinCap = Mathf.Max(joinCap, Mathf.Max(2, Mathf.CeilToInt(1.55f - 1e-4f)));
-                        radius = joinCap;
-                    }
-                    bool forceFullDepth = frozenTribCarve || midBody;
-                    bool stampForceFullDepth = forceFullDepth || lakeFirstMidCarveBoost ||
-                        headwaterJoinLandCarve || headwaterSourceLandCarve || headwaterFordCarve;
+
+                    bool effectiveRequireMask = requireMask && !lakeMouthLandCarve && !lakeFirstChannelContract;
+                    bool forceFullDepth = frozenTribCarve || frozenMainCarve || midBody;
+                    bool stampForceFullDepth = forceFullDepth || lakeFirstMidCarveBoost || headwaterFeeder ||
+                        frozenMainCarve || lakeSpillMainJoinCarve;
                     float stampFloorH = floorH;
                     if (lakeFirstMidCarveBoost)
                     {
@@ -3373,12 +3454,18 @@ namespace Project.Gameplay.Map.Generator
                         stampFloorH = Mathf.Max(0f, floorH - 0.5f / terrainY);
                     }
 
-                    // Headwater: mismo floor plano que inland, pero clipado por requireMask (sin estantería fuera de máscara).
-                    bool flatFloor = frozenTribCarve;
-                    // Headwater: no estantería de vado (fordMul~0.18 sube el lecho y corta el arroyo).
-                    // Main / lake-spill / inland siguen con fordMul+delta normales.
+                    // Lake First: bandeja plana bajo el mesh (main / spill / inland / headwater).
+                    // NO usar V/U bajo el ribbon del headwater: el lecho parcial deja terreno
+                    // alto dentro del mesh → charcos / foam blanco / “el carve se lo come”.
+                    // El look de valle en orillas exteriores viene de bankFalloff, no de flatFloor=false.
+                    bool flatFloor = lakeFirstChannelContract || frozenTribCarve || frozenMainCarve;
                     float stampFordDelta = headwaterFeeder ? 0f : fordFloorDelta;
                     float stampFordMul = headwaterFeeder ? 1f : fordMul;
+                    float stampMaxDistWorld = headwaterFeeder
+                        ? joinMaxDistWorld
+                        : (lakeSpillMainJoinCarve
+                            ? joinMaxDistWorld
+                            : (lakeFirstChannelContract ? euclidMaxDistWorld : -1f));
 
                     StampUniformUwpFloorDisk(
                         outH,
@@ -3393,7 +3480,8 @@ namespace Project.Gameplay.Map.Generator
                         requireMask: effectiveRequireMask,
                         allowWaterCarve: allowWaterCarve,
                         forceFullDepth: stampForceFullDepth,
-                        uniformFlatChannelFloor: flatFloor);
+                        uniformFlatChannelFloor: flatFloor,
+                        maxDistWorld: stampMaxDistWorld);
                     TryApplyUniformUwpFloorAtCell(
                         outH, grid, null, px, pz, stampFloorH, stampFordDelta, allowWaterCarve);
                 }
@@ -3432,7 +3520,8 @@ namespace Project.Gameplay.Map.Generator
                     continue;
 
                 bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
-                float densifyStep = 0.38f;
+                // Main: densificar como headwater (0.28) para orillas diagonales menos escalonadas.
+                float densifyStep = ri == 0 ? 0.28f : 0.38f;
                 if (frozenCarve &&
                     config.uwpLakeFirstHydrologyPipeline &&
                     UwpTributaryOriginUtility.GetOrigin(grid, ri) == UwpTributaryOriginKind.HeadwaterFeeder)
@@ -3481,6 +3570,14 @@ namespace Project.Gameplay.Map.Generator
                     fordMul,
                     config);
 
+                if (frozenCarve &&
+                    config.uwpLakeFirstHydrologyPipeline &&
+                    UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, ri))
+                {
+                    StampLakeSpillMainJoinWedgeCarve(
+                        outH, grid, config, sourceLine, carveLine, ri, floorH, fordFloorDelta, fordMul, cellSize);
+                }
+
                 if (!frozenCarve)
                 {
                     ApplyUwpTributaryEndpointCarveFlare(
@@ -3489,6 +3586,127 @@ namespace Project.Gameplay.Map.Generator
 
                 RiverSurfaceMeshBuilder.MarkUwpRiverCarveApplied(grid, ri, sourceLine);
             }
+        }
+
+        /// <summary>
+        /// Cuña spill→main: disco en la boca + offsets laterales cubren la esquina aguda
+        /// que los stamps del centerline dejan sin tallar (lado izquierdo típico).
+        /// </summary>
+        static void StampLakeSpillMainJoinWedgeCarve(
+            float[,] outH,
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2> sourceLine,
+            List<Vector2> carveLine,
+            int riverIndex,
+            float floorH,
+            float fordFloorDelta,
+            float fordMul,
+            float cellSize)
+        {
+            if (outH == null || grid == null || config == null || carveLine == null || carveLine.Count < 3 || riverIndex <= 0)
+                return;
+
+            // Lake-spill: el extremo hacia el main suele ser el final de la polyline densificada.
+            int joinEp = carveLine.Count - 1;
+            if (grid.RiverCenterlinesCellSpace != null &&
+                grid.RiverCenterlinesCellSpace.Count > 0 &&
+                grid.RiverCenterlinesCellSpace[0] != null &&
+                grid.RiverCenterlinesCellSpace[0].Count >= 2)
+            {
+                var mainLine = grid.RiverCenterlinesCellSpace[0];
+                float dStart = DistanceSqPointToPolylineCellSpace(carveLine[0], mainLine);
+                float dEnd = DistanceSqPointToPolylineCellSpace(carveLine[carveLine.Count - 1], mainLine);
+                joinEp = dStart <= dEnd ? 0 : carveLine.Count - 1;
+            }
+
+            joinEp = Mathf.Clamp(joinEp, 0, carveLine.Count - 1);
+            bool joinAtStart = joinEp == 0;
+            Vector2 mouth = carveLine[joinEp];
+            int prev = joinAtStart
+                ? Mathf.Min(1, carveLine.Count - 1)
+                : Mathf.Max(0, carveLine.Count - 2);
+            Vector2 approach = mouth - carveLine[prev];
+            if (approach.sqrMagnitude < 1e-8f)
+                return;
+            approach.Normalize();
+            Vector2 perp = new Vector2(-approach.y, approach.x);
+
+            float meshHalf = cellSize * 1.2f;
+            int srcIdx = MapCarvePointToSourceIndex(sourceLine ?? carveLine, mouth);
+            if (TryGetUwpTributaryMeshHalfWidthWorld(grid, riverIndex, srcIdx, out float mh))
+                meshHalf = Mathf.Max(meshHalf, mh);
+            else if (TryGetUwpTributaryCarveHalfWidthWorld(grid, config, riverIndex, srcIdx, out float ch))
+                meshHalf = Mathf.Max(meshHalf, ch);
+            float mainHalf = Mathf.Max(0.01f, config.riverVisualRibbonFullWidthCellsMain * 0.5f * cellSize);
+
+            float hubWorld = Mathf.Max(meshHalf * 1.12f, mainHalf * 0.42f) + cellSize * 0.18f;
+            int hubRadius = Mathf.Max(2, Mathf.CeilToInt(hubWorld / Mathf.Max(0.01f, cellSize)));
+            StampUniformUwpFloorDisk(
+                outH, grid, null, mouth, hubRadius, floorH, fordFloorDelta, fordMul, config,
+                requireMask: false, allowWaterCarve: true, forceFullDepth: true,
+                uniformFlatChannelFloor: true, maxDistWorld: hubWorld);
+
+            float sideOff = meshHalf * 0.55f + cellSize * 0.18f;
+            float sideWorld = Mathf.Max(meshHalf * 1.05f, mainHalf * 0.38f) + cellSize * 0.16f;
+            int sideRadius = Mathf.Max(2, Mathf.CeilToInt(sideWorld / Mathf.Max(0.01f, cellSize)));
+            Vector2 behind = mouth - approach * (meshHalf * 0.22f + cellSize * 0.10f);
+            for (int s = -1; s <= 1; s += 2)
+            {
+                Vector2 side = behind + perp * (sideOff * s);
+                StampUniformUwpFloorDisk(
+                    outH, grid, null, side, sideRadius, floorH, fordFloorDelta, fordMul, config,
+                    requireMask: false, allowWaterCarve: true, forceFullDepth: true,
+                    uniformFlatChannelFloor: true, maxDistWorld: sideWorld);
+            }
+
+            // Un paso corto hacia el main: cubre esquina Y sin bandeja fuera del mesh.
+            Vector2 intoMain = mouth + approach * (mainHalf * 0.18f + cellSize * 0.10f);
+            float intoWorld = Mathf.Max(meshHalf * 1.05f, mainHalf * 0.32f);
+            int intoRadius = Mathf.Max(2, Mathf.CeilToInt(intoWorld / Mathf.Max(0.01f, cellSize)));
+            StampUniformUwpFloorDisk(
+                outH, grid, null, intoMain, intoRadius, floorH, fordFloorDelta, fordMul, config,
+                requireMask: false, allowWaterCarve: true, forceFullDepth: true,
+                uniformFlatChannelFloor: true, maxDistWorld: intoWorld);
+
+            Vector2 ahead = mouth + approach * (mainHalf * 0.12f);
+            float wingWorld = Mathf.Max(meshHalf * 0.92f, mainHalf * 0.28f);
+            int wingRadius = Mathf.Max(2, Mathf.CeilToInt(wingWorld / Mathf.Max(0.01f, cellSize)));
+            for (int s = -1; s <= 1; s += 2)
+            {
+                Vector2 wing = ahead + perp * (sideOff * 0.70f * s);
+                StampUniformUwpFloorDisk(
+                    outH, grid, null, wing, wingRadius, floorH, fordFloorDelta, fordMul, config,
+                    requireMask: false, allowWaterCarve: true, forceFullDepth: true,
+                    uniformFlatChannelFloor: true, maxDistWorld: wingWorld);
+            }
+        }
+
+        static float DistanceSqPointToPolylineCellSpace(Vector2 p, List<Vector2> line)
+        {
+            if (line == null || line.Count == 0)
+                return float.MaxValue;
+            if (line.Count == 1)
+                return (p - line[0]).sqrMagnitude;
+            float best = float.MaxValue;
+            for (int i = 0; i < line.Count - 1; i++)
+            {
+                Vector2 q = ClosestPointOnOpenSegment2D(p, line[i], line[i + 1]);
+                float d = (p - q).sqrMagnitude;
+                if (d < best)
+                    best = d;
+            }
+            return best;
+        }
+
+        static Vector2 ClosestPointOnOpenSegment2D(Vector2 p, Vector2 a, Vector2 b)
+        {
+            Vector2 ab = b - a;
+            float lenSq = ab.sqrMagnitude;
+            if (lenSq < 1e-12f)
+                return a;
+            float t = Mathf.Clamp01(Vector2.Dot(p - a, ab) / lenSq);
+            return a + ab * t;
         }
 
         /// <summary>Carve de respaldo: terreno entre extremo del tributario y orilla del lago (sin depender de máscara).</summary>
@@ -4241,7 +4459,8 @@ namespace Project.Gameplay.Map.Generator
             bool requireMask = true,
             bool allowWaterCarve = false,
             bool forceFullDepth = false,
-            bool uniformFlatChannelFloor = false)
+            bool uniformFlatChannelFloor = false,
+            float maxDistWorld = -1f)
         {
             if (grid == null || outH == null || radiusCells < 1)
                 return;
@@ -4258,6 +4477,8 @@ namespace Project.Gameplay.Map.Generator
             float bankPower = config != null ? config.uwpCarveTransverseBankPower : 1.8f;
             float maxDist = Mathf.Max(1f, radiusCells);
             bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
+            float cellSize = Mathf.Max(0.01f, grid.CellSizeWorld);
+            bool limitWorld = maxDistWorld > 1e-5f;
 
             for (int dz = -radiusCells; dz <= radiusCells; dz++)
             {
@@ -4271,7 +4492,16 @@ namespace Project.Gameplay.Map.Generator
                     float dist = useBell
                         ? Mathf.Sqrt((nx + 0.5f - cx) * (nx + 0.5f - cx) + (nz + 0.5f - cz) * (nz + 0.5f - cz))
                         : Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz));
-                    if (useBell)
+                    if (limitWorld)
+                    {
+                        // Distancia euclídea en mundo: carve no supera half-width del mesh.
+                        float distWorld = Mathf.Sqrt(
+                            (nx + 0.5f - cx) * (nx + 0.5f - cx) +
+                            (nz + 0.5f - cz) * (nz + 0.5f - cz)) * cellSize;
+                        if (distWorld > maxDistWorld + 1e-4f)
+                            continue;
+                    }
+                    else if (useBell)
                     {
                         if (dist > maxDist + 0.001f)
                             continue;
@@ -4297,10 +4527,17 @@ namespace Project.Gameplay.Map.Generator
                     float target;
                     if (useBell)
                     {
-                        float profile = ComputeUwpCarveBellProfile01(dist / maxDist, flatRatio, bankPower);
-                        if ((forceFullDepth || uniformFlatChannelFloor) && dist / maxDist <= flatRatio)
+                        // Con maxDistWorld (main frozen): normalizar a half-width visual, no a radiusCells.
+                        float distWorldBell = Mathf.Sqrt(
+                            (nx + 0.5f - cx) * (nx + 0.5f - cx) +
+                            (nz + 0.5f - cz) * (nz + 0.5f - cz)) * cellSize;
+                        float normT = limitWorld
+                            ? distWorldBell / Mathf.Max(1e-4f, maxDistWorld)
+                            : dist / maxDist;
+                        float profile = ComputeUwpCarveBellProfile01(normT, flatRatio, bankPower);
+                        if ((forceFullDepth || uniformFlatChannelFloor) && normT <= flatRatio)
                             profile = 1f;
-                        if (frozenCarve && (forceFullDepth || uniformFlatChannelFloor) && dist / maxDist <= flatRatio)
+                        if (frozenCarve && (forceFullDepth || uniformFlatChannelFloor) && normT <= flatRatio)
                             target = coreTarget;
                         else if (uniformFlatChannelFloor)
                             target = coreTarget;
@@ -4437,11 +4674,29 @@ namespace Project.Gameplay.Map.Generator
             int h = grid.Height;
             int carved = 0;
             bool uniformUwpChannel = IsUniformUwpRiverCarveChannel(config);
+            bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
+            // RTS: bankFall>0 → rama no-uniforme. Frozen Lake First: solo stamps (contrato Headwater).
+            // Evita BFS de máscara bool que dibuja orilla en sierra antes del floor plano.
+            if (frozenCarve && !uniformUwpChannel)
+            {
+                float fordFloorDelta = depth01 * 0.14f;
+                ApplyUwpTributaryLogicalPathCarve(outH, grid, config, m, depth01, fordFloorDelta, fordMul);
+                ApplyUwpTributaryLakeMouthFinalCarveReach(
+                    outH, grid, config, m, depth01, fordFloorDelta, fordMul);
+                EnsureUwpFrozenCarveFlagsMarked(grid);
+                if (config.debugLogs || config.debugHydrologyNetwork || config.debugRiverVisualStats)
+                {
+                    Debug.Log(
+                        $"[RiverVisualTerrainSync] usedSurfaceMask=1 mode=lakeFirstChannelContract " +
+                        $"flatFloor=1 skippedMaskBfs=1 meshOverCarve=1 seed={config.seed}");
+                }
+                return;
+            }
+
             if (uniformUwpChannel)
             {
                 int inset = ResolveUwpRiverCarveInsetCells(config);
                 float fordFloorDelta = depth01 * 0.14f;
-                bool frozenCarve = UsesUwpFrozenCarveContract(grid, config);
                 carved = 0;
 
                 float floorH = ComputeUniformUwpRiverCarveFloor01(config, depth01);
@@ -4622,7 +4877,19 @@ namespace Project.Gameplay.Map.Generator
             {
                 Shader s = Shader.Find("Universal Render Pipeline/Terrain/Lit") ?? Shader.Find("Terrain/Lit") ?? Shader.Find("Nature/Terrain/Standard") ?? Shader.Find("Terrain/Standard");
                 if (s != null) t.materialTemplate = new Material(s);
+                mat = t.materialTemplate;
             }
+            if (mat == null)
+                return;
+            // No mutar el asset compartido: instancia runtime y quita height-blend (aplasta grass sin MaskMap).
+            if (!mat.name.EndsWith("(RuntimeSplat)", System.StringComparison.Ordinal))
+            {
+                mat = new Material(mat) { name = mat.name + " (RuntimeSplat)" };
+                t.materialTemplate = mat;
+            }
+            if (mat.IsKeywordEnabled("_TERRAIN_BLEND_HEIGHT"))
+                mat.DisableKeyword("_TERRAIN_BLEND_HEIGHT");
+            t.basemapDistance = Mathf.Max(t.basemapDistance, 2000f);
         }
 
         static float SampleShoreDistanceBilinear(int[,] shoreDist, int gw, int gh, float gxf, float gzf)
@@ -4770,16 +5037,14 @@ namespace Project.Gameplay.Map.Generator
             float sharp = Mathf.Clamp01(config.terrainBlendSharpness);
             float blendEff = blend * Mathf.Lerp(1f, 0.28f, sharp);
 
-            float minH = float.MaxValue, maxH = float.MinValue;
+            float maxH = float.MinValue;
             for (int iy = 0; iy < res; iy++)
                 for (int ix = 0; ix < res; ix++)
                 {
                     float v = heights[iy, ix];
-                    if (v < minH) minH = v;
                     if (v > maxH) maxH = v;
                 }
-            float rangeH = maxH - minH;
-            if (rangeH < 0.001f) rangeH = 1f;
+            if (maxH < 0.01f) maxH = 1f;
 
             int[,] shoreDist = useSand ? BuildShoreDistanceGrid(grid, sandShoreCells + 1, config) : null;
             int moistureMaxDist = 1;
@@ -4826,17 +5091,21 @@ namespace Project.Gameplay.Map.Generator
                     }
 
                     float hRaw = SampleHeightBilinear(heights, res, hx, hy);
-                    float hNorm = Mathf.Clamp01((hRaw - minH) / rangeH);
+                    // Anclar soil a waterHeight01 lógico (no lip visual): llanuras → grass, no dirt.
+                    float waterH = Mathf.Clamp01(config != null ? config.waterHeight01 : 0.24f);
+                    float landCeil = Mathf.Max(waterH + 0.08f, maxH);
+                    float landRange = Mathf.Max(0.04f, landCeil - waterH);
+                    float hLand = Mathf.Clamp01((hRaw - waterH) / landRange);
 
                     float htStr = Mathf.Clamp01(config.terrainHeightTintStrength);
                     if (htStr > 1e-5f)
-                        hNorm = Mathf.Clamp01(hNorm + htStr * (hNorm - 0.5f) * 0.5f);
+                        hLand = Mathf.Clamp01(hLand + htStr * (hLand - 0.5f) * 0.5f);
 
                     float macroNoise = 0.5f;
                     if (macroStr > 1e-5f)
                     {
                         macroNoise = Mathf.PerlinNoise(x * macroSc * 0.11f + config.seed * 0.013f, y * macroSc * 0.11f + config.seed * 0.019f);
-                        hNorm = Mathf.Clamp01(hNorm + (macroNoise - 0.5f) * 2f * macroStr);
+                        hLand = Mathf.Clamp01(hLand + (macroNoise - 0.5f) * 2f * macroStr * 0.65f);
                     }
                     if (bufMacro != null)
                         bufMacro[y, x] = macroNoise;
@@ -4846,10 +5115,14 @@ namespace Project.Gameplay.Map.Generator
                     {
                         float sc = Mathf.Max(0.02f, config.terrainNoiseScale);
                         float n = Mathf.PerlinNoise(x * sc * 0.17f + config.seed * 0.01f, y * sc * 0.17f + config.seed * 0.017f);
-                        hNorm = Mathf.Clamp01(hNorm + (n - 0.5f) * 2f * ns);
+                        hLand = Mathf.Clamp01(hLand + (n - 0.5f) * 2f * ns);
                     }
 
-                    float h = hNorm;
+                    // Ampliar banda grass: casi toda la llanura sobre el agua.
+                    float gMaxLand = Mathf.Clamp(Mathf.Max(gMax, 0.82f), 0.70f, 0.92f);
+                    float dMaxLand = Mathf.Clamp(Mathf.Max(dMax, gMaxLand + 0.10f), gMaxLand + 0.05f, 0.97f);
+
+                    float h = hLand;
 
                     float g, d, r;
                     if (classicGrassDirtPair)
@@ -4858,15 +5131,67 @@ namespace Project.Gameplay.Map.Generator
                     }
                     else
                     {
-                        PaintThreeLayers(h, gMax, dMax, blendEff, out g, out d, out r);
+                        PaintThreeLayers(h, gMaxLand, dMaxLand, blendEff, out g, out d, out r);
+                    }
+
+                    // Llanuras → grass; techos/mesetas (hLand alto) → dirt/rock legible.
+                    if (hasGrass && hLand < 0.55f)
+                    {
+                        float grassBias = Mathf.Lerp(0.95f, 0.78f, Mathf.SmoothStep(0f, 0.55f, hLand));
+                        g = Mathf.Max(g, grassBias);
+                        float rest = Mathf.Max(0f, 1f - g);
+                        float dr = d + r;
+                        if (dr > 1e-5f)
+                        {
+                            d = rest * (d / dr);
+                            r = rest * (r / dr);
+                        }
+                        else
+                        {
+                            d = 0f;
+                            r = 0f;
+                        }
+                    }
+
+                    // Forzar grass solo en Land bajo (no aplastar dirt en mesetas).
+                    if (hasGrass && grid != null && gw > 0 && gh > 0)
+                    {
+                        int gx = Mathf.Clamp(Mathf.RoundToInt((aw > 1) ? (float)x / (aw - 1) * (gw - 1) : 0f), 0, gw - 1);
+                        int gz = Mathf.Clamp(Mathf.RoundToInt((ah > 1) ? (float)y / (ah - 1) * (gh - 1) : 0f), 0, gh - 1);
+                        var ct = grid.GetCell(gx, gz).type;
+                        bool inRiverMask = grid.RiverVisualSurfaceMask != null &&
+                                           grid.RiverVisualSurfaceMask[gx, gz];
+                        if ((ct == CellType.Land || ct == CellType.Mountain) && !inRiverMask && hLand < 0.50f)
+                        {
+                            g = Mathf.Max(g, 0.88f);
+                            float rest = Mathf.Max(0f, 1f - g);
+                            float dr = d + r;
+                            if (dr > 1e-5f) { d = rest * (d / dr); r = rest * (r / dr); }
+                            else { d = 0f; r = 0f; }
+                        }
                     }
 
                     AbsorbVirtualWeightsIntoRealSoil(ref g, ref d, ref r, hasGrass, hasDirt, hasRock);
 
                     if (hasRock)
                     {
-                        float sts = Mathf.Clamp01(config.terrainSlopeTintStrength);
+                        // Cap suave: slope no debe convertir llanuras en dirt/rock (síntoma ocre del screenshot).
+                        float sts = Mathf.Clamp01(config.terrainSlopeTintStrength) * 0.55f;
                         ApplySlopeToSoil(heights, res, hx, hy, sts, ref g, ref d, ref r);
+                    }
+
+                    // Tras slope: hierba solo en llanura; mesetas conservan dirt/rock del PaintThreeLayers.
+                    if (hasGrass && hLand < 0.50f)
+                    {
+                        float postGrass = Mathf.Lerp(0.92f, 0.78f, Mathf.SmoothStep(0f, 0.50f, hLand));
+                        if (g < postGrass)
+                        {
+                            g = postGrass;
+                            float rest = Mathf.Max(0f, 1f - g);
+                            float dr = d + r;
+                            if (dr > 1e-5f) { d = rest * (d / dr); r = rest * (r / dr); }
+                            else { d = 0f; r = 0f; }
+                        }
                     }
 
                     ApplyBlendSharpnessContrast(ref g, ref d, ref r, sharp);
@@ -5012,6 +5337,23 @@ namespace Project.Gameplay.Map.Generator
                 amPasses = Mathf.Min(amPasses, config.sandShoreAlphamapSmoothCap);
             if (amPasses > 0)
                 SmoothAlphamapsBox(data, amPasses);
+
+            if (hasGrass && iGrass >= 0 && ah > 0 && aw > 0)
+            {
+                double sumG = 0d;
+                int n = 0;
+                int step = Mathf.Max(1, Mathf.Min(aw, ah) / 64);
+                for (int y = 0; y < ah; y += step)
+                    for (int x = 0; x < aw; x += step)
+                    {
+                        sumG += map[y, x, iGrass];
+                        n++;
+                    }
+                float avgG = n > 0 ? (float)(sumG / n) : 0f;
+                Debug.Log(
+                    $"[TerrainExporter] splat grassAvg={avgG:F3} layers={numLayers} " +
+                    $"dry={(useGrassDry ? 1 : 0)} sand={(useSand ? 1 : 0)} shoreCells={sandShoreCells}");
+            }
         }
 
         /// <summary>Contraste solo hierba/tierra en franja de orilla (sin tocar roca).</summary>
@@ -5104,8 +5446,10 @@ namespace Project.Gameplay.Map.Generator
             for (int x = 0; x < w; x++)
                 for (int z = 0; z < h; z++)
                     if (dist[x, z] == -1) dist[x, z] = maxDist + 1;
-            if (uniformUwpRiverCarve)
-                SoftenShoreDistanceGrid(dist, w, h, maxDist, 2);
+            // Softener solo corría en mode=uniform; RTS fuerza bankFall=5 → sin softener
+            // la arena del lecho sigue el borde bool jagged del main (orilla blanca cuadriculada).
+            if (uniformUwpRiverCarve || UsesUwpFrozenCarveContract(grid, config))
+                SoftenShoreDistanceGrid(dist, w, h, maxDist, uniformUwpRiverCarve ? 2 : 4);
             return dist;
         }
 

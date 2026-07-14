@@ -284,7 +284,10 @@ namespace Project.Gameplay.Map.Generation
             config.maxResourceRetries = match.resources.maxResourceRetries;
             config.terrainHeightWorld = match.geography.heightMultiplier;
             config.heightmapResolution = Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(match.map.width, match.map.height)) + 1, 33, 4097);
-            config.paintTerrainByHeight = match.climate.paintTerrainByHeight;
+            config.paintTerrainByHeight = match.climate.paintTerrainByHeight ||
+                match.climate.grassLayer != null ||
+                match.climate.dirtLayer != null ||
+                match.climate.rockLayer != null;
             config.grassLayer = match.climate.grassLayer;
             config.dirtLayer = match.climate.dirtLayer;
             config.rockLayer = match.climate.rockLayer;

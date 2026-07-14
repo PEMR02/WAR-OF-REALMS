@@ -77,14 +77,38 @@ namespace Project.Gameplay.Map.Generation
                 if (m > 0)
                 {
                     config.macroTerrainEnabled = true;
-                    config.macroMountainMassCount = m;
-                    // Montaña más visible: más masa en heightmap01 y radios algo más compactos (picos más legibles).
-                    config.macroMountainHeight01Min = Mathf.Max(config.macroMountainHeight01Min, 0.30f);
-                    config.macroMountainHeight01Max = Mathf.Max(
-                        config.macroMountainHeight01Max,
-                        Mathf.Max(config.macroMountainHeight01Min + 0.08f, 0.56f));
-                    config.macroMountainRadiusCellsMin = Mathf.Clamp(config.macroMountainRadiusCellsMin, 3, 12);
-                    config.macroMountainRadiusCellsMax = Mathf.Clamp(config.macroMountainRadiusCellsMax, config.macroMountainRadiusCellsMin + 1, 18);
+                    // Picos suaves (no cordillera); el high-ground RTS son las mesetas.
+                    config.macroMountainMassCount = Mathf.Clamp(Mathf.Min(m, 2), 1, 2);
+                    config.macroMountainHeight01Min = Mathf.Clamp(
+                        Mathf.Max(config.macroMountainHeight01Min, 0.14f), 0.10f, 0.22f);
+                    config.macroMountainHeight01Max = Mathf.Clamp(
+                        Mathf.Max(config.macroMountainHeight01Max, 0.22f), 0.18f, 0.32f);
+                    config.macroMountainRadiusCellsMin = Mathf.Clamp(config.macroMountainRadiusCellsMin, 4, 12);
+                    config.macroMountainRadiusCellsMax = Mathf.Clamp(
+                        config.macroMountainRadiusCellsMax,
+                        config.macroMountainRadiusCellsMin + 3,
+                        18);
+
+                    // Mesetas: sobresalen del height01 ya generado (suma local; no regenera noise).
+                    config.macroPlateauCount = Mathf.Max(config.macroPlateauCount, m >= 4 ? 3 : 2);
+                    config.macroPlateauHeight01Min = Mathf.Max(config.macroPlateauHeight01Min, 0.40f);
+                    config.macroPlateauHeight01Max = Mathf.Max(
+                        config.macroPlateauHeight01Max,
+                        Mathf.Max(config.macroPlateauHeight01Min + 0.10f, 0.58f));
+                    config.macroPlateauRadiusCellsMin = Mathf.Clamp(config.macroPlateauRadiusCellsMin, 12, 22);
+                    config.macroPlateauRadiusCellsMax = Mathf.Clamp(
+                        config.macroPlateauRadiusCellsMax,
+                        config.macroPlateauRadiusCellsMin + 4,
+                        36);
+                    // Rim corto = escarpe usable; rampas siguen en MacroTerrainSculptor.
+                    config.macroPlateauRimCells = Mathf.Clamp(config.macroPlateauRimCells, 4, 7);
+
+                    Debug.Log(
+                        $"[LobbyMacroRelief] enabled masses={config.macroMountainMassCount} " +
+                        $"plateaus={config.macroPlateauCount} " +
+                        $"platH=[{config.macroPlateauHeight01Min:F2},{config.macroPlateauHeight01Max:F2}] " +
+                        $"mtnH=[{config.macroMountainHeight01Min:F2},{config.macroMountainHeight01Max:F2}] " +
+                        $"terrainY={config.terrainHeightWorld:F1}");
                 }
             }
 
@@ -161,6 +185,19 @@ namespace Project.Gameplay.Map.Generation
             // 5. River fusion blur: 3 pasadas mezcla tributarios en una sola masa.
             //    → 1 pasada: cada río mantiene su silueta independiente.
             config.riverFusionBlurPasses = Mathf.Min(config.riverFusionBlurPasses, 1);
+
+            // SplitLakeMs: el MS es solo lago (ríos van por ribbon). Restaurar calidad de contorno
+            // que el clamp anti-blob de río había aplastado (lagos en escalera + foam dentada).
+            if (WaterVisualPipelinePolicy.IsSplitLakeMsRiverWebFusion(config))
+            {
+                config.waterEdgeSubdiv = Mathf.Max(config.waterEdgeSubdiv, 5);
+                config.waterEdgeBlurIterations = Mathf.Max(config.waterEdgeBlurIterations, 4);
+                config.waterEdgeBlurRadius = Mathf.Max(config.waterEdgeBlurRadius, 2);
+                config.waterEdgeSmoothness = Mathf.Max(config.waterEdgeSmoothness, 1.0f);
+                config.waterMaskSmoothIterations = Mathf.Max(config.waterMaskSmoothIterations, 2);
+                if (config.lakeShoreMsNoiseAmplitude < 0.05f)
+                    config.lakeShoreMsNoiseAmplitude = 0.06f;
+            }
         }
     }
 }

@@ -125,7 +125,7 @@ namespace Project.Gameplay.Map
             [Range(0, 3)] public int riverWidthNoiseAmplitudeCells = 1;
             [Tooltip("Profundidad en celdas de río absorbidas en la boca del lago (confluencia orgánica).")]
             [Range(0, 8)] public int lakeRiverMouthBlendCells = 3;
-            public int sandShoreCells = 3;
+            public int sandShoreCells = 5;
             public float surfaceOffset = 0.05f;
             public int chunkSize = 32;
             public float alpha = 0.88f;
@@ -177,10 +177,10 @@ namespace Project.Gameplay.Map
         [Serializable]
         public sealed class ResourcePlacementSettings
         {
-            [Tooltip("-1 = usar fracción por defecto del colocador (~0.75).")]
-            public float globalTreesClusterFraction = -1f;
+            [Tooltip("-1 = 90% en clusters (MapResourcePlacer). 0–1 = fracción forzada.")]
+            public float globalTreesClusterFraction = 0.9f;
             public bool preferGlobalTreesOnGrassAlphamap;
-            [Range(0.4f, 1f)] public float globalStoneGoldClusterFraction = 0.82f;
+            [Range(0.4f, 1f)] public float globalStoneGoldClusterFraction = 0.92f;
             public Vector2Int globalMineralClusterSize = new(2, 6);
             public float globalMineralClusterRadiusCells = 3.2f;
 
@@ -246,12 +246,12 @@ namespace Project.Gameplay.Map
             [Range(0, 100)] public int grassPercent = 60;
             [Range(0, 100)] public int dirtPercent = 20;
             [Range(0, 100)] public int rockPercent = 20;
-            [Range(0.02f, 0.25f)] public float textureBlendWidth = 0.08f;
-            [Range(0f, 1f)] public float terrainBlendSharpness = 0.2f;
+            [Range(0.02f, 0.25f)] public float textureBlendWidth = 0.045f;
+            [Range(0f, 1f)] public float terrainBlendSharpness = 0.55f;
             public float terrainMacroNoiseScale = 0.012f;
             [Range(0f, 0.45f)] public float terrainMacroNoiseStrength = 0.08f;
             public TerrainLayer grassDryLayer;
-            [Range(0f, 1f)] public float grassDryBlendStrength = 0.55f;
+            [Range(0f, 1f)] public float grassDryBlendStrength = 0.38f;
             public float grassDryNoiseScale = 0.009f;
             public TerrainLayer wetDirtLayer;
             [Range(0.5f, 48f)] public float terrainMoistureRadius = 10f;
@@ -259,7 +259,7 @@ namespace Project.Gameplay.Map
             public float terrainMoistureNoiseScale = 0.14f;
             [Range(0f, 1f)] public float terrainMoistureNoiseStrength = 0.35f;
             public float sandEdgeNoiseScale = 0.22f;
-            [Range(0f, 2.5f)] public float sandEdgeNoiseStrength = 0.85f;
+            [Range(0f, 2.5f)] public float sandEdgeNoiseStrength = 1.35f;
             public bool debugTerrainMoisture = false;
             public bool debugTerrainMacro = false;
             public bool debugTerrainGrassDry = false;

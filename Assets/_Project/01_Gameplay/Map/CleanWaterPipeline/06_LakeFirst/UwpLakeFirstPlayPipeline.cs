@@ -21,8 +21,10 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
             cfg.uwpLakeFirstHydrologyPipeline = true;
             cfg.uwpLakeFirstSupplementalEnabled = true;
             cfg.inlandFeederTargetCount = -1;
-            // Cupo mínimo: main + LakeSpill + Inland + HeadwaterFeeder.
-            cfg.riverCount = Mathf.Max(cfg.riverCount, 4);
+            // Cupo: main + ≥2 LakeSpill + InlandFeeder + HeadwaterFeeder.
+            // Con riverCount=4 y 2 spills, solo queda 1 slot → inlandTarget=0 y headwater
+            // solo puede unirse a spill (casi siempre join_near_lake / procedural_exhausted).
+            cfg.riverCount = Mathf.Max(cfg.riverCount, 5);
             if (cfg.headwaterFeederTargetCount < 0)
                 cfg.headwaterFeederTargetCount = 1;
             cfg.riverRelaxedMissingTributaryFillPass = false;
@@ -33,13 +35,16 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
 
             cfg.riverSurfaceVisualMeanderEnabled = true;
             cfg.riverSurfaceVisualMeanderAmplitudeCells = Mathf.Max(cfg.riverSurfaceVisualMeanderAmplitudeCells, 0.36f);
-            cfg.riverSurfaceVisualMeanderFrequencyCells = Mathf.Min(cfg.riverSurfaceVisualMeanderFrequencyCells, 8.5f);
+            // No capar freq a 8.5: olas cortas + amp alta → self-intersect → main casi recto.
+            cfg.riverSurfaceVisualMeanderFrequencyCells = Mathf.Clamp(
+                Mathf.Max(cfg.riverSurfaceVisualMeanderFrequencyCells, 10f), 10f, 22f);
             cfg.riverSurfaceVisualMeanderEndFade01 = Mathf.Min(cfg.riverSurfaceVisualMeanderEndFade01, 0.07f);
             cfg.tributaryBedDepthBelowWater01 = Mathf.Max(cfg.tributaryBedDepthBelowWater01, 0.072f);
 
-            cfg.riverVisualRibbonFullWidthCellsTributary = Mathf.Max(cfg.riverVisualRibbonFullWidthCellsTributary, 1.92f);
-            cfg.riverSurfaceTributaryVisualWidthMul = Mathf.Max(cfg.riverSurfaceTributaryVisualWidthMul, 1.42f);
-            cfg.riverSurfaceTributaryMeshOnlyWidthMul = Mathf.Max(cfg.riverSurfaceTributaryMeshOnlyWidthMul, 1.18f);
+            // No forzar trib más anchos que el perfil RTS (0.74 / 1.184); solo suelo mínimo de legibilidad.
+            cfg.riverVisualRibbonFullWidthCellsTributary = Mathf.Max(cfg.riverVisualRibbonFullWidthCellsTributary, 1.4f);
+            cfg.riverSurfaceTributaryVisualWidthMul = Mathf.Clamp(cfg.riverSurfaceTributaryVisualWidthMul, 0.70f, 0.95f);
+            cfg.riverSurfaceTributaryMeshOnlyWidthMul = Mathf.Clamp(cfg.riverSurfaceTributaryMeshOnlyWidthMul, 1.10f, 1.25f);
             cfg.lakeShoreVisualWidth = Mathf.Max(cfg.lakeShoreVisualWidth, 11f);
             cfg.lakeMSShoreExpandCells = Mathf.Max(cfg.lakeMSShoreExpandCells, 2);
             cfg.lakeMSPerimeterExpandWorld = Mathf.Max(cfg.lakeMSPerimeterExpandWorld, 6.8f);
@@ -58,6 +63,8 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
                 $"[UwpLakeFirstPlayPipeline] enabled seed={cfg.seed} " +
                 $"rivers={cfg.riverCount} lakes={cfg.lakeCount} grid={cfg.gridW} uwpOwned=1 lakeFirst=1 supplemental=1 " +
                 $"mainW={cfg.riverVisualRibbonFullWidthCellsMain:F2}c maxLakeCells={cfg.maxLakeCells} " +
+                $"meshMul={cfg.riverSurfaceMainMeshOnlyWidthMul:F2} bandCells={cfg.unifiedWaterTerrainBandCells:F2} " +
+                $"flatRatio={cfg.uwpCarveTransverseFlatRatio:F2} " +
                 $"lakeDepth={cfg.lakeBedDepthBelowWater01:F3} b2bWeight={cfg.riverMainBorderToBorderWeight:F2} borderExt={cfg.riverMainMaxBorderPathExtensionCells}");
         }
 
@@ -138,11 +145,13 @@ namespace Project.Gameplay.Map.CleanWaterPipeline
             float tribW = cfg.riverVisualRibbonFullWidthCellsTributary * widthMul;
             cfg.riverVisualRibbonFullWidthCellsMain = Mathf.Clamp(mainW, 4f, 8.5f);
             cfg.riverVisualRibbonFullWidthCellsTributary = Mathf.Clamp(tribW, 1.4f, 4.2f);
-            cfg.riverSurfaceMainMeshOnlyWidthMul = Mathf.Max(cfg.riverSurfaceMainMeshOnlyWidthMul, 1.82f + sizeT * 0.12f);
+            // No pisar meshMul del perfil RTS (1.32). Max(1.82…) recreaba bandeja blanca mesh≫carve.
+            cfg.riverSurfaceMainMeshOnlyWidthMul = Mathf.Clamp(cfg.riverSurfaceMainMeshOnlyWidthMul, 1.15f, 1.45f);
 
             float areaMul = (minDim / 256f) * (minDim / 256f);
-            // +50% sobre el cap base: flood-fill más largo → lagos más grandes en XZ.
-            cfg.maxLakeCells = Mathf.Clamp(Mathf.RoundToInt(340f * areaMul * 1.5f), 360, 960);
+            // Conservar maxLake del perfil RTS (p.ej. ×1.5); solo subir si el escalado de mapa pide más.
+            int scaledLake = Mathf.Clamp(Mathf.RoundToInt(340f * areaMul * 1.5f), 360, 960);
+            cfg.maxLakeCells = Mathf.Max(cfg.maxLakeCells, scaledLake);
             cfg.lakeMSShoreExpandCells = Mathf.Max(cfg.lakeMSShoreExpandCells, 2);
             cfg.lakeMSPerimeterExpandWorld = Mathf.Max(cfg.lakeMSPerimeterExpandWorld, 7.2f);
             cfg.lakeShoreVisualWidth = Mathf.Max(cfg.lakeShoreVisualWidth, 12f);

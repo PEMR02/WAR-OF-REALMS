@@ -40,8 +40,9 @@ namespace PMG.UnifiedWorldPipeline
             }
 
             cfg.regionNoiseScale = Mathf.Max(cfg.regionNoiseScale, 0.022f);
-            cfg.shoreSmoothRadiusCells = 18;
-            cfg.shoreSmoothStrength = 0.48f;
+            cfg.shoreSmoothRadiusCells = Mathf.Max(cfg.shoreSmoothRadiusCells, 22);
+            cfg.shoreSmoothStrength = Mathf.Max(cfg.shoreSmoothStrength, 0.52f);
+            cfg.sandShoreCells = Mathf.Max(cfg.sandShoreCells, 5);
             cfg.terrainNormalSmoothingPasses = 3;
             cfg.terrainNormalSmoothingStrength = 0.36f;
 
@@ -72,10 +73,13 @@ namespace PMG.UnifiedWorldPipeline
         static void ApplySplatLayerCap(MapGenConfig cfg)
         {
             if (cfg == null) return;
-            cfg.grassDryBlendStrength = 0f;
+            // Dual-grass solo si hay albedo dry real. No forzar blend: Grass_02.png es máscara, no diffuse.
+            cfg.grassDryBlendStrength = Mathf.Clamp(cfg.grassDryBlendStrength, 0f, 0.45f);
             cfg.terrainMoistureStrength = 0f;
             cfg.riverFordBedLayer = null;
-            cfg.terrainAlphamapSmoothPasses = Mathf.Min(cfg.terrainAlphamapSmoothPasses, 2);
+            cfg.terrainAlphamapSmoothPasses = Mathf.Min(cfg.terrainAlphamapSmoothPasses, 1);
+            cfg.terrainBlendSharpness = Mathf.Max(cfg.terrainBlendSharpness, 0.45f);
+            cfg.textureBlendWidth = Mathf.Min(cfg.textureBlendWidth, 0.05f);
         }
 
         static void EnsureSplatPercentDefaults(MapGenConfig cfg)

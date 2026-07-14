@@ -154,7 +154,7 @@ namespace Project.Gameplay.Map.Generator
         const float NarrowSharpTurnDeg = 38f;
         const float NarrowFoldHalfWidthCellsMul = 1.05f;
         const float UwpMainShoreHalfWidthFloorMul = 0.97f;
-        const float UwpTributaryConfluenceMeshBoostMul = 1.12f;
+        const float UwpTributaryConfluenceMeshBoostMul = 1.22f;
         /// <summary>Fracción máxima del path tributario usada como zona de ensanche (solo boca).</summary>
         const float UwpTributaryConfluenceMinPathFraction = 0.08f;
 
@@ -528,7 +528,7 @@ namespace Project.Gameplay.Map.Generator
                     if (s_cachedRiverSurfaceMaterial.HasProperty("_RippleStrength"))
                         s_cachedRiverSurfaceMaterial.SetFloat("_RippleStrength", Mathf.Clamp(config.waterDepthColorStrength * 0.22f, 0.06f, 0.22f));
                     if (s_cachedRiverSurfaceMaterial.HasProperty("_FoamStrength"))
-                        s_cachedRiverSurfaceMaterial.SetFloat("_FoamStrength", Mathf.Clamp(config.riverBankBlendStrength * 0.85f, 0.08f, 0.32f));
+                        s_cachedRiverSurfaceMaterial.SetFloat("_FoamStrength", Mathf.Clamp(config.riverBankBlendStrength * 0.35f, 0f, 0.12f));
                 }
                 if (config != null && (config.debugLogs || config.debugHydrologyNetwork))
                 {
@@ -1007,7 +1007,7 @@ namespace Project.Gameplay.Map.Generator
             if (config.uwpLakeFirstHydrologyPipeline &&
                 UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex) &&
                 !forCarveMask)
-                lakeFirstMul = 1.34f;
+                lakeFirstMul = 1.06f;
             float targetJoin = mainHalf * endMul * UwpTributaryConfluenceMeshBoostMul * lakeFirstMul;
             targetJoin = Mathf.Min(targetJoin, mainMeshHalf * endMul * (config.uwpLakeFirstHydrologyPipeline ? 1.16f : 1.08f));
 
@@ -1034,11 +1034,8 @@ namespace Project.Gameplay.Map.Generator
 
             bool forceInland = UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
             bool headwater = UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder;
-            // Carve/máscara headwater: no ensanchar en unión — el surco se perfila aparte (estrecho→nacimiento).
-            if (headwater && forCarveMask)
-                return;
-            // Mesh headwater→receptor: mismo criterio que inland/lake-spill→main (approach + target al parent).
-            if (headwater && !forCarveMask)
+            // Mesh y carve headwater→receptor: ensanchar en unión (antes carveMask early-out → isla).
+            if (headwater)
             {
                 ApplyLakeFirstHeadwaterReceiverJoinMeshWiden(
                     grid, halfWidths, cellPath, config, riverIndex, cellSize);
@@ -3884,19 +3881,22 @@ namespace Project.Gameplay.Map.Generator
         const float LakeFirstInlandSourceEmergenceSpanWorldCells = 5.75f;
         const int LakeFirstInlandSourceEmergenceMinCells = 6;
         const int LakeFirstInlandSourceEmergenceMaxCells = 16;
-        const float LakeFirstInlandSourceWidthMinMul = 0.14f;
+        const float LakeFirstInlandSourceWidthMinMul = 0.28f;
         /// <summary>
-        /// Headwater = arroyo continuo: cuerpo ~1.2–1.4 celdas (más estrecho que inland, sin fragmentar).
+        /// Headwater = arroyo continuo: cuerpo ~0.85–1.1 celdas (0.8× vs antes; sin fragmentar).
         /// Mesh ligeramente por encima del carve para orilla blanca.
         /// </summary>
-        const float LakeFirstHeadwaterSourceWidthMinMulMask = 0.62f;
-        const float LakeFirstHeadwaterCarveMinHalfCells = 1.05f;
-        const float LakeFirstHeadwaterSourceMinHalfCells = 0.95f;
-        const float LakeFirstHeadwaterCarveBodyMaxCells = 1.35f;
-        const float LakeFirstHeadwaterCarveJoinMaxCells = 1.55f;
-        const float LakeFirstHeadwaterCarveBodyMul = 0.72f;
+        const float LakeFirstHeadwaterSourceWidthMinMulMask = 0.72f;
+        const float LakeFirstHeadwaterCarveMinHalfCells = 0.98f;
+        const float LakeFirstHeadwaterSourceMinHalfCells = 0.90f;
+        /// <summary>Body más ancho: stamp debe cubrir el ribbon (evitar charcos / foam-only).</summary>
+        const float LakeFirstHeadwaterCarveBodyMaxCells = 1.55f;
+        const float LakeFirstHeadwaterCarveJoinMaxCells = 1.95f;
+        const float LakeFirstHeadwaterCarveBodyMul = 0.90f;
+        /// <summary>Contrato canal Lake First (Headwater/main/inland/spill): mesh / carve ≈ 1.3.</summary>
         const float LakeFirstHeadwaterMeshOverCarveMul = 1.3f;
-        const float LakeFirstHeadwaterMeshMinHalfMul = 1.05f;
+        const float LakeFirstChannelMeshOverCarveMul = LakeFirstHeadwaterMeshOverCarveMul;
+        const float LakeFirstHeadwaterMeshMinHalfMul = 0.84f;
         const float LakeFirstHeadwaterSourceTaperAlongEnd = 0.55f;
         const float LakeFirstHeadwaterSourceTaperSpanWorldCells = 20f;
         const int LakeFirstHeadwaterSourceTaperMinCells = 14;
@@ -3914,6 +3914,49 @@ namespace Project.Gameplay.Map.Generator
             return receiverRiverIndex > 0 &&
                 grid.RiverCenterlinesCellSpace != null &&
                 receiverRiverIndex < grid.RiverCenterlinesCellSpace.Count;
+        }
+
+        /// <summary>Nombre jerárquico por tipo: MainRiver / LakeSpill / InlandFeeder / HeadwaterFeeder.</summary>
+        static string ResolveRiverSurfaceGameObjectName(GridSystem grid, int riverIndex)
+        {
+            if (riverIndex <= 0)
+                return "Water_RiverSurface_MainRiver";
+
+            UwpTributaryOriginKind kind = UwpTributaryOriginUtility.GetOrigin(grid, riverIndex);
+            string typeName;
+            switch (kind)
+            {
+                case UwpTributaryOriginKind.LakeSpill:
+                    typeName = "LakeSpill";
+                    break;
+                case UwpTributaryOriginKind.InlandFeeder:
+                    typeName = "InlandFeeder";
+                    break;
+                case UwpTributaryOriginKind.HeadwaterFeeder:
+                    typeName = "HeadwaterFeeder";
+                    break;
+                default:
+                    typeName = UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex)
+                        ? "LakeSpill"
+                        : "Tributary";
+                    break;
+            }
+
+            return $"Water_RiverSurface_{typeName}_{riverIndex}";
+        }
+
+        static bool RiverSurfaceGameObjectExists(Transform waterRoot, GridSystem grid, int riverIndex)
+        {
+            if (waterRoot == null)
+                return false;
+            string primary = ResolveRiverSurfaceGameObjectName(grid, riverIndex);
+            if (waterRoot.Find(primary) != null)
+                return true;
+            // Legacy names (lecturas previas / bake).
+            string legacy = riverIndex == 0
+                ? "Water_RiverSurface_Main"
+                : $"Water_RiverSurface_Tributary_{riverIndex}";
+            return waterRoot.Find(legacy) != null;
         }
 
         static float ResolveRiverRibbonHalfWidthCells(MapGenConfig config, int riverIndex)
@@ -4233,16 +4276,9 @@ namespace Project.Gameplay.Map.Generator
 
             UwpTributaryOriginUtility.PinEndpointConfluence(centerline, joinCell);
 
-            ApplyLakeFirstOrganicMeanderToCellSpace(
-                grid, centerline, w, h, config, provisionalRiverIndex, out _, protectMainJoinApproachTail: true);
-            var backup = new List<Vector2>(centerline);
-            if (!ApplyLakeFirstOrganicMeanderToCellSpace(
-                    grid, centerline, w, h, config, provisionalRiverIndex + 17, out _, protectMainJoinApproachTail: true))
-            {
-                centerline.Clear();
-                centerline.AddRange(backup);
-            }
-
+            // InlandFeeder = arroyo inland→main con recorrido del routing.
+            // El meandro organic Lake-First creaba “colita de chancho” (S apretada + blob).
+            // Misma política que tributarios inland clásicos: path lógico sin remandar.
             var normalized = NormalizeCenterlineSpacingForMesh(centerline, config);
             if (normalized == null || normalized.Count < 4)
             {
@@ -4253,6 +4289,21 @@ namespace Project.Gameplay.Map.Generator
             centerline.Clear();
             centerline.AddRange(normalized);
             UwpTributaryOriginUtility.PinEndpointConfluence(centerline, joinCell);
+
+            // Rechazar scribble residual del route soft-score.
+            float lenCells = ComputePolylineLengthCells(centerline);
+            float direct = Vector2.Distance(centerline[0], centerline[centerline.Count - 1]);
+            if (direct > 4f && lenCells / direct > 1.42f)
+            {
+                rejectReason = "inland_too_windy";
+                return false;
+            }
+
+            if (direct < 22f)
+            {
+                rejectReason = "inland_span_short";
+                return false;
+            }
 
             if (UwpTributaryPathRejected(centerline, config, out rejectReason))
                 return false;
@@ -4649,6 +4700,7 @@ namespace Project.Gameplay.Map.Generator
                 return false;
 
             TrimEmissaryHookTailIfRegressesFromMain(grid, config, cellProcessed, riverIndex);
+            TrimRiverAtFirstMainCorridorContact(grid, config, cellProcessed, riverIndex);
 
             if (cellProcessed == null || cellProcessed.Count < 2)
                 return false;
@@ -4742,49 +4794,284 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
-        /// <summary>Emisario lago→troncal: corta la cola tras la primera visita al corredor del main (evita ganchos en U).</summary>
+        /// <summary>
+        /// Lago/trib→main: corta en la PRIMERA entrada al corredor del troncal (lado lago).
+        /// No usar min-dist: en un V el mínimo está en la punta → deja el “pasa de largo”.
+        /// </summary>
         static void TrimRiverAtFirstMainCorridorContact(
             GridSystem grid,
             MapGenConfig config,
             List<Vector2> cellProcessed,
-            int riverIndex)
+            int riverIndex,
+            bool forceSpillJoin = false)
         {
             if (grid == null || config == null || cellProcessed == null || cellProcessed.Count < 4 || riverIndex <= 0)
                 return;
             if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
                 return;
 
-            float radius = sampler.RadiusCells * 1.15f;
-            float radiusSq = radius * radius;
+            if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out int mainEp))
+                mainEp = ResolveVisualTributaryMainEndpointIndex(grid, cellProcessed);
+            if (mainEp != 0 && mainEp != cellProcessed.Count - 1)
+                return;
+
+            // Orilla del canal (no el eje): primera vez que el path “toca” el main.
+            float entryRadius = Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f);
+            float entryRadiusSq = entryRadius * entryRadius;
+
             int enter = -1;
-            int exit = -1;
+            if (mainEp == cellProcessed.Count - 1)
+            {
+                for (int i = 0; i < cellProcessed.Count; i++)
+                {
+                    if (DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line) <= entryRadiusSq)
+                    {
+                        enter = i;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                for (int i = cellProcessed.Count - 1; i >= 0; i--)
+                {
+                    if (DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line) <= entryRadiusSq)
+                    {
+                        enter = i;
+                        break;
+                    }
+                }
+            }
+
+            if (enter < 0)
+                return;
+
+            // Evitar cortar casi al inicio si el lago está muy cerca del main *y* no hay cola.
+            // Si hay overshoot (cola detrás de enter), sí cortar aunque enter sea temprano.
+            int beyond = mainEp == cellProcessed.Count - 1
+                ? cellProcessed.Count - 1 - enter
+                : enter;
+            // Spill forzado: cortar aunque beyond==1 (suele ser el pin de confluencia dentro del canal).
+            if (beyond <= 0)
+                return;
+            if (beyond <= 1 && !forceSpillJoin)
+                return;
+
+            int minKeep = 2;
+            if (!forceSpillJoin && beyond <= 3 && enter < minKeep && mainEp == cellProcessed.Count - 1)
+            {
+                // Path muy corto lago↔main: no recortar.
+                if (cellProcessed.Count <= minKeep + 2)
+                    return;
+            }
+
+            int before = cellProcessed.Count;
+            if (mainEp == cellProcessed.Count - 1)
+            {
+                if (enter >= cellProcessed.Count - 1)
+                    return;
+                cellProcessed.RemoveRange(enter + 1, cellProcessed.Count - (enter + 1));
+            }
+            else
+            {
+                if (enter <= 0)
+                    return;
+                cellProcessed.RemoveRange(0, enter);
+            }
+
+            if (config.debugLogs || config.debugHydrologyNetwork || forceSpillJoin)
+            {
+                Debug.Log(
+                    $"[RiverEmissaryMainTrim] riverIndex={riverIndex} enter={enter} " +
+                    $"removed={(before - cellProcessed.Count)} remaining={cellProcessed.Count} " +
+                    $"mode={(forceSpillJoin ? "first_entry_spill" : "first_entry")}");
+            }
+        }
+
+        /// <summary>
+        /// Headwater→receptor: corta en el primer contacto con el corredor del parent
+        /// (evita overshoot + slide a lo largo del inland/main = gancho U).
+        /// </summary>
+        static void TrimTributaryAtFirstParentCorridorContact(
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2> cellProcessed,
+            int riverIndex,
+            int parentRiverIndex,
+            bool forceEntry = false)
+        {
+            if (grid == null || config == null || cellProcessed == null || cellProcessed.Count < 4 ||
+                riverIndex <= 0 || parentRiverIndex <= 0)
+                return;
+            if (!TryBuildRiverCorridorSampler(
+                    grid, config, grid.CellSizeWorld, parentRiverIndex, out MainRiverCorridorSampler sampler))
+                return;
+
+            int mainEp = cellProcessed.Count - 1;
+            float entryRadius = Mathf.Max(sampler.CoreRadiusCells * 0.95f, sampler.RadiusCells * 0.62f);
+            float entryRadiusSq = entryRadius * entryRadius;
+
+            int enter = -1;
             for (int i = 0; i < cellProcessed.Count; i++)
             {
-                float distSq = DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line);
-                bool near = distSq <= radiusSq;
-                if (near)
+                if (DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line) <= entryRadiusSq)
                 {
-                    if (enter < 0)
-                        enter = i;
-                    exit = i;
-                }
-                else if (enter >= 0 && exit >= enter && i > exit + 1)
-                {
+                    enter = i;
                     break;
                 }
             }
 
-            if (enter < 1 || exit < enter || exit >= cellProcessed.Count - 1)
+            if (enter < 0)
                 return;
 
-            int removed = cellProcessed.Count - (exit + 1);
-            cellProcessed.RemoveRange(exit + 1, removed);
-            if (config.debugLogs || config.debugHydrologyNetwork)
+            int beyond = mainEp - enter;
+            if (beyond <= 0)
+                return;
+            if (beyond <= 1 && !forceEntry)
+                return;
+            if (enter >= cellProcessed.Count - 1)
+                return;
+
+            int before = cellProcessed.Count;
+            cellProcessed.RemoveRange(enter + 1, cellProcessed.Count - (enter + 1));
+
+            if (config.debugLogs || config.debugHydrologyNetwork || forceEntry)
             {
                 Debug.Log(
-                    $"[RiverEmissaryMainTrim] riverIndex={riverIndex} enter={enter} exit={exit} " +
-                    $"removedTail={removed} remaining={cellProcessed.Count}");
+                    $"[HeadwaterReceiverTrim] riverIndex={riverIndex} parent={parentRiverIndex} enter={enter} " +
+                    $"removed={(before - cellProcessed.Count)} remaining={cellProcessed.Count}");
             }
+        }
+
+        /// <summary>
+        /// Endereza los últimos puntos hacia la boca (T limpia headwater→inland, sin colita).
+        /// </summary>
+        static void StraightenTributaryMouthApproach(List<Vector2> line, int approachPts = 7)
+        {
+            if (line == null || line.Count < approachPts + 2)
+                return;
+            approachPts = Mathf.Clamp(approachPts, 3, Mathf.Min(12, line.Count - 2));
+            int anchorIdx = line.Count - 1 - approachPts;
+            Vector2 anchor = line[anchorIdx];
+            Vector2 mouth = line[line.Count - 1];
+            if ((mouth - anchor).sqrMagnitude < 1e-6f)
+                return;
+            for (int k = 1; k < approachPts; k++)
+            {
+                float t = k / (float)approachPts;
+                line[anchorIdx + k] = Vector2.Lerp(anchor, mouth, t);
+            }
+        }
+
+        /// <summary>Spill/Inland→main: boca exactamente en orilla del corredor (no eje / no pin de confluencia).</summary>
+        static void SnapLakeSpillMouthToMainBank(
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2> line,
+            int riverIndex)
+        {
+            if (grid == null || config == null || line == null || line.Count < 2 || riverIndex <= 0)
+                return;
+            bool spillOrInland =
+                UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex) ||
+                UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
+            if (!spillOrInland)
+                return;
+            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
+                return;
+            if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, line, riverIndex, out int mainIdx))
+                mainIdx = line.Count - 1;
+            if (mainIdx != 0 && mainIdx != line.Count - 1)
+                return;
+
+            Vector2 mouth = line[mainIdx];
+            float bestDist = float.MaxValue;
+            Vector2 bestJoin = mouth;
+            for (int i = 0; i < sampler.Line.Count - 1; i++)
+            {
+                Vector2 q = ClosestPointOnOpenSegment2D(mouth, sampler.Line[i], sampler.Line[i + 1]);
+                float d = (mouth - q).sqrMagnitude;
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    bestJoin = q;
+                }
+            }
+
+            Vector2 toAxis = bestJoin - mouth;
+            float dist = toAxis.magnitude;
+            float bankR = Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f);
+            if (dist > 1e-4f && dist > bankR)
+                line[mainIdx] = bestJoin - (toAxis / dist) * bankR;
+            else if (dist <= bankR && dist > 1e-4f)
+            {
+                // Ya dentro del corredor: empujar hacia afuera a la orilla (desde el eje).
+                Vector2 fromAxis = mouth - bestJoin;
+                if (fromAxis.sqrMagnitude > 1e-8f)
+                    line[mainIdx] = bestJoin + fromAxis.normalized * bankR;
+                else
+                {
+                    Vector2 neighbor = mainIdx == 0
+                        ? line[Mathf.Min(1, line.Count - 1)]
+                        : line[Mathf.Max(0, line.Count - 2)];
+                    Vector2 outward = neighbor - bestJoin;
+                    if (outward.sqrMagnitude > 1e-8f)
+                        line[mainIdx] = bestJoin + outward.normalized * bankR;
+                }
+            }
+        }
+
+        /// <summary>Tras first-entry: un solo tip corto hacia el eje del main (sin teleport a confluencia).</summary>
+        static void ApplyLakeSpillMainBankTipAfterFirstEntryTrim(
+            GridSystem grid,
+            MapGenConfig config,
+            List<Vector2> line,
+            int riverIndex)
+        {
+            if (grid == null || config == null || line == null || line.Count < 2 || riverIndex <= 0)
+                return;
+            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
+                return;
+            if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, line, riverIndex, out int mainIdx))
+                mainIdx = line.Count - 1;
+            if (mainIdx != 0 && mainIdx != line.Count - 1)
+                return;
+
+            Vector2 mouth = line[mainIdx];
+            Vector2 neighbor = mainIdx == 0
+                ? line[Mathf.Min(1, line.Count - 1)]
+                : line[Mathf.Max(0, line.Count - 2)];
+
+            float bestDist = float.MaxValue;
+            Vector2 bestJoin = mouth;
+            for (int i = 0; i < sampler.Line.Count - 1; i++)
+            {
+                Vector2 q = ClosestPointOnOpenSegment2D(mouth, sampler.Line[i], sampler.Line[i + 1]);
+                float d = (mouth - q).sqrMagnitude;
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    bestJoin = q;
+                }
+            }
+
+            Vector2 approach = bestJoin - neighbor;
+            if (approach.sqrMagnitude < 1e-8f)
+                approach = bestJoin - mouth;
+            if (approach.sqrMagnitude < 1e-8f)
+                return;
+            approach.Normalize();
+
+            float tuck = Mathf.Clamp(sampler.CoreRadiusCells * 0.22f, 0.30f, 0.70f);
+            Vector2 tip = bestJoin + approach * tuck;
+            if (WouldFoldBackBridge(neighbor, mouth, tip))
+                tip = bestJoin;
+
+            line[mainIdx] = bestJoin;
+            if (mainIdx == line.Count - 1)
+                line.Add(tip);
+            else
+                line.Insert(0, tip);
         }
 
         static List<Vector2> BuildVisualCenterlineSimple(
@@ -5078,6 +5365,9 @@ namespace Project.Gameplay.Map.Generator
                 if (lakeFirstTrib)
                 {
                     float lakeFirstNormalMul = Mathf.Clamp(config.riverSurfaceVisualNormalWidthMul, 1.25f, 2.05f);
+                    // Inland debe leerse más fino que spill; el mismo mul → blobs ~spill.
+                    if (UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex))
+                        lakeFirstNormalMul = Mathf.Clamp(lakeFirstNormalMul * 0.48f, 1.02f, 1.22f);
                     normalHalfW = minHalfW * lakeFirstNormalMul;
                     maxHalfW = normalHalfW * 1.1f;
                     return;
@@ -5196,7 +5486,9 @@ namespace Project.Gameplay.Map.Generator
                 float endFade = MeanderEdgeFade(t01, fade);
                 float ang = InteriorTurnAngleDeg(cellPath, i);
                 float bendFade = ang >= JoinAngleHardDeg ? 0.55f : (ang >= JoinAngleSmoothDeg ? 0.8f : 1f);
-                if (lakeFirstTrib)
+                bool inlandFeederWidth = lakeFirstTrib &&
+                    UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
+                if (lakeFirstTrib && !inlandFeederWidth)
                 {
                     bendFade = ang >= JoinAngleHardDeg ? 1.32f : (ang >= JoinAngleSmoothDeg ? 1.18f : 1.1f);
                 }
@@ -5219,7 +5511,7 @@ namespace Project.Gameplay.Map.Generator
                     if (riverIndex > 0)
                     {
                         float turnCap = MaxHalfWidthTurnCapWorld(cellPath, i, cellSizeWorld);
-                        if (lakeFirstTrib)
+                        if (lakeFirstTrib && !inlandFeederWidth)
                         {
                             float curveFloor = normalHalfW * (ang >= JoinAngleHardDeg ? 1.22f : (ang >= JoinAngleSmoothDeg ? 1.14f : 1.08f));
                             wv = Mathf.Max(wv, curveFloor);
@@ -6482,7 +6774,8 @@ namespace Project.Gameplay.Map.Generator
         }
 
         /// <summary>
-        /// Corta el tributario en la aproximación más cercana al troncal (evita ganchos lago→main→lago).
+        /// Corta el tributario en la primera entrada al corredor del main (lado lago).
+        /// Evita el V “pasa de largo y se devuelve” que deja el min-dist en la punta.
         /// </summary>
         static void TrimTributaryAtClosestMainApproach(
             GridSystem grid,
@@ -6493,54 +6786,25 @@ namespace Project.Gameplay.Map.Generator
             if (grid == null || config == null || cellProcessed == null || cellProcessed.Count < 3 || riverIndex <= 0)
                 return;
             if (!TributaryTargetsMainConfluence(grid, riverIndex) &&
-                !IsLakeEmissaryRiverIndex(grid, riverIndex))
-                return;
-            if (!TryBuildMainRiverCorridorSampler(grid, config, grid.CellSizeWorld, out MainRiverCorridorSampler sampler))
+                !IsLakeEmissaryRiverIndex(grid, riverIndex) &&
+                !UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex))
                 return;
 
             if (!TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out int mainEp))
                 mainEp = ResolveVisualTributaryMainEndpointIndex(grid, cellProcessed);
             int lakeEp = mainEp == 0 ? cellProcessed.Count - 1 : 0;
-            if (IsTributaryEndpointNearLake(grid, cellProcessed, lakeEp) ||
-                CountWebFusionLakeMouthInteriorVertices(grid, cellProcessed) > 0)
+            // Lago en el extremo lago es normal (lake-spill). Solo abortar si AMBOS extremos
+            // están en lago (gancho lago→main→lago) o hay tramo interior de lago largo.
+            bool lakeSpill = UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+            bool lakeAtLakeEp = IsTributaryEndpointNearLake(grid, cellProcessed, lakeEp);
+            bool lakeAtMainEp = IsTributaryEndpointNearLake(grid, cellProcessed, mainEp);
+            if (!lakeSpill && lakeAtLakeEp && lakeAtMainEp)
+                return;
+            if (!lakeSpill && CountWebFusionLakeMouthInteriorVertices(grid, cellProcessed) > 6)
                 return;
 
-            float maxJoin = ResolveConfluenceReachMaxGapCells(config);
-            int guardMain = Mathf.Clamp(Mathf.CeilToInt(sampler.RadiusCells * 0.55f), 3, 8);
-            int guardLake = guardMain;
-            int searchStart = mainEp == 0 ? guardMain : guardLake;
-            int searchEnd = mainEp == 0 ? cellProcessed.Count - guardLake : cellProcessed.Count - guardMain;
-            if (searchEnd <= searchStart)
-                return;
-
-            int bestIdx = -1;
-            float bestDist = float.MaxValue;
-            for (int i = searchStart; i < searchEnd; i++)
-            {
-                float d = Mathf.Sqrt(DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line));
-                if (d < bestDist)
-                {
-                    bestDist = d;
-                    bestIdx = i;
-                }
-            }
-
-            float reEntryMax = Mathf.Min(maxJoin, Mathf.Max(sampler.RadiusCells * 1.15f, guardMain + 1.5f));
-            if (bestIdx < searchStart || bestDist > reEntryMax)
-                return;
-
-            int removeFrom = bestIdx + 1;
-            if (removeFrom >= cellProcessed.Count)
-                return;
-
-            int removed = cellProcessed.Count - removeFrom;
-            cellProcessed.RemoveRange(removeFrom, removed);
-            if (config.debugLogs || config.debugHydrologyNetwork)
-            {
-                Debug.Log(
-                    $"[RiverTributaryMainTrim] riverIndex={riverIndex} cutAt={bestIdx} minMainDist={bestDist:F2} " +
-                    $"removedTail={removed} remaining={cellProcessed.Count} mode=interior_reentry");
-            }
+            // Lake-first / spill→main: first-entry (evita V). Resto: same helper (más sano que min-dist).
+            TrimRiverAtFirstMainCorridorContact(grid, config, cellProcessed, riverIndex, forceSpillJoin: lakeSpill);
         }
 
         /// <summary>Recorte lago + cola hacia troncal para tributarios dendríticos con agua en el path.</summary>
@@ -7099,16 +7363,50 @@ namespace Project.Gameplay.Map.Generator
                 return;
             }
 
+            int neighbor = endpointIndex == 0 ? 1 : endpointIndex - 1;
+            Vector2 approach = Vector2.zero;
+            if (cellProcessed.Count >= 2 && neighbor >= 0 && neighbor < cellProcessed.Count)
+                approach = (end - cellProcessed[neighbor]);
+
+            // Lake-spill→main: entrar por approach (no tangente del main → evita gancho en V).
+            bool lakeSpillApproach =
+                config.uwpLakeFirstHydrologyPipeline &&
+                UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+
+            if (lakeSpillApproach)
+            {
+                if (approach.sqrMagnitude < 1e-8f)
+                    approach = bestJoin - end;
+                if (approach.sqrMagnitude < 1e-8f)
+                    return;
+                approach.Normalize();
+
+                float tuckLf = Mathf.Clamp(sampler.CoreRadiusCells * 0.38f, 0.45f, 1.35f);
+                Vector2 tuckedLf = bestJoin + approach * tuckLf;
+                if (cellProcessed.Count >= 2 && neighbor >= 0 && neighbor < cellProcessed.Count &&
+                    WouldFoldBackBridge(cellProcessed[neighbor], end, tuckedLf))
+                    tuckedLf = bestJoin;
+
+                cellProcessed[endpointIndex] = tuckedLf;
+                if (config.debugLogs || config.debugHydrologyNetwork)
+                {
+                    Debug.Log(
+                        $"[RiverConfluenceTuck] riverIndex={riverIndex} endpoint={endpointIndex} tuckCells={tuckLf:F2} " +
+                        $"join=({bestJoin.x:F1},{bestJoin.y:F1}) remaining={cellProcessed.Count} mode=lakeSpill_approach");
+                }
+
+                return;
+            }
+
             Vector2 tangent = sampler.Line[bestSeg + 1] - sampler.Line[bestSeg];
             if (tangent.sqrMagnitude < 1e-8f)
                 return;
             tangent.Normalize();
 
-            int neighbor = endpointIndex == 0 ? 1 : endpointIndex - 1;
             if (cellProcessed.Count >= 2 && neighbor >= 0 && neighbor < cellProcessed.Count)
             {
-                Vector2 approach = (end - cellProcessed[neighbor]).normalized;
-                if (Vector2.Dot(approach, tangent) < 0f)
+                Vector2 a = approach.sqrMagnitude > 1e-8f ? approach.normalized : Vector2.zero;
+                if (a.sqrMagnitude > 1e-8f && Vector2.Dot(a, tangent) < 0f)
                     tangent = -tangent;
             }
 
@@ -8459,7 +8757,13 @@ namespace Project.Gameplay.Map.Generator
                     TryResolveTributaryMainJoinEndpointIndex(grid, config, cellProcessed, riverIndex, out mainIdx);
                 if (joinMain)
                 {
-                    SnapTributaryCenterlineToMainRiver(grid, cellProcessed, riverIndex, config, mainIdx);
+                    bool lakeSpillMain =
+                        config.uwpLakeFirstHydrologyPipeline &&
+                        UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+
+                    // Spill→main: no Snap al eje + tangente (recrea el V). Solo tuck corto por approach.
+                    if (!lakeSpillMain)
+                        SnapTributaryCenterlineToMainRiver(grid, cellProcessed, riverIndex, config, mainIdx);
                     TuckTributaryMouthIntoMainRiver(grid, cellProcessed, riverIndex, config, mainIdx);
 
                     int lakeIdx = mainIdx == 0 ? cellProcessed.Count - 1 : 0;
@@ -9734,6 +10038,19 @@ namespace Project.Gameplay.Map.Generator
         }
 
         /// <summary>
+        /// Contrato canal Lake First: carve sigue al mesh con margen de orilla fino y constante
+        /// (≈ 1/MeshOverCarveMul). Compartido por Headwater, main, inland y lake-spill.
+        /// </summary>
+        static void ApplyLakeFirstChannelCarveToMeshGrowthProfile(
+            List<float> meshHalfWidths,
+            List<float> maskHalfWidths,
+            List<Vector2> cellPath,
+            float cellSize,
+            bool joinAtStart = false) =>
+            ApplyLakeFirstHeadwaterCarveToMeshGrowthProfile(
+                meshHalfWidths, maskHalfWidths, cellPath, cellSize, joinAtStart);
+
+        /// <summary>
         /// El carve sigue al mesh con un margen de orilla fino y CONSTANTE (≈ 1/MeshOverCarveMul).
         /// El "crecimiento" organico del arroyo viene del ancho del propio canal (mesh+carve juntos,
         /// angosto en nacimiento y ancho en cuerpo/boca), no de encoger el carve respecto al mesh:
@@ -9744,7 +10061,8 @@ namespace Project.Gameplay.Map.Generator
             List<float> meshHalfWidths,
             List<float> maskHalfWidths,
             List<Vector2> cellPath,
-            float cellSize)
+            float cellSize,
+            bool joinAtStart = false)
         {
             if (meshHalfWidths == null || maskHalfWidths == null || cellPath == null ||
                 meshHalfWidths.Count != maskHalfWidths.Count ||
@@ -9758,7 +10076,8 @@ namespace Project.Gameplay.Map.Generator
 
             // Margen fino y constante: carve justo por debajo del mesh. Deja orilla blanca
             // uniforme y garantiza que el carve cubra el interior del mesh (sin islas).
-            float foamRatio = 1f / Mathf.Max(1.01f, LakeFirstHeadwaterMeshOverCarveMul);
+            // alongToJoin: 0 en origen / 1 en unión (soporta boca al inicio o al final).
+            float foamRatio = 1f / Mathf.Max(1.01f, LakeFirstChannelMeshOverCarveMul);
             float minCarveHalf = Mathf.Max(0.08f, cellSize * 0.58f);
             float acc = 0f;
             for (int i = 0; i < cellPath.Count; i++)
@@ -9766,8 +10085,12 @@ namespace Project.Gameplay.Map.Generator
                 if (i > 0)
                     acc += Vector2.Distance(cellPath[i], cellPath[i - 1]);
                 float along = Mathf.Clamp01(acc / total);
-                // Boca (union Y): sube el carve casi al mesh para cubrir la cuna del tributario.
-                float ratio = Mathf.Lerp(foamRatio, 0.94f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.82f, 1f, along)));
+                float alongToJoin = joinAtStart ? (1f - along) : along;
+                // Boca (union Y): carve casi al mesh para cubrir la cuña del tributario/receptor.
+                float ratio = Mathf.Lerp(
+                    foamRatio,
+                    0.98f,
+                    Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.82f, 1f, alongToJoin)));
                 maskHalfWidths[i] = Mathf.Max(minCarveHalf, meshHalfWidths[i] * ratio);
             }
         }
@@ -9894,10 +10217,13 @@ namespace Project.Gameplay.Map.Generator
             float ribbonHalf = config.riverVisualRibbonFullWidthCellsTributary > 0.01f
                 ? config.riverVisualRibbonFullWidthCellsTributary * 0.5f * cellSize
                 : baseHalfW;
+            bool inlandVisual = visualMeshOnly && UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
             float shoreFloor = visualMeshOnly
-                ? Mathf.Max(baseHalfW * 1.48f, ribbonHalf * 1.44f)
+                ? (inlandVisual
+                    ? Mathf.Max(baseHalfW * 1.12f, ribbonHalf * 1.05f)
+                    : Mathf.Max(baseHalfW * 1.48f, ribbonHalf * 1.44f))
                 : Mathf.Max(baseHalfW * 1.22f, ribbonHalf * 1.14f);
-            float globalMul = visualMeshOnly ? 1.14f : 1.04f;
+            float globalMul = visualMeshOnly ? (inlandVisual ? 1.04f : 1.14f) : 1.04f;
             int n = Mathf.Min(halfWidths.Count, cellPath.Count);
             float totalLen = PolylineLengthCellSpace(cellPath);
             float acc = 0f;
@@ -9917,13 +10243,15 @@ namespace Project.Gameplay.Map.Generator
                     continue;
                 if (headwater)
                     mouthBoost = 1f;
-                bool inlandFeeder = visualMeshOnly && UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
-                float confAlong = inlandFeeder ? 0.55f : 0.62f;
+                bool inlandFeeder = inlandVisual;
+                float confAlong = 0.62f;
                 float confBoost = along >= confAlong
                     ? (visualMeshOnly
-                        ? (inlandFeeder ? 1.24f : 1.14f)
+                        ? (inlandFeeder ? 1.08f : 1.14f)
                         : 1.08f)
                     : 1f;
+                if (inlandFeeder)
+                    bendBoost = ang >= JoinAngleHardDeg ? 1.12f : (ang >= JoinAngleSmoothDeg ? 1.06f : 1.02f);
                 halfWidths[i] = Mathf.Max(
                     halfWidths[i],
                     shoreFloor * globalMul * bendBoost * mouthBoost * confBoost);
@@ -10002,8 +10330,10 @@ namespace Project.Gameplay.Map.Generator
                 return;
 
             bool inland = UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
-            float bodyMul = inland ? 1.10f : 1.04f;
-            float endpointMul = inland ? 1.22f : 1.08f;
+            bool lakeSpill = UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+            // Lake-spill→main: ensanche fuerte en boca (orilla blanca); inland ya tenía boost.
+            float bodyMul = inland ? 1.02f : (lakeSpill ? 1.14f : 1.04f);
+            float endpointMul = inland ? 1.06f : (lakeSpill ? 1.32f : 1.08f);
 
             int n = Mathf.Min(meshHalfWidths.Count, cellPath.Count);
             if (n < 4)
@@ -10020,22 +10350,220 @@ namespace Project.Gameplay.Map.Generator
 
             bodyRef = Mathf.Clamp(bodyRef, 0, n - 1);
             float bodyW = meshHalfWidths[bodyRef];
+            float cellSize = Mathf.Max(0.01f, grid != null ? grid.CellSizeWorld : 1f);
+            float mainHalf = config.riverVisualRibbonFullWidthCellsMain * 0.5f * cellSize;
+            float endMul = Mathf.Clamp(config.riverConfluenceTributaryEndWidthMul, 0.42f, 1.22f);
+            float targetJoin = Mathf.Max(bodyW * endpointMul, mainHalf * endMul * (lakeSpill ? 0.72f : 0.55f));
+            targetJoin = Mathf.Min(targetJoin, mainHalf * 0.95f);
 
             for (int i = blendStart; i <= blendEnd; i++)
             {
                 if (i < 0 || i >= n)
                     continue;
                 float t = ConfluenceTaper01AlongPath(cellPath, i, blendStart, blendEnd, joinAtStart);
-                float mul = Mathf.Lerp(bodyMul, endpointMul, Mathf.SmoothStep(0f, 1f, t));
-                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], bodyW * mul);
+                float desired = Mathf.Lerp(bodyW * bodyMul, targetJoin, Mathf.SmoothStep(0f, 1f, t));
+                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], desired);
             }
 
             for (int i = Mathf.Max(0, blendEnd + 1); i < n; i++)
-                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], bodyW * endpointMul);
+                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], targetJoin);
+
+            // Últimos puntos de la cuña Y: garantizar mesh hasta el troncal.
+            int cornerPts = Mathf.Clamp(Mathf.CeilToInt((blendEnd - blendStart + 1) * 0.30f), 3, 7);
+            for (int k = 0; k < cornerPts; k++)
+            {
+                int i = joinAtStart ? k : n - 1 - k;
+                if (i < 0 || i >= n)
+                    break;
+                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], targetJoin);
+            }
+        }
+
+        /// <summary>Lake-spill→main: en el tramo final, carve ≈ mesh (cubre cuña Y; evita foam blanca ancha).</summary>
+        static void BoostLakeSpillMainJoinCarveMaskToMesh(
+            List<float> meshHalfWidths,
+            List<float> maskHalfWidths,
+            List<Vector2> cellPath,
+            GridSystem grid,
+            MapGenConfig config,
+            int riverIndex)
+        {
+            if (meshHalfWidths == null || maskHalfWidths == null || cellPath == null ||
+                meshHalfWidths.Count != maskHalfWidths.Count || cellPath.Count < 4)
+                return;
+
+            int n = meshHalfWidths.Count;
+            int joinEp = n - 1;
+            if (grid != null && config != null && riverIndex > 0 &&
+                TryResolveTributaryMainJoinEndpointIndex(grid, config, cellPath, riverIndex, out int resolved))
+                joinEp = resolved;
+            else if (grid != null && config != null)
+            {
+                float cs = grid.CellSizeWorld;
+                bool startMain = IsTributaryEndpointNearMain(grid, config, cs, cellPath, 0);
+                bool endMain = IsTributaryEndpointNearMain(grid, config, cs, cellPath, n - 1);
+                if (startMain && !endMain)
+                    joinEp = 0;
+                else if (endMain)
+                    joinEp = n - 1;
+            }
+
+            bool joinAtStart = joinEp == 0;
+            float total = PolylineLengthCellSpace(cellPath);
+            if (total < 1e-4f)
+                return;
+
+            float acc = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0)
+                    acc += Vector2.Distance(cellPath[i], cellPath[i - 1]);
+                float along = Mathf.Clamp01(acc / total);
+                float fromJoin = joinAtStart ? along : (1f - along);
+                if (fromJoin > 0.22f)
+                    continue;
+                float t = 1f - Mathf.Clamp01(fromJoin / 0.22f);
+                float ratio = Mathf.Lerp(0.94f, 0.985f, Mathf.SmoothStep(0f, 1f, t));
+                maskHalfWidths[i] = Mathf.Max(maskHalfWidths[i], meshHalfWidths[i] * ratio);
+            }
         }
 
         /// <summary>InlandFeeder: carve/máscara con el mismo perfil estrecho que lake-spill (mesh visual más ancho).</summary>
         const float LakeSpillCarveFromMeshMul = 0.80f;
+        /// <summary>Tope world half inland: arroyo, no spill. ~1.85 celdas @ cell=3 → ~5.5m half.</summary>
+        const float LakeFirstInlandMeshMaxHalfCells = 1.85f;
+        /// <summary>Tras Cap: mesh ≥ Ceil(mask)·cs · OverCarve (evita foam perdido / “desfase Y” en orilla).</summary>
+        const float LakeFirstInlandHeadwaterJoinMeshMul = 1.20f;
+
+        static void CapLakeFirstInlandFeederHalfWidths(
+            List<float> meshHalfWidths,
+            List<float> maskHalfWidths,
+            float cellSize)
+        {
+            if (meshHalfWidths == null || meshHalfWidths.Count == 0)
+                return;
+            float cs = Mathf.Max(0.01f, cellSize);
+            float maxMesh = cs * LakeFirstInlandMeshMaxHalfCells;
+            for (int i = 0; i < meshHalfWidths.Count; i++)
+                meshHalfWidths[i] = Mathf.Min(meshHalfWidths[i], maxMesh);
+            if (maskHalfWidths == null)
+                return;
+            int n = Mathf.Min(meshHalfWidths.Count, maskHalfWidths.Count);
+            for (int i = 0; i < n; i++)
+                maskHalfWidths[i] = Mathf.Min(maskHalfWidths[i], meshHalfWidths[i] * LakeSpillCarveFromMeshMul);
+        }
+
+        /// <summary>
+        /// Cap deja mesh half &lt; radio entero del stamp (Ceil) → orilla sin foam / fake Y-offset.
+        /// Reafirma mesh ≥ alcance de máscara × MeshOverCarve (contrato canal Lake First).
+        /// </summary>
+        static void SyncLakeFirstInlandMeshOverCarveAfterCap(
+            List<float> meshHalfWidths,
+            List<float> maskHalfWidths,
+            float cellSize)
+        {
+            if (meshHalfWidths == null || maskHalfWidths == null)
+                return;
+            float cs = Mathf.Max(0.01f, cellSize);
+            float over = Mathf.Max(1.05f, LakeFirstChannelMeshOverCarveMul);
+            int n = Mathf.Min(meshHalfWidths.Count, maskHalfWidths.Count);
+            for (int i = 0; i < n; i++)
+            {
+                float maskW = Mathf.Max(0.08f, maskHalfWidths[i]);
+                int radiusCells = Mathf.Max(1, Mathf.CeilToInt(maskW / cs));
+                float stampReach = radiusCells * cs;
+                float target = Mathf.Max(stampReach * over, maskW * over);
+                meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], target);
+            }
+        }
+
+        /// <summary>
+        /// Inland receptor: ensancha mesh en la T mid-body donde desemboca un HeadwaterFeeder
+        /// (cubre cuña / orilla blanca; el Cap solo no alcanza ahí).
+        /// </summary>
+        static void ApplyLakeFirstInlandHeadwaterJoinMeshWiden(
+            GridSystem grid,
+            List<float> meshHalfWidths,
+            List<Vector2> cellPath,
+            MapGenConfig config,
+            int riverIndex,
+            float cellSize)
+        {
+            if (grid == null || config == null || meshHalfWidths == null || cellPath == null ||
+                riverIndex <= 0 || !UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex) ||
+                grid.RiverOriginKinds == null)
+                return;
+
+            int n = Mathf.Min(meshHalfWidths.Count, cellPath.Count);
+            if (n < 4)
+                return;
+
+            float cs = Mathf.Max(0.01f, cellSize);
+            float approachCells = Mathf.Clamp(config.riverSurfaceTributaryConfluenceApproachCells, 8, 22);
+            float approachWorld = approachCells * cs;
+
+            for (int hi = 1; hi < grid.RiverOriginKinds.Count; hi++)
+            {
+                if (UwpTributaryOriginUtility.GetOrigin(grid, hi) != UwpTributaryOriginKind.HeadwaterFeeder)
+                    continue;
+                if (!TryResolveHeadwaterReceiverRiverIndex(grid, hi, out int recvRi) || recvRi != riverIndex)
+                    continue;
+
+                List<Vector2> hwLine = null;
+                if (grid.LakeFirstWaterGraph != null &&
+                    grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex != null &&
+                    grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex.TryGetValue(hi, out var finalHw) &&
+                    finalHw != null && finalHw.Count >= 2)
+                    hwLine = finalHw;
+                else if (grid.RiverCenterlinesCellSpace != null &&
+                         hi < grid.RiverCenterlinesCellSpace.Count)
+                    hwLine = grid.RiverCenterlinesCellSpace[hi];
+                if (hwLine == null || hwLine.Count < 2)
+                    continue;
+
+                Vector2 mouth = hwLine[hwLine.Count - 1];
+                int bestIdx = 0;
+                float bestDist = float.MaxValue;
+                for (int i = 0; i < n; i++)
+                {
+                    float d = (cellPath[i] - mouth).sqrMagnitude;
+                    if (d < bestDist)
+                    {
+                        bestDist = d;
+                        bestIdx = i;
+                    }
+                }
+
+                float bodyW = meshHalfWidths[Mathf.Clamp(bestIdx, 0, n - 1)];
+                float target = Mathf.Max(
+                    bodyW * LakeFirstInlandHeadwaterJoinMeshMul,
+                    cs * (LakeFirstInlandMeshMaxHalfCells * LakeFirstInlandHeadwaterJoinMeshMul));
+
+                float accL = 0f;
+                for (int i = bestIdx; i >= 0; i--)
+                {
+                    if (i < bestIdx)
+                        accL += Vector2.Distance(cellPath[i], cellPath[i + 1]);
+                    if (accL > approachWorld)
+                        break;
+                    float t = 1f - Mathf.Clamp01(accL / Mathf.Max(1e-4f, approachWorld));
+                    float desired = Mathf.Lerp(bodyW, target, Mathf.SmoothStep(0f, 1f, t));
+                    meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], desired);
+                }
+
+                float accR = 0f;
+                for (int i = bestIdx; i < n; i++)
+                {
+                    if (i > bestIdx)
+                        accR += Vector2.Distance(cellPath[i], cellPath[i - 1]);
+                    if (accR > approachWorld)
+                        break;
+                    float t = 1f - Mathf.Clamp01(accR / Mathf.Max(1e-4f, approachWorld));
+                    float desired = Mathf.Lerp(bodyW, target, Mathf.SmoothStep(0f, 1f, t));
+                    meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], desired);
+                }
+            }
+        }
 
         static void SyncLakeFirstInlandMaskToLakeSpillCarve(
             List<float> meshHalfWidths,
@@ -10129,7 +10657,7 @@ namespace Project.Gameplay.Map.Generator
             line.InsertRange(0, ingress);
         }
 
-        /// <summary>Lake-first: extiende el extremo de confluencia hacia el interior del troncal.</summary>
+        /// <summary>Lake-first: une el extremo al troncal sin recorrer el main (evita “pasa de largo y vuelve”).</summary>
         static void AppendLakeFirstTributaryCenterlineTowardMainRiver(
             GridSystem grid,
             int riverIndex,
@@ -10152,14 +10680,18 @@ namespace Project.Gameplay.Map.Generator
                 return;
 
             Vector2 mouth = joinAtEnd ? line[line.Count - 1] : line[0];
-            if (TryResolveTributaryJoinOnMainRiver(grid, riverIndex, line, config, out Vector2 join))
+            bool lakeSpill = UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+
+            // Spill→main: NUNCA teleportar la boca a la confluencia registrada (suele estar
+            // dentro/pasado del canal y recrea el V). Solo acercar al punto más cercano del main.
+            if (!lakeSpill &&
+                TryResolveTributaryJoinOnMainRiver(grid, riverIndex, line, config, out Vector2 join))
             {
                 line[mainIdx] = join;
                 mouth = join;
             }
 
             float bestDist = float.MaxValue;
-            int bestSeg = 0;
             Vector2 bestJoin = mouth;
             for (int i = 0; i < sampler.Line.Count - 1; i++)
             {
@@ -10169,31 +10701,48 @@ namespace Project.Gameplay.Map.Generator
                 {
                     bestDist = d;
                     bestJoin = q;
-                    bestSeg = i;
                 }
             }
 
-            Vector2 tangent = sampler.Line[bestSeg + 1] - sampler.Line[bestSeg];
-            if (tangent.sqrMagnitude < 1e-8f)
-                return;
-            tangent.Normalize();
-
-            if (line.Count >= 2)
+            // Spill→main: anclar a ORILLA del corredor (no al eje). Ingress/tip al eje recreaban el U.
+            if (lakeSpill)
             {
-                Vector2 approach = joinAtEnd
-                    ? mouth - line[line.Count - 2]
-                    : line[1] - mouth;
-                if (approach.sqrMagnitude > 1e-6f && Vector2.Dot(approach.normalized, tangent) < 0.2f)
-                    tangent = -tangent;
+                Vector2 toAxis = bestJoin - mouth;
+                float dist = toAxis.magnitude;
+                float bankR = Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f);
+                if (dist > 1e-4f && dist > bankR)
+                    line[mainIdx] = bestJoin - (toAxis / dist) * bankR;
+                else if (dist > 1e-4f)
+                    line[mainIdx] = mouth;
+                else
+                    line[mainIdx] = bestJoin;
+                return;
             }
 
-            float ingressDepth = Mathf.Clamp(sampler.CoreRadiusCells * 1.05f, 1.5f, 5f);
-            Vector2 deep = bestJoin + tangent * ingressDepth;
-            var ingress = new List<Vector2>(5);
-            for (int k = 1; k <= 5; k++)
+            // Entrar al canal en la dirección de aproximación del trib (no tangent del main).
+            Vector2 neighbor = joinAtEnd ? line[line.Count - 2] : line[1];
+            Vector2 approach = bestJoin - neighbor;
+            if (approach.sqrMagnitude < 1e-8f)
+                approach = bestJoin - mouth;
+            if (approach.sqrMagnitude < 1e-8f)
+                return;
+            approach.Normalize();
+
+            // Tuck corto al interior del troncal (inland / lake-owner no-spill).
+            float tuckMul = 0.38f;
+            float tuckMax = 1.35f;
+            float tuck = Mathf.Clamp(sampler.CoreRadiusCells * tuckMul, 0.35f, tuckMax);
+            Vector2 deep = bestJoin + approach * tuck;
+            if (WouldFoldBackBridge(neighbor, mouth, deep))
+                deep = bestJoin;
+
+            mouth = line[mainIdx];
+
+            var ingress = new List<Vector2>(2);
+            for (int k = 1; k <= 2; k++)
             {
-                float t = k / 5f;
-                ingress.Add(Vector2.Lerp(mouth, deep, 0.1f + t * 0.62f));
+                float t = k / 2f;
+                ingress.Add(Vector2.Lerp(mouth, deep, 0.40f + t * 0.60f));
             }
 
             if (ingress.Count == 0)
@@ -11729,9 +12278,7 @@ namespace Project.Gameplay.Map.Generator
                         $"taperStart={(preTaperStart ? 1 : 0)} taperEnd={(preTaperEnd ? 1 : 0)}");
                 }
 
-                string goName = riverIndex == 0
-                    ? "Water_RiverSurface_Main"
-                    : $"Water_RiverSurface_Tributary_{riverIndex}";
+                string goName = ResolveRiverSurfaceGameObjectName(grid, riverIndex);
                 if (TryBuildStripMeshWithCaps(
                         parent,
                         worldCenters,
@@ -12144,14 +12691,15 @@ namespace Project.Gameplay.Map.Generator
             return cur;
         }
 
-        static bool PolylineSelfIntersectsXZCell(List<Vector2> poly)
+        static bool PolylineSelfIntersectsXZCell(List<Vector2> poly, int minIndexGap = 2)
         {
             if (poly == null || poly.Count < 4)
                 return false;
             int n = poly.Count;
+            int gap = Mathf.Max(2, minIndexGap);
             for (int i = 0; i < n - 1; i++)
             {
-                for (int j = i + 2; j < n - 1; j++)
+                for (int j = i + gap; j < n - 1; j++)
                 {
                     if (SegmentsIntersect2D(poly[i], poly[i + 1], poly[j], poly[j + 1]))
                         return true;
@@ -13104,7 +13652,213 @@ namespace Project.Gameplay.Map.Generator
             return t.sqrMagnitude < 1e-10f ? Vector2.right : t.normalized;
         }
 
-        /// <summary>Meander orgánico en espacio celda (máscara + mesh comparten FinalCenterlineCells).</summary>
+        /// <summary>
+        /// Amplitud relativa a min(W,H). Main usa fórmula S/contra-S (2 senos + ruido suave) + Catmull-Rom denso.
+        /// </summary>
+        static void ResolveGridScaledMeanderParams(
+            int w,
+            int h,
+            MapGenConfig config,
+            bool isMain,
+            out float ampC,
+            out float freqC,
+            out float fade01,
+            out int phaseSeed)
+        {
+            float minDim = Mathf.Max(64f, Mathf.Min(w, h));
+            // ChatGPT ref: main ~0.055 * mapSize (ampC = A1).
+            float ampRatio = isMain ? 0.055f : 0.0055f;
+            float ampFromGrid = minDim * ampRatio;
+            float ampFromCfg = config != null
+                ? config.riverSurfaceVisualMeanderAmplitudeCells * (isMain ? 6.0f : 1.55f)
+                : 0f;
+            ampC = Mathf.Clamp(
+                Mathf.Max(ampFromGrid, ampFromCfg),
+                isMain ? 4.0f : 0.45f,
+                isMain ? 18.0f : 2.2f);
+
+            float freqFromGrid = isMain
+                ? Mathf.Clamp(minDim * 0.40f, 48f, 140f)
+                : Mathf.Clamp(minDim * 0.028f, 4.5f, 12f);
+            float freqCfg = config != null
+                ? Mathf.Max(2f, config.riverSurfaceVisualMeanderFrequencyCells)
+                : freqFromGrid;
+            freqC = isMain ? freqFromGrid : Mathf.Lerp(freqFromGrid, freqCfg, 0.20f);
+            fade01 = config != null
+                ? Mathf.Clamp(config.riverSurfaceVisualMeanderEndFade01, 0.02f, isMain ? 0.12f : 0.35f)
+                : (isMain ? 0.10f : 0.12f);
+            phaseSeed = (config != null ? config.seed : 0) * 31 + (isMain ? 0 : 17);
+        }
+
+        static float EstimateAvgSegmentLengthCell(List<Vector2> pts)
+        {
+            if (pts == null || pts.Count < 2)
+                return 0.5f;
+            float sum = 0f;
+            for (int i = 1; i < pts.Count; i++)
+                sum += Vector2.Distance(pts[i], pts[i - 1]);
+            return Mathf.Max(0.2f, sum / (pts.Count - 1));
+        }
+
+        static float ComputePolylineLengthCell(List<Vector2> pts)
+        {
+            if (pts == null || pts.Count < 2)
+                return 0f;
+            float sum = 0f;
+            for (int i = 1; i < pts.Count; i++)
+                sum += Vector2.Distance(pts[i], pts[i - 1]);
+            return sum;
+        }
+
+        /// <summary>Limita giro entre nodos (~25°) para evitar quiebres caritos.</summary>
+        static void ClampControlTurnAngles(List<Vector2> controls, float maxTurnDeg)
+        {
+            if (controls == null || controls.Count < 3)
+                return;
+            float maxRad = maxTurnDeg * Mathf.Deg2Rad;
+            for (int i = 2; i < controls.Count; i++)
+            {
+                Vector2 prev = controls[i - 1] - controls[i - 2];
+                Vector2 cand = controls[i] - controls[i - 1];
+                if (prev.sqrMagnitude < 1e-8f || cand.sqrMagnitude < 1e-8f)
+                    continue;
+                prev.Normalize();
+                float candLen = cand.magnitude;
+                cand /= candLen;
+                float dot = Mathf.Clamp(Vector2.Dot(prev, cand), -1f, 1f);
+                float ang = Mathf.Acos(dot);
+                if (ang <= maxRad)
+                    continue;
+                // Mezcla suave hacia la dirección previa (evita codo poligonal).
+                Vector2 blended = Vector2.Lerp(prev, cand, 0.30f).normalized;
+                controls[i] = controls[i - 1] + blended * candLen;
+            }
+        }
+
+        /// <summary>
+        /// Main: fórmula tipo ChatGPT — A1·sin(2.1) + A2·sin(4.3) + ruido suave, 10–14 nodos,
+        /// límite de giro, Catmull-Rom denso. No fallback lineal (eso dejaba tramos rectos).
+        /// </summary>
+        static bool TryApplyMainMeanderOnCoarseCenterline(
+            List<Vector2> cellPath,
+            int w,
+            int h,
+            int riverIndex,
+            float ampC,
+            float freqC,
+            float fade01,
+            int phaseSeed,
+            out float maxOffsetCells)
+        {
+            maxOffsetCells = 0f;
+            if (cellPath == null || cellPath.Count < 6)
+                return false;
+
+            float pathLen = ComputePolylineLengthCell(cellPath);
+            if (pathLen < 8f)
+                return false;
+
+            float minDim = Mathf.Max(64f, Mathf.Min(w, h));
+            // Nodos cada 0.08–0.14 L → ~8–14 controles.
+            float controlSpacing = Mathf.Clamp(pathLen * 0.10f, pathLen * 0.08f, pathLen * 0.14f);
+            controlSpacing = Mathf.Clamp(controlSpacing, 10f, 28f);
+            var baseControls = ResampleUniformSpacingCell(cellPath, controlSpacing, 16);
+            if (baseControls == null || baseControls.Count < 5)
+                return false;
+
+            // Amplitudes relativas al mapa (ref. ChatGPT).
+            float a1 = Mathf.Clamp(ampC, minDim * 0.040f, minDim * 0.070f);
+            float a2 = minDim * 0.015f;
+            float an = minDim * 0.012f;
+            float phase1 = phaseSeed * 0.0173f + 0.4f;
+            float phase2 = phaseSeed * 0.0311f + 1.7f;
+            float seedNoise = (phaseSeed % 997) * 0.013f;
+
+            float[] ampScales = { 1f, 0.82f, 0.65f };
+            List<Vector2> bestControls = null;
+            float bestMax = 0f;
+
+            for (int si = 0; si < ampScales.Length; si++)
+            {
+                float s = ampScales[si];
+                var trial = new List<Vector2>(baseControls.Count);
+                float acc = 0f;
+                Vector2 prevNrm = Vector2.zero;
+                float peak = 0f;
+
+                for (int i = 0; i < baseControls.Count; i++)
+                {
+                    if (i > 0)
+                        acc += Vector2.Distance(baseControls[i], baseControls[i - 1]);
+
+                    Vector2 p = baseControls[i];
+                    if (i == 0 || i == baseControls.Count - 1 || IsTrueMapEdgeCellSpace(p, w, h))
+                    {
+                        trial.Add(p);
+                        continue;
+                    }
+
+                    float t01 = Mathf.Clamp01(acc / pathLen);
+                    float fade = MeanderEdgeFade(t01, fade01);
+                    if (fade < 1e-4f)
+                    {
+                        trial.Add(p);
+                        continue;
+                    }
+
+                    Vector2 tan = CellPolylineTangentNormalize(baseControls, i);
+                    Vector2 nrm = new Vector2(-tan.y, tan.x);
+                    if (prevNrm.sqrMagnitude > 1e-8f && Vector2.Dot(nrm, prevNrm) < 0f)
+                        nrm = -nrm;
+                    if (nrm.sqrMagnitude > 1e-8f)
+                        prevNrm = nrm;
+
+                    float mainWave = Mathf.Sin(t01 * Mathf.PI * 2f * 2.1f + phase1) * (a1 * s);
+                    float secondaryWave = Mathf.Sin(t01 * Mathf.PI * 2f * 4.3f + phase2) * (a2 * s);
+                    float noise = (Mathf.PerlinNoise(t01 * 2.5f, seedNoise) - 0.5f) * 2f * (an * s);
+                    float off = (mainWave + secondaryWave + noise) * fade;
+                    peak = Mathf.Max(peak, Mathf.Abs(off));
+                    trial.Add(p + nrm * off);
+                }
+
+                if (trial.Count != baseControls.Count)
+                    continue;
+
+                ClampControlTurnAngles(trial, 25f);
+                if (PolylineSelfIntersectsXZCell(trial, 3))
+                    continue;
+
+                bestControls = trial;
+                bestMax = peak;
+                break;
+            }
+
+            if (bestControls == null)
+                return false;
+
+            // Catmull-Rom denso: la curva visible no debe ser polilínea de nodos.
+            float sampleSpacing = 0.28f;
+            int maxPts = Mathf.Clamp(Mathf.CeilToInt(pathLen / sampleSpacing) + 8, 128, 2048);
+            var smooth = SampleCentripetalSpline(bestControls, sampleSpacing, 0.5f, maxPts);
+            if (smooth == null || smooth.Count < 8)
+                return false;
+
+            // Si el spline se auto-cruza: bajar amp ya falló arriba; suavizar Chaikin 1 pass si cabe.
+            if (PolylineSelfIntersectsXZCell(smooth, 5))
+            {
+                var chaikin = ChaikinOpenCellPreserveEnds(smooth, 2);
+                if (chaikin != null && chaikin.Count >= 8 && !PolylineSelfIntersectsXZCell(chaikin, 5))
+                    smooth = chaikin;
+                else
+                    return false; // mejor rechazar que caer a tramos rectos entre nodos
+            }
+
+            maxOffsetCells = bestMax;
+            cellPath.Clear();
+            cellPath.AddRange(smooth);
+            return true;
+        }
+
         static bool ApplyVisualMeanderToCellSpace(
             List<Vector2> cellPath,
             int w,
@@ -13117,82 +13871,44 @@ namespace Project.Gameplay.Map.Generator
             if (config == null || !config.riverSurfaceVisualMeanderEnabled || cellPath == null || cellPath.Count < 4)
                 return false;
 
-            float ampC = Mathf.Clamp(
-                Mathf.Max(config.riverSurfaceVisualMeanderAmplitudeCells, riverIndex == 0 ? 0.32f : 0.20f),
-                0f,
-                0.6f);
-            float freqC = Mathf.Max(2f, config.riverSurfaceVisualMeanderFrequencyCells);
-            float fade01 = Mathf.Clamp(config.riverSurfaceVisualMeanderEndFade01, 0.02f, 0.35f);
-            var trial = new List<Vector2>(cellPath);
-            float acc = 0f;
-            for (int i = 0; i < trial.Count; i++)
-            {
-                if (i > 0)
-                    acc += Vector2.Distance(trial[i], trial[i - 1]);
-                if (i == 0 || i == trial.Count - 1)
-                    continue;
-                if (IsTrueMapEdgeCellSpace(trial[i], w, h))
-                    continue;
+            bool isMain = riverIndex == 0;
+            ResolveGridScaledMeanderParams(w, h, config, isMain, out float ampC, out float freqC, out float fade01, out int phaseSeed);
 
-                float t01 = trial.Count > 1 ? i / (float)(trial.Count - 1) : 0f;
-                float fade = MeanderEdgeFade(t01, fade01);
-                if (fade < 1e-4f)
-                    continue;
+            if (isMain)
+                return TryApplyMainMeanderOnCoarseCenterline(
+                    cellPath, w, h, riverIndex, ampC, freqC, fade01, phaseSeed, out maxOffsetCells);
 
-                Vector2 tan = CellPolylineTangentNormalize(trial, i);
-                Vector2 nrm = new Vector2(-tan.y, tan.x);
-                float phase = acc / freqC * (Mathf.PI * 2f) + riverIndex * 1.713f;
-                float noise01 = Mathf.PerlinNoise(
-                    acc / Mathf.Max(2f, freqC * 0.73f) + riverIndex * 13.17f,
-                    riverIndex * 0.271f + 4.13f);
-                float organicWave = Mathf.Clamp(Mathf.Sin(phase) * 0.72f + (noise01 * 2f - 1f) * 0.38f, -1f, 1f);
-                float offCells = organicWave * ampC * fade;
-                trial[i] += nrm * offCells;
-                maxOffsetCells = Mathf.Max(maxOffsetCells, Mathf.Abs(offCells));
-            }
+            if (TryApplyMeanderOffsets(
+                    cellPath, w, h, riverIndex, ampC, freqC, fade01, out maxOffsetCells,
+                    phaseSeed: phaseSeed))
+                return true;
 
-            if (PolylineSelfIntersectsXZCell(trial))
-                return false;
-
-            for (int i = 0; i < cellPath.Count; i++)
-                cellPath[i] = trial[i];
-            return true;
+            float ampSoft = Mathf.Max(0.4f, ampC * 0.7f);
+            return TryApplyMeanderOffsets(
+                cellPath, w, h, riverIndex, ampSoft, freqC * 1.3f, fade01, out maxOffsetCells,
+                phaseSeed: phaseSeed + 17);
         }
 
-        /// <summary>Lake-first: meandro orgánico reforzado (main + tributarios comparten FinalCenterlineCells).</summary>
-        static bool ApplyLakeFirstOrganicMeanderToCellSpace(
-            GridSystem grid,
+        static bool TryApplyMeanderOffsets(
             List<Vector2> cellPath,
             int w,
             int h,
-            MapGenConfig config,
             int riverIndex,
+            float ampC,
+            float freqC,
+            float fade01,
             out float maxOffsetCells,
-            bool protectMainJoinApproachTail = false)
+            bool protectMainJoinApproachTail = false,
+            int phaseSeed = -1,
+            int selfIntersectIndexGap = 2)
         {
             maxOffsetCells = 0f;
-            if (config == null || cellPath == null || cellPath.Count < 4)
-                return false;
-
+            int seed = phaseSeed >= 0 ? phaseSeed : riverIndex;
             bool isMain = riverIndex == 0;
-            if (isMain)
-                return false;
-            if (!protectMainJoinApproachTail &&
-                !UwpTributaryOriginUtility.UsesLakeFirstTributaryMeanderTreatment(grid, config, riverIndex))
-                return false;
-            // Más carácter orgánico (sobre todo en tributarios) para romper tramos rectos,
-            // manteniendo el chequeo de self-intersection.
-            float ampC = isMain ? 0.50f : 0.62f;
-            float freqC = isMain ? 8.0f : 4.2f;
-            float fade01 = isMain ? 0.09f : 0.12f;
-            if (config.riverSurfaceVisualMeanderEnabled)
-            {
-                ampC = Mathf.Max(ampC, config.riverSurfaceVisualMeanderAmplitudeCells * (isMain ? 1.4f : 1.55f));
-                freqC = Mathf.Min(freqC, Mathf.Max(4.5f, config.riverSurfaceVisualMeanderFrequencyCells * 0.62f));
-            }
-
+            int indexGap = Mathf.Max(2, selfIntersectIndexGap);
             var trial = new List<Vector2>(cellPath);
             float acc = 0f;
+            Vector2 prevNrm = Vector2.zero;
             for (int i = 0; i < trial.Count; i++)
             {
                 if (i > 0)
@@ -13213,22 +13929,63 @@ namespace Project.Gameplay.Map.Generator
 
                 Vector2 tan = CellPolylineTangentNormalize(trial, i);
                 Vector2 nrm = new Vector2(-tan.y, tan.x);
-                float phase = acc / freqC * (Mathf.PI * 2f) + riverIndex * 1.913f;
-                float noise01 = Mathf.PerlinNoise(
-                    acc / Mathf.Max(2f, freqC * 0.68f) + riverIndex * 17.11f,
-                    riverIndex * 0.319f + 6.07f);
-                float organicWave = Mathf.Clamp(Mathf.Sin(phase) * 0.76f + (noise01 * 2f - 1f) * 0.44f, -1f, 1f);
+                if (prevNrm.sqrMagnitude > 1e-8f && Vector2.Dot(nrm, prevNrm) < 0f)
+                    nrm = -nrm;
+                if (nrm.sqrMagnitude > 1e-8f)
+                    prevNrm = nrm;
+
+                float phase = acc / freqC * (Mathf.PI * 2f) + seed * 1.713f;
+                float organicWave = Mathf.Sin(phase);
                 float offCells = organicWave * ampC * fade;
                 trial[i] += nrm * offCells;
                 maxOffsetCells = Mathf.Max(maxOffsetCells, Mathf.Abs(offCells));
             }
 
-            if (PolylineSelfIntersectsXZCell(trial))
+            if (PolylineSelfIntersectsXZCell(trial, indexGap))
                 return false;
 
             for (int i = 0; i < cellPath.Count; i++)
                 cellPath[i] = trial[i];
             return true;
+        }
+
+        /// <summary>Lake-first: meandro orgánico. Main incluido (rompe tramos rectos/cuadriculados). Headwater excluido.</summary>
+        static bool ApplyLakeFirstOrganicMeanderToCellSpace(
+            GridSystem grid,
+            List<Vector2> cellPath,
+            int w,
+            int h,
+            MapGenConfig config,
+            int riverIndex,
+            out float maxOffsetCells,
+            bool protectMainJoinApproachTail = false)
+        {
+            maxOffsetCells = 0f;
+            if (config == null || cellPath == null || cellPath.Count < 4)
+                return false;
+
+            bool isMain = riverIndex == 0;
+            if (!isMain && IsLakeFirstHeadwaterFeeder(grid, riverIndex))
+                return false;
+            if (!isMain &&
+                !protectMainJoinApproachTail &&
+                !UwpTributaryOriginUtility.UsesLakeFirstTributaryMeanderTreatment(grid, config, riverIndex))
+                return false;
+
+            ResolveGridScaledMeanderParams(w, h, config, isMain, out float ampC, out float freqC, out float fade01, out int phaseSeed);
+
+            if (isMain)
+                return TryApplyMainMeanderOnCoarseCenterline(
+                    cellPath, w, h, riverIndex, ampC, freqC, fade01, phaseSeed, out maxOffsetCells);
+
+            if (TryApplyMeanderOffsets(
+                    cellPath, w, h, riverIndex, ampC, freqC, fade01, out maxOffsetCells,
+                    protectMainJoinApproachTail, phaseSeed))
+                return true;
+            float ampSoft = Mathf.Max(0.45f, ampC * 0.7f);
+            return TryApplyMeanderOffsets(
+                cellPath, w, h, riverIndex, ampSoft, freqC * 1.3f, fade01, out maxOffsetCells,
+                protectMainJoinApproachTail, phaseSeed: phaseSeed + 17);
         }
 
         static void SnapMainRiverMapBorderEndpoints(List<Vector2> cellPath, int w, int h)
@@ -15120,6 +15877,105 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
+        /// <summary>
+        /// Lake-First: mismo contrato degenerado que non-LF, pero resolviendo con
+        /// TryResolveLakeFirstFinalCenterlineCells + densify (no el resolve visual legacy).
+        /// Primero congela el main (para joins trib), luego predice tributarios skipped
+        /// antes del loop de máscara/half-widths.
+        /// </summary>
+        static void BuildUwpLakeFirstDegenerateTributaryPrepass(
+            GridSystem grid,
+            MapGenConfig config,
+            float cellSize,
+            out HashSet<int> degenerateIndices,
+            out Dictionary<int, List<Vector2>> resolvedFinalByRiverIndex)
+        {
+            degenerateIndices = new HashSet<int>();
+            resolvedFinalByRiverIndex = new Dictionary<int, List<Vector2>>();
+            if (grid?.RiverCenterlinesCellSpace == null || config == null || !config.uwpOwnedVisualPolicy)
+                return;
+            if (!config.uwpLakeFirstHydrologyPipeline)
+                return;
+
+            // Main antes que tributarios: Trim/ingress leen FinalCenterline del troncal.
+            if (grid.RiverCenterlinesCellSpace.Count > 0)
+            {
+                var mainRaw = grid.RiverCenterlinesCellSpace[0];
+                if (mainRaw != null && mainRaw.Count >= 2 &&
+                    TryResolveLakeFirstFinalCenterlineCells(
+                        grid, 0, mainRaw, config, out List<Vector2> mainFinal, out _) &&
+                    mainFinal != null && mainFinal.Count >= 2)
+                {
+                    mainFinal = ResampleUniformSpacingCell(mainFinal, 0.28f, 2048);
+                    if (grid.LakeFirstWaterGraph != null &&
+                        grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex.ContainsKey(0))
+                    {
+                        grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex[0] =
+                            new List<Vector2>(mainFinal);
+                    }
+
+                    resolvedFinalByRiverIndex[0] = mainFinal;
+                }
+            }
+
+            for (int riverIndex = 1; riverIndex < grid.RiverCenterlinesCellSpace.Count; riverIndex++)
+            {
+                var rawPath = grid.RiverCenterlinesCellSpace[riverIndex];
+                if (rawPath == null || rawPath.Count < 2)
+                    continue;
+
+                if (!TryResolveLakeFirstFinalCenterlineCells(
+                        grid,
+                        riverIndex,
+                        rawPath,
+                        config,
+                        out List<Vector2> finalCenterline,
+                        out _))
+                    continue;
+
+                if (finalCenterline != null && finalCenterline.Count >= 2)
+                {
+                    float densifyStep = IsLakeFirstHeadwaterFeeder(grid, riverIndex) ? 0.35f : 0.52f;
+                    finalCenterline = DensifyLakeFirstCenterlineForMask(
+                        finalCenterline,
+                        densifyStep,
+                        fineStream: IsLakeFirstHeadwaterFeeder(grid, riverIndex));
+
+                    if (grid.LakeFirstWaterGraph != null &&
+                        finalCenterline != null &&
+                        finalCenterline.Count >= 2)
+                    {
+                        if (grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex.ContainsKey(riverIndex))
+                            grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex[riverIndex] =
+                                new List<Vector2>(finalCenterline);
+                        for (int ti = 0; ti < grid.LakeFirstWaterGraph.Tributaries.Count; ti++)
+                        {
+                            var trib = grid.LakeFirstWaterGraph.Tributaries[ti];
+                            if (trib.RiverIndex != riverIndex || !trib.Accepted)
+                                continue;
+                            trib.DebugCarvePathCells = new List<Vector2>(finalCenterline);
+                            trib.CenterlineCells = new List<Vector2>(finalCenterline);
+                            break;
+                        }
+                    }
+                }
+
+                if (finalCenterline == null || finalCenterline.Count < 2)
+                    continue;
+
+                resolvedFinalByRiverIndex[riverIndex] = finalCenterline;
+                if (!IsUwpDegenerateTributary(finalCenterline, cellSize, grid, riverIndex))
+                    continue;
+
+                degenerateIndices.Add(riverIndex);
+                float lengthWorld = ComputePolylineLengthCells(finalCenterline) * Mathf.Max(0.01f, cellSize);
+                Debug.Log(
+                    $"[UWP_DEGENERATE_TRIBUTARY_PREPASS] riverIndex={riverIndex} " +
+                    $"predictedFinalPts={finalCenterline.Count} predictedLength={lengthWorld:F2} " +
+                    $"reason=degenerate_tributary lakeFirst=1");
+            }
+        }
+
         static bool TryResolveLakeFirstFinalCenterlineCells(
             GridSystem grid,
             int riverIndex,
@@ -15154,11 +16010,15 @@ namespace Project.Gameplay.Map.Generator
                 return false;
             }
 
-            // Anclar confluencia: lake-spill (grafo) o inland-feeder (RiverConfluences).
-            // Headwater: no anclar aquí — el join al receptor se resuelve en Snap/Tuck/Append.
+            // Anclar confluencia: lake-spill e inland NO (el cell suele estar dentro del main
+            // y recrea gancho U / blob en la junta). Headwater: no anclar aquí.
             Vector2? tribConfluence = null;
             bool headwaterSkipConfPin = riverIndex > 0 && IsLakeFirstHeadwaterFeeder(grid, riverIndex);
-            if (!headwaterSkipConfPin && riverIndex > 0 && grid?.LakeFirstWaterGraph != null)
+            bool lakeSpillSkipConfPin = riverIndex > 0 &&
+                UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+            bool inlandSkipConfPin = riverIndex > 0 && UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
+            if (!headwaterSkipConfPin && !lakeSpillSkipConfPin && !inlandSkipConfPin &&
+                riverIndex > 0 && grid?.LakeFirstWaterGraph != null)
             {
                 for (int i = 0; i < grid.LakeFirstWaterGraph.Tributaries.Count; i++)
                 {
@@ -15172,7 +16032,8 @@ namespace Project.Gameplay.Map.Generator
                 }
             }
 
-            if (!headwaterSkipConfPin && !tribConfluence.HasValue && riverIndex > 0 &&
+            if (!headwaterSkipConfPin && !lakeSpillSkipConfPin && !inlandSkipConfPin &&
+                !tribConfluence.HasValue && riverIndex > 0 &&
                 TryGetTributaryConfluenceCell(grid, riverIndex, out Vector2 registeredConf, out _))
             {
                 tribConfluence = registeredConf;
@@ -15192,22 +16053,74 @@ namespace Project.Gameplay.Map.Generator
             int gh = grid != null ? grid.Height : 0;
             bool inlandFeeder = riverIndex > 0 && UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
             bool headwaterFeeder = riverIndex > 0 && IsLakeFirstHeadwaterFeeder(grid, riverIndex);
-            bool protectJoinTail = inlandFeeder || headwaterFeeder;
+            bool lakeSpillFeeder = riverIndex > 0 &&
+                UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+
+            // Spill: recortar a orilla ANTES del meandro. Si el extremo ya está clavado dentro
+            // del main (PinLakeFirstTributaryEndpointConfluence), el meandro con protectJoinTail
+            // reconstruye el gancho U entre lago y ese extremo — el trim post-meandro casi no cambia nada.
+            if (lakeSpillFeeder && finalCenterline != null && finalCenterline.Count >= 4)
+            {
+                int beforePre = finalCenterline.Count;
+                TrimEmissaryHookTailIfRegressesFromMain(grid, config, finalCenterline, riverIndex);
+                TrimRiverAtFirstMainCorridorContact(grid, config, finalCenterline, riverIndex, forceSpillJoin: true);
+                SnapLakeSpillMouthToMainBank(grid, config, finalCenterline, riverIndex);
+                if (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork)
+                {
+                    Debug.Log(
+                        $"[LakeSpillJoinTrim] phase=preMeander riverIndex={riverIndex} " +
+                        $"before={beforePre} after={finalCenterline.Count} seed={config.seed}");
+                }
+            }
+
+            // Lake-spill también congela cola: el meandro libre recreaba el V en la junta.
+            // InlandFeeder: ya meandró en TryPrepareLakeFirstInlandFeederVisualCenterline — no apilar.
+            bool protectJoinTail = inlandFeeder || headwaterFeeder || lakeSpillFeeder;
             if (gw >= 2 && gh >= 2)
             {
-                ApplyLakeFirstOrganicMeanderToCellSpace(
-                    grid, finalCenterline, gw, gh, config, riverIndex, out _, protectJoinTail);
-                if (riverIndex > 0)
+                float meanderMax = 0f;
+                bool meanderOk = true;
+                // Inland: ya meandró (o se omitió si corto) en prepare. Headwater: meandro libre
+                // recreaba overshoot hacia la boca; first-entry al receptor basta.
+                if (!inlandFeeder && !headwaterFeeder)
                 {
-                    var backup = new List<Vector2>(finalCenterline);
-                    if (!ApplyLakeFirstOrganicMeanderToCellSpace(
-                            grid, finalCenterline, gw, gh, config, riverIndex + 17, out _, protectJoinTail))
-                        finalCenterline = backup;
+                    meanderOk = ApplyLakeFirstOrganicMeanderToCellSpace(
+                        grid, finalCenterline, gw, gh, config, riverIndex, out meanderMax, protectJoinTail);
                 }
 
-                finalCenterline = NormalizeCenterlineSpacingForMesh(finalCenterline, config);
+                // Main Lake-first: si organic falla (self-intersect), fallback visual (antes quedaba RECTO).
+                if (riverIndex == 0 && !meanderOk)
+                {
+                    meanderOk = ApplyVisualMeanderToCellSpace(
+                        finalCenterline, gw, gh, config, 0, out meanderMax);
+                }
 
-                if (!headwaterFeeder && tribConfluence.HasValue && finalCenterline != null && finalCenterline.Count >= 2)
+                if (riverIndex == 0)
+                {
+                    float minDim = Mathf.Max(1f, Mathf.Min(gw, gh));
+                    Debug.LogWarning(
+                        $"[RiverVisualMeander] lakeFirst main accepted={(meanderOk ? 1 : 0)} mode=splineChatGpt " +
+                        $"maxOffsetCells={meanderMax:F3} ampRatio={(meanderMax / minDim):F4} " +
+                        $"pts={finalCenterline.Count} minDim={minDim:F0} " +
+                        $"meshMul={config.riverSurfaceMainMeshOnlyWidthMul:F2} " +
+                        $"flatRatio={config.uwpCarveTransverseFlatRatio:F2}");
+                }
+
+                if (riverIndex == 0 && meanderOk)
+                {
+                    // Conservar densidad del spline (~0.28). Normalize(≥0.48) re-esparsaba → orilla en escalera.
+                    finalCenterline = ResampleUniformSpacingCell(finalCenterline, 0.28f, 2048);
+                }
+                else
+                {
+                    finalCenterline = NormalizeCenterlineSpacingForMesh(finalCenterline, config);
+                }
+
+                // Lake-spill: NO re-anclar a MainRiverConfluenceCell tras meandro — suele quedar
+                // dentro del canal y, con Append, vuelve a dibujar el “pasa de largo”.
+                // Inland: tampoco re-anclar (mismo gancho U + blob); el trim a orilla cierra la junta.
+                if (!headwaterFeeder && !lakeSpillFeeder && !inlandFeeder && tribConfluence.HasValue &&
+                    finalCenterline != null && finalCenterline.Count >= 2)
                     finalCenterline[finalCenterline.Count - 1] = tribConfluence.Value;
             }
 
@@ -15215,21 +16128,61 @@ namespace Project.Gameplay.Map.Generator
             {
                 if (IsTributaryLakeOwner(grid, riverIndex))
                     AppendLakeFirstTributaryCenterlineTowardCentroid(grid, riverIndex, finalCenterline, config);
+                // Ingress corto; trim FIRST-ENTRY / hook-trim deben ir después (Append no puede reabrir el V).
                 if (!inlandFeeder)
                     AppendLakeFirstTributaryCenterlineTowardMainRiver(grid, riverIndex, finalCenterline, config);
+                int beforePost = finalCenterline != null ? finalCenterline.Count : 0;
+                // Quita cola en gancho U (pase de largo → se aleja del troncal) antes del first-entry.
+                if (!inlandFeeder && finalCenterline != null && finalCenterline.Count >= 6)
+                    TrimEmissaryHookTailIfRegressesFromMain(grid, config, finalCenterline, riverIndex);
+                // Spill: first-entry agresivo + snap orilla. Inland: first-entry suave (sin snap spill).
+                if (lakeSpillFeeder && finalCenterline != null && finalCenterline.Count >= 3)
+                {
+                    TrimRiverAtFirstMainCorridorContact(
+                        grid, config, finalCenterline, riverIndex, forceSpillJoin: true);
+                    SnapLakeSpillMouthToMainBank(grid, config, finalCenterline, riverIndex);
+                }
+                else if (inlandFeeder && finalCenterline != null && finalCenterline.Count >= 3)
+                {
+                    TrimRiverAtFirstMainCorridorContact(
+                        grid, config, finalCenterline, riverIndex, forceSpillJoin: false);
+                    SnapLakeSpillMouthToMainBank(grid, config, finalCenterline, riverIndex);
+                }
+                else if (!inlandFeeder && finalCenterline != null && finalCenterline.Count >= 3)
+                    TrimTributaryAtClosestMainApproach(grid, config, finalCenterline, riverIndex);
+
+                if (lakeSpillFeeder && (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork))
+                {
+                    Debug.Log(
+                        $"[LakeSpillJoinTrim] phase=postMeander riverIndex={riverIndex} " +
+                        $"before={beforePost} after={(finalCenterline != null ? finalCenterline.Count : 0)} seed={config.seed}");
+                }
+                if (inlandFeeder && (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork))
+                {
+                    Debug.Log(
+                        $"[InlandFeederJoinTrim] riverIndex={riverIndex} " +
+                        $"before={beforePost} after={(finalCenterline != null ? finalCenterline.Count : 0)} seed={config.seed}");
+                }
+                // Spill: no tip post-trim — reintroducía penetración al main y el V “pasa de largo”.
             }
 
             if (riverIndex > 0 &&
                 UwpTributaryOriginUtility.GetOrigin(grid, riverIndex) == UwpTributaryOriginKind.HeadwaterFeeder &&
                 TryResolveHeadwaterReceiverRiverIndex(grid, riverIndex, out int recvRi))
             {
+                // NO Tuck ni Append-ingress. First-entry + snap + enderezado de boca
+                // (evita gancho/colita en la T inland↔headwater).
+                TrimTributaryAtFirstParentCorridorContact(
+                    grid, config, finalCenterline, riverIndex, recvRi, forceEntry: true);
                 SnapTributaryCenterlineToParentRiver(
                     grid, finalCenterline, riverIndex, config, recvRi, finalCenterline.Count - 1);
-                TuckTributaryMouthIntoParentRiver(
-                    grid, finalCenterline, riverIndex, config, recvRi, finalCenterline.Count - 1);
-                AppendLakeFirstHeadwaterCenterlineTowardReceiverRiver(
-                    grid, riverIndex, finalCenterline, config, recvRi);
-                // No pisar el último punto con tribConfluence: deshacía el ingress y dejaba hueco visual.
+                StraightenTributaryMouthApproach(finalCenterline, approachPts: 7);
+                if (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork)
+                {
+                    Debug.Log(
+                        $"[HeadwaterFeederJoinTrim] riverIndex={riverIndex} receiver={recvRi} " +
+                        $"pts={finalCenterline.Count} seed={config.seed}");
+                }
             }
 
             if (grid?.LakeFirstWaterGraph != null)
@@ -15245,7 +16198,10 @@ namespace Project.Gameplay.Map.Generator
                     var trib = grid.LakeFirstWaterGraph.Tributaries[i];
                     if (trib.RiverIndex != riverIndex || !trib.Accepted)
                         continue;
+                    // Ambos overlays: el naranja (CenterlineCells) era el path A* original y
+                    // tapaba la evaluación del fix aunque FinalCenterline ya estuviera bien.
                     trib.DebugCarvePathCells = new List<Vector2>(finalCenterline);
+                    trib.CenterlineCells = new List<Vector2>(finalCenterline);
                     break;
                 }
             }
@@ -15517,13 +16473,11 @@ namespace Project.Gameplay.Map.Generator
             if (riverIndex == 0 && config.uwpOwnedVisualPolicy)
             {
                 SnapMainRiverMapBorderEndpoints(cellProcessed, w, h);
-                if (ApplyVisualMeanderToCellSpace(cellProcessed, w, h, config, riverIndex, out float meanderMax) &&
-                    logDetail)
-                {
-                    Debug.Log(
-                        $"[RiverVisualMeander] riverId=0 mode=cellSpace maxOffsetCells={meanderMax:F3} " +
-                        $"accepted=1 rejectReason=none");
-                }
+                bool meanderOk = ApplyVisualMeanderToCellSpace(
+                    cellProcessed, w, h, config, riverIndex, out float meanderMax);
+                Debug.Log(
+                    $"[RiverVisualMeander] riverId=0 mode=cellSpace maxOffsetCells={meanderMax:F3} " +
+                    $"accepted={(meanderOk ? 1 : 0)} ampCfg={config.riverSurfaceVisualMeanderAmplitudeCells:F2}");
             }
 
             finalCenterline = cellProcessed;
@@ -15583,12 +16537,22 @@ namespace Project.Gameplay.Map.Generator
             bool[,] mainOnlyMask = null;
             HashSet<int> uwpDegenerateTributaryPrepass = null;
             Dictionary<int, List<Vector2>> uwpTributaryVisualPrepassFinal = null;
-            if (config.uwpOwnedVisualPolicy && !lakeFirstPipeline && grid.RiverCenterlinesCellSpace.Count > 1)
+            if (config.uwpOwnedVisualPolicy && grid.RiverCenterlinesCellSpace.Count > 1)
             {
-                BuildUwpDegenerateTributaryPrepass(
-                    grid, config, w, h, cellSize, logDetail,
-                    out uwpDegenerateTributaryPrepass,
-                    out uwpTributaryVisualPrepassFinal);
+                if (lakeFirstPipeline)
+                {
+                    BuildUwpLakeFirstDegenerateTributaryPrepass(
+                        grid, config, cellSize,
+                        out uwpDegenerateTributaryPrepass,
+                        out uwpTributaryVisualPrepassFinal);
+                }
+                else
+                {
+                    BuildUwpDegenerateTributaryPrepass(
+                        grid, config, w, h, cellSize, logDetail,
+                        out uwpDegenerateTributaryPrepass,
+                        out uwpTributaryVisualPrepassFinal);
+                }
             }
 
             for (int riverIndex = 0; riverIndex < grid.RiverCenterlinesCellSpace.Count; riverIndex++)
@@ -15619,7 +16583,17 @@ namespace Project.Gameplay.Map.Generator
                 List<Vector2> cellProcessed;
                 if (lakeFirstPipeline)
                 {
-                    if (!TryResolveLakeFirstFinalCenterlineCells(
+                    // Reutilizar finalize+densify del prepass (main y tribs): evita doble meandro.
+                    if (uwpTributaryVisualPrepassFinal != null &&
+                        uwpTributaryVisualPrepassFinal.TryGetValue(riverIndex, out List<Vector2> lfPrepassFinal))
+                    {
+                        cellProcessed = lfPrepassFinal;
+                        surface.PreClipInputPoints = cellProcessed.Count;
+                        surface.PreClipOutputPoints = cellProcessed.Count;
+                        surface.PreClipStart = false;
+                        surface.PreClipEnd = false;
+                    }
+                    else if (!TryResolveLakeFirstFinalCenterlineCells(
                             grid,
                             riverIndex,
                             rawPath,
@@ -15632,19 +16606,50 @@ namespace Project.Gameplay.Map.Generator
                         surfaces.Add(surface);
                         continue;
                     }
-
-                    surface.PreClipInputPoints = cellProcessed.Count;
-                    surface.PreClipOutputPoints = cellProcessed.Count;
-                    surface.PreClipStart = false;
-                    surface.PreClipEnd = false;
-
-                    if (riverIndex > 0 && cellProcessed != null && cellProcessed.Count >= 2)
+                    else
                     {
-                        float densifyStep = IsLakeFirstHeadwaterFeeder(grid, riverIndex) ? 0.35f : 0.52f;
-                        cellProcessed = DensifyLakeFirstCenterlineForMask(
-                            cellProcessed,
-                            densifyStep,
-                            fineStream: IsLakeFirstHeadwaterFeeder(grid, riverIndex));
+                        surface.PreClipInputPoints = cellProcessed.Count;
+                        surface.PreClipOutputPoints = cellProcessed.Count;
+                        surface.PreClipStart = false;
+                        surface.PreClipEnd = false;
+
+                        // Main también densifica (como trib): sin esto la máscara/carve del troncal queda cuadriculada.
+                        if (cellProcessed != null && cellProcessed.Count >= 2)
+                        {
+                            if (riverIndex == 0)
+                            {
+                                // Cap 320 de DensifyLakeFirst… es insuficiente en main largo → usar remuestreo denso.
+                                cellProcessed = ResampleUniformSpacingCell(cellProcessed, 0.28f, 2048);
+                            }
+                            else
+                            {
+                                float densifyStep = IsLakeFirstHeadwaterFeeder(grid, riverIndex) ? 0.35f : 0.52f;
+                                cellProcessed = DensifyLakeFirstCenterlineForMask(
+                                    cellProcessed,
+                                    densifyStep,
+                                    fineStream: IsLakeFirstHeadwaterFeeder(grid, riverIndex));
+                            }
+
+                            // Densify no debe dejar el grafo/debug con el path pre-trim o pre-densify.
+                            if (riverIndex > 0 &&
+                                grid.LakeFirstWaterGraph != null &&
+                                cellProcessed != null &&
+                                cellProcessed.Count >= 2)
+                            {
+                                if (grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex.ContainsKey(riverIndex))
+                                    grid.LakeFirstWaterGraph.FinalCenterlineByRiverIndex[riverIndex] =
+                                        new List<Vector2>(cellProcessed);
+                                for (int ti = 0; ti < grid.LakeFirstWaterGraph.Tributaries.Count; ti++)
+                                {
+                                    var trib = grid.LakeFirstWaterGraph.Tributaries[ti];
+                                    if (trib.RiverIndex != riverIndex || !trib.Accepted)
+                                        continue;
+                                    trib.DebugCarvePathCells = new List<Vector2>(cellProcessed);
+                                    trib.CenterlineCells = new List<Vector2>(cellProcessed);
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
                 else if (config.uwpOwnedVisualPolicy &&
@@ -15679,10 +16684,9 @@ namespace Project.Gameplay.Map.Generator
 
                 surface.FinalCenterlineCells = cellProcessed;
 
-                if (!lakeFirstPipeline &&
-                    config.uwpOwnedVisualPolicy && riverIndex > 0 &&
+                if (config.uwpOwnedVisualPolicy && riverIndex > 0 &&
                     ((uwpDegenerateTributaryPrepass != null && uwpDegenerateTributaryPrepass.Contains(riverIndex)) ||
-                     IsUwpDegenerateTributary(cellProcessed, cellSize)))
+                     IsUwpDegenerateTributary(cellProcessed, cellSize, grid, riverIndex)))
                 {
                     ApplyUwpDegenerateTributarySkip(surface, riverIndex, cellProcessed, cellSize);
                     surfaces.Add(surface);
@@ -15777,6 +16781,18 @@ namespace Project.Gameplay.Map.Generator
                 var maskHalfWidths = CloneHalfWidths(halfWidths);
                 var meshHalfWidths = CloneHalfWidths(halfWidths);
                 ApplyMainMeshOnlyWidthScale(meshHalfWidths, config, riverIndex, grid);
+                // Main Lake First: mismo contrato Headwater (carve = mesh × foamRatio).
+                if (lakeFirstPipeline && riverIndex == 0)
+                {
+                    ApplyLakeFirstChannelCarveToMeshGrowthProfile(
+                        meshHalfWidths, maskHalfWidths, cellProcessed, cellSize);
+                    if (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork)
+                    {
+                        Debug.Log(
+                            $"[LakeFirstChannelContract] kind=Main riverIndex=0 " +
+                            $"meshOverCarve={LakeFirstChannelMeshOverCarveMul:F2} flatFloor=1 seed={config.seed}");
+                    }
+                }
                 if (!lakeFirstPipeline && riverIndex == 0 && config.uwpOwnedVisualPolicy)
                     SyncMainRiverMaskWidthsToMesh(maskHalfWidths, meshHalfWidths);
                 if (riverIndex > 0 && config.uwpOwnedVisualPolicy && !lakeFirstPipeline)
@@ -15859,8 +16875,47 @@ namespace Project.Gameplay.Map.Generator
                         maskAvgBefore += maskHalfWidths[wi];
                     if (maskHalfWidths.Count > 0)
                         maskAvgBefore /= maskHalfWidths.Count;
+                    // Inland / lake-spill: contrato canal (reemplaza scale 0.9 suelto).
+                    // Headwater ya aplicó growth profile arriba.
                     if (!headwater)
-                        ScaleLakeFirstTributaryCarveMaskHalfWidths(maskHalfWidths);
+                    {
+                        bool joinAtStart = false;
+                        if (TryResolveTributaryMainJoinEndpointIndex(
+                                grid, config, cellProcessed, riverIndex, out int joinEp))
+                            joinAtStart = joinEp == 0;
+                        else if (cellProcessed != null && cellProcessed.Count >= 2)
+                        {
+                            bool startMain = IsTributaryEndpointNearMain(
+                                grid, config, cellSize, cellProcessed, 0);
+                            bool endMain = IsTributaryEndpointNearMain(
+                                grid, config, cellSize, cellProcessed, cellProcessed.Count - 1);
+                            joinAtStart = startMain && !endMain;
+                        }
+
+                        ApplyLakeFirstChannelCarveToMeshGrowthProfile(
+                            meshHalfWidths, maskHalfWidths, cellProcessed, cellSize, joinAtStart);
+                        // Spill→main: growth deja margen foam; en la cuña Y el carve debe
+                        // acercarse al mesh (orilla blanca fina, sin isla entre trib y troncal).
+                        if (lakeSpill)
+                            BoostLakeSpillMainJoinCarveMaskToMesh(
+                                meshHalfWidths, maskHalfWidths, cellProcessed, grid, config, riverIndex);
+                        // Inland: cap FINAL tras Align/Growth (si no, vuelven a ~spill width).
+                        // Luego boost carve en junta con main + re-sync mesh>Ceil(mask)
+                        // (sin eso Cap deja mesh más estrecho que el stamp → sin foam / fake Y).
+                        // Ensanche local en T headwater (mid-body).
+                        if (UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex))
+                        {
+                            CapLakeFirstInlandFeederHalfWidths(meshHalfWidths, maskHalfWidths, cellSize);
+                            BoostLakeSpillMainJoinCarveMaskToMesh(
+                                meshHalfWidths, maskHalfWidths, cellProcessed, grid, config, riverIndex);
+                            SyncLakeFirstInlandMeshOverCarveAfterCap(
+                                meshHalfWidths, maskHalfWidths, cellSize);
+                            ApplyLakeFirstInlandHeadwaterJoinMeshWiden(
+                                grid, meshHalfWidths, cellProcessed, config, riverIndex, cellSize);
+                            SyncLakeFirstInlandMeshOverCarveAfterCap(
+                                meshHalfWidths, maskHalfWidths, cellSize);
+                        }
+                    }
                     if (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork)
                     {
                         float maskAvgAfter = 0f;
@@ -15870,8 +16925,8 @@ namespace Project.Gameplay.Map.Generator
                             maskAvgAfter /= maskHalfWidths.Count;
                         string kind = lakeSpill ? "LakeSpill" : headwater ? "HeadwaterFeeder" : "InlandFeeder";
                         Debug.Log(
-                            $"[LakeFirstTributaryCarveWidth] kind={kind} riverIndex={riverIndex} " +
-                            $"carveMul={LakeFirstTributaryCarveWidthMul:F2} continuousCarve={(headwater ? 1 : 0)} " +
+                            $"[LakeFirstChannelContract] kind={kind} riverIndex={riverIndex} " +
+                            $"meshOverCarve={LakeFirstChannelMeshOverCarveMul:F2} continuousCarve={(headwater ? 1 : 0)} " +
                             $"maskHalfAvgBefore={maskAvgBefore:F3} maskHalfAvgAfter={maskAvgAfter:F3} seed={config.seed}");
                     }
                 }
@@ -16241,6 +17296,83 @@ namespace Project.Gameplay.Map.Generator
             surface.LengthCarve = ComputePolylineLengthCells(carveLine);
         }
 
+        /// <summary>
+        /// Tras TerrainExporter carve: si el ribbon flota sobre la ORILLA (no el lecho),
+        /// baja esos vértices para recuperar foam blanca. No pega el agua al floor del canal.
+        /// </summary>
+        public static void SnapBuiltRiverMeshesToTerrainContact(
+            GameObject waterRoot,
+            Terrain terrain,
+            GridSystem grid,
+            MapGenConfig config)
+        {
+            if (waterRoot == null || terrain == null || terrain.terrainData == null || config == null)
+                return;
+
+            float terrainY = config.terrainHeightWorld > 0f ? config.terrainHeightWorld : 50f;
+            float waterY = grid != null
+                ? ResolveUwpLakeMouthDisplayLevelY(grid, config)
+                : (terrain.transform.position.y + config.waterHeight01 * terrainY +
+                   Mathf.Max(config.waterSurfaceOffset, 0.02f));
+
+            // Solo tocar vértices cuya muestra de terreno está cerca del nivel de agua (banco/orilla).
+            float bankBand = 0.22f;
+            float maxFloat = 0.08f;
+            float contactEps = 0.01f;
+            int adjusted = 0;
+            var filters = waterRoot.GetComponentsInChildren<MeshFilter>(true);
+            for (int fi = 0; fi < filters.Length; fi++)
+            {
+                var mf = filters[fi];
+                if (mf == null || mf.sharedMesh == null)
+                    continue;
+                string n = mf.gameObject.name;
+                if (n == null ||
+                    (!n.StartsWith("Water_RiverSurface") && !n.StartsWith("RiverSurface_")))
+                    continue;
+
+                Mesh src = mf.sharedMesh;
+                Vector3[] verts = src.vertices;
+                if (verts == null || verts.Length < 3)
+                    continue;
+
+                Transform tf = mf.transform;
+                bool changed = false;
+                for (int i = 0; i < verts.Length; i++)
+                {
+                    Vector3 world = tf.TransformPoint(verts[i]);
+                    float groundY = terrain.SampleHeight(world) + terrain.transform.position.y;
+                    // Lecho profundo: no snap (evitar ribbon en el floor).
+                    if (groundY < waterY - bankBand)
+                        continue;
+                    if (world.y <= groundY + maxFloat)
+                        continue;
+
+                    world.y = Mathf.Min(world.y, Mathf.Max(groundY + contactEps, waterY - 0.02f));
+                    verts[i] = tf.InverseTransformPoint(world);
+                    changed = true;
+                }
+
+                if (!changed)
+                    continue;
+
+                Mesh copy = Object.Instantiate(src);
+                copy.name = src.name + "_ShoreSnap";
+                copy.vertices = verts;
+                copy.RecalculateBounds();
+                mf.sharedMesh = copy;
+                var mc = mf.GetComponent<MeshCollider>();
+                if (mc != null)
+                    mc.sharedMesh = copy;
+                adjusted++;
+            }
+
+            if (adjusted > 0 && (config.debugLogs || config.debugHydrologyNetwork || config.uwpOwnedVisualPolicy))
+            {
+                Debug.Log($"[RiverShoreContactSnap] meshesAdjusted={adjusted} seed={config.seed}");
+            }
+        }
+
         public static void ValidateAndLogUwpWaterSurfaceFinal(GridSystem grid, MapGenConfig config, GameObject waterRoot)
         {
             if (grid?.RiverVisualSurfaces == null || config == null || !config.uwpOwnedVisualPolicy)
@@ -16254,10 +17386,13 @@ namespace Project.Gameplay.Map.Generator
                 if (surface == null)
                     continue;
 
-                string goName = i == 0 ? "Water_RiverSurface_Main" : $"Water_RiverSurface_Tributary_{i}";
-                bool meshGoExists = waterRoot != null && waterRoot.transform.Find(goName) != null;
+                string goName = ResolveRiverSurfaceGameObjectName(grid, i);
+                bool meshGoExists = RiverSurfaceGameObjectExists(
+                    waterRoot != null ? waterRoot.transform : null, grid, i);
                 bool meshBuilt = surface.MeshBuilt || meshGoExists;
-                string type = i == 0 ? "main" : "tributary";
+                string type = i == 0
+                    ? "main"
+                    : UwpTributaryOriginUtility.GetOrigin(grid, i).ToString();
                 float refLen = Mathf.Max(surface.LengthCarve, surface.LengthMesh, 1e-4f);
                 float lenDelta = Mathf.Abs(surface.LengthMesh - surface.LengthCarve) / refLen;
 

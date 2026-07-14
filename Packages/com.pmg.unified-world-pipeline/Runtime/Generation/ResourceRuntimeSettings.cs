@@ -35,9 +35,9 @@ namespace Project.Gameplay.Map.Generation
         public int minFoodValue = 8;
         public int maxResourceRetries = 5;
 
-        public float globalTreesClusterFraction = -1f;
+        public float globalTreesClusterFraction = 0.9f;
         public bool preferGlobalTreesOnGrassAlphamap;
-        public float globalStoneGoldClusterFraction = 0.82f;
+        public float globalStoneGoldClusterFraction = 0.92f;
         public Vector2Int globalMineralClusterSize = new(2, 6);
         public float globalMineralClusterRadiusCells = 3.2f;
 

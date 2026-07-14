@@ -195,13 +195,13 @@ namespace Project.Gameplay.Map.Generator
 
         [Header("Agua — lago forma orgánica (grid + marching squares)")]
         [Tooltip("Más alto = bordes del flood fill más irregulares (menos manchas rectangulares).")]
-        [Range(0f, 1f)] public float lakeOrganicIrregularity = 0.12f;
+        [Range(0f, 1f)] public float lakeOrganicIrregularity = 0.28f;
         [Tooltip("Escala orgánica del tamaño de lagos. 1 = tamaño base; >1 lagos más presentes.")]
         [Range(0.75f, 1.8f)] public float lakeSizeScale = 1f;
         [Tooltip("Semillas iniciales extra en radio Chebyshev alrededor del centro (lagos con muescas y bultos).")]
         [Range(0, 10)] public int lakeExtraSeedSpreadCells = 0;
         [Tooltip("Ruido Perlin en el campo MS antes del blur; orillas menos rectas. 0 = desactivar.")]
-        [Range(0f, 0.28f)] public float lakeShoreMsNoiseAmplitude = 0.008f;
+        [Range(0f, 0.28f)] public float lakeShoreMsNoiseAmplitude = 0.045f;
         [Tooltip("Escala del ruido en espacio mundo (más bajo = ondulación más amplia en la orilla).")]
         [Range(0.015f, 0.45f)] public float lakeShoreMsNoiseScale = 0.06f;
 
@@ -470,7 +470,7 @@ namespace Project.Gameplay.Map.Generator
         [Tooltip("Perfil euclídeo tipo campana/U en StampUniformUwpFloorDisk (sustituye disco cuadrado Chebyshev).")]
         public bool uwpCarveEuclideanBellProfileEnabled = true;
         [Tooltip("Fracción del radio con fondo plano del cauce (ancho inferior).")]
-        [Range(0.22f, 0.55f)] public float uwpCarveTransverseFlatRatio = 0.38f;
+        [Range(0.12f, 0.55f)] public float uwpCarveTransverseFlatRatio = 0.38f;
         [Tooltip("Potencia del talud: mayor = orillas más empinadas.")]
         [Range(1.2f, 2.8f)] public float uwpCarveTransverseBankPower = 1.8f;
         [Tooltip("Escala radio carve vs halfWidth mesh — main.")]
@@ -572,9 +572,9 @@ namespace Project.Gameplay.Map.Generator
 
         [Header("Arena / orilla (splat)")]
         [Tooltip("Transición arena: potencia >1 acerca arena al agua (menos blur visual en la franja).")]
-        [Range(1f, 4f)] public float sandShoreFalloffPower = 2.15f;
+        [Range(1f, 4f)] public float sandShoreFalloffPower = 1.85f;
         [Tooltip("Ruido extra sobre distF de orilla (máscara arena).")]
-        [Range(0f, 2.2f)] public float sandShoreExtraDistanceNoise = 0.6f;
+        [Range(0f, 2.2f)] public float sandShoreExtraDistanceNoise = 1.05f;
         [Tooltip("Contraste hierba/tierra en la franja donde arena mezcla (1 = sin cambio).")]
         [Range(1f, 2.6f)] public float sandSoilContrastNearShore = 1.38f;
         [Tooltip("-1 = usar terrainAlphamapSmoothPasses; ≥0 = máximo de pasadas de suavizado alphamap tras pintar orillas.")]
@@ -705,7 +705,7 @@ namespace Project.Gameplay.Map.Generator
         [Tooltip("Fuerza de cada pase (mezcla hacia el promedio de vecinos 4-conectados).")]
         [Range(0f, 1f)] public float terrainNormalSmoothingStrength = 0.32f;
         [Tooltip("Pases de blur suave sobre alphamaps tras pintar (transiciones grass/dirt/rock menos duras).")]
-        [Range(0, 6)] public int terrainAlphamapSmoothPasses = 1;
+        [Range(0, 6)] public int terrainAlphamapSmoothPasses = 0;
         [Tooltip("Tinte base multiplicativo sobre pesos de altura antes del splat (1,1,1 = neutro). Ayuda a unificar tono.")]
         public Color terrainBaseColor = Color.white;
         [Tooltip("Empuja zonas altas hacia roca / bajas hacia hierba (0 = desactivar).")]
@@ -732,9 +732,9 @@ namespace Project.Gameplay.Map.Generator
         [Tooltip("Umbrales derivados o legacy: grass hasta este valor, dirt hasta dirtMaxHeight01.")]
         public float grassMaxHeight01 = 0.6f;
         public float dirtMaxHeight01 = 0.8f;
-        [Range(0f, 0.25f)] public float textureBlendWidth = 0.08f;
+        [Range(0f, 0.25f)] public float textureBlendWidth = 0.045f;
         [Tooltip("0 = transiciones como hasta ahora; 1 = bordes más duros (menos ancho de mezcla + poco contraste en pesos).")]
-        [Range(0f, 1f)] public float terrainBlendSharpness = 0.2f;
+        [Range(0f, 1f)] public float terrainBlendSharpness = 0.55f;
 
         [Header("Terreno — ruido macro (zonas secas / verdes a gran escala)")]
         [Tooltip("Escala del ruido macro en espacio alphamap (más bajo = parches más grandes). 0 = desactivar fuerza.")]
@@ -746,7 +746,7 @@ namespace Project.Gameplay.Map.Generator
         [Tooltip("Capa opcional de hierba más seca; si es null o fuerza 0, no se añade capa.")]
         public TerrainLayer grassDryLayer;
         [Tooltip("Intensidad de la mezcla hacia grassDry (0–1). El patrón es ruido de baja frecuencia, no altura.")]
-        [Range(0f, 1f)] public float grassDryBlendStrength = 0.55f;
+        [Range(0f, 1f)] public float grassDryBlendStrength = 0.38f;
         [Tooltip("Escala del ruido para manchas de pasto seco (más bajo = manchas más grandes).")]
         [Range(0.002f, 0.08f)] public float grassDryNoiseScale = 0.009f;
 
@@ -764,11 +764,11 @@ namespace Project.Gameplay.Map.Generator
 
         [Header("Arena en orillas")]
         public TerrainLayer sandLayer;
-        [Range(1, 6)] public int sandShoreCells = 3;
+        [Range(1, 8)] public int sandShoreCells = 5;
         [Tooltip("Escala del ruido que deforma la distancia a orilla (arena invade/pierde terreno de forma irregular).")]
         [Range(0.02f, 0.8f)] public float sandEdgeNoiseScale = 0.22f;
         [Tooltip("Amplitud del ruido en unidades de celda aproximadamente (0 = borde limpio como antes).")]
-        [Range(0f, 2.5f)] public float sandEdgeNoiseStrength = 0.85f;
+        [Range(0f, 2.5f)] public float sandEdgeNoiseStrength = 1.35f;
 
         [Header("Shoreline smoothing (visual)")]
         [Tooltip("Radio en celdas para suavizar el terreno cerca del agua (solo visual al exportar a Terrain).")]
@@ -1054,6 +1054,16 @@ namespace Project.Gameplay.Map.Generator
         [Tooltip("Evita picos en el margen interior (spawns suelen ir hacia bordes).")]
         [Range(4, 96)] public int macroMountainSpawnAvoidanceMarginCells = 24;
         public bool macroAvoidCitiesForMountains = true;
+
+        [Header("Alpha — mesetas RTS (techo plano + talud suave)")]
+        [Tooltip("Mesetas jugables (high-ground). 0 = ninguna. Se rellena desde lobby si macro montañas > 0.")]
+        [Range(0, 4)] public int macroPlateauCount;
+        [Range(0.04f, 0.45f)] public float macroPlateauHeight01Min = 0.18f;
+        [Range(0.05f, 0.50f)] public float macroPlateauHeight01Max = 0.34f;
+        [Range(8, 64)] public int macroPlateauRadiusCellsMin = 14;
+        [Range(10, 80)] public int macroPlateauRadiusCellsMax = 28;
+        [Tooltip("Anillo de talud alrededor del techo plano (celdas). Más ancho = pendiente más suave.")]
+        [Range(3, 16)] public int macroPlateauRimCells = 7;
 
         [Header("Alpha — sesgo de recursos por terreno")]
         public bool alphaUseTerrainResourceBias;

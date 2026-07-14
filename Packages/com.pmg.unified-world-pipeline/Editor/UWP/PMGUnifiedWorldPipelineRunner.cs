@@ -1121,7 +1121,9 @@ namespace PMG.UnifiedWorldPipeline.Editor
             if (waterRoot == null || pipeline == null)
                 return;
 
-            Transform main = waterRoot.transform.Find("Water_RiverSurface_Main");
+            Transform main = waterRoot.transform.Find("Water_RiverSurface_MainRiver");
+            if (main == null)
+                main = waterRoot.transform.Find("Water_RiverSurface_Main");
             if (main == null)
                 return;
 

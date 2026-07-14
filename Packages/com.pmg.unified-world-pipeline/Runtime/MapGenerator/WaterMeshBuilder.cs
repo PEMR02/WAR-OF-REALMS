@@ -4065,6 +4065,14 @@ namespace Project.Gameplay.Map.Generator
                     continue;
                 }
 
+                // Inland/Headwater: arroyos suplementales — no forzar vados bank-to-bank.
+                if (UwpTributaryOriginUtility.IsSupplemental(grid, riverId))
+                {
+                    if (dbgFord)
+                        Debug.Log($"[RiverCoverageSkip] riverId={riverId} reason=supplemental_no_mandatory_ford");
+                    continue;
+                }
+
                 var line = lines[riverId];
                 int rawPoints = line != null ? line.Count : 0;
                 if (line == null || line.Count < 2)
@@ -6303,7 +6311,7 @@ namespace Project.Gameplay.Map.Generator
                     coarseMask, rectW, rectH, rectMinX, rectMinZ, grid, config);
                 expandedCells += ingressAdded;
             }
-            SmoothLakeCoarseMaskMajority(coarseMask, rectW, rectH, 3, 5);
+            SmoothLakeCoarseMaskMajority(coarseMask, rectW, rectH, 5, 5);
             finalCells = CountTrueInCoarseMask(coarseMask, rectW, rectH);
             s_lakeMSFinalCells = finalCells;
 
@@ -7296,9 +7304,11 @@ namespace Project.Gameplay.Map.Generator
                         chunks++;
                     if (n == "Water_MarchingSquares")
                         ms = 1;
-                    if (n == "Water_RiverSurface_Main")
+                    if (n == "Water_RiverSurface_Main" || n == "Water_RiverSurface_MainRiver")
                         main = 1;
-                    if (n.StartsWith("Water_RiverSurface_Tributary"))
+                    if (n.StartsWith("Water_RiverSurface_") &&
+                        n != "Water_RiverSurface_Main" &&
+                        n != "Water_RiverSurface_MainRiver")
                         trib++;
                 }
             }

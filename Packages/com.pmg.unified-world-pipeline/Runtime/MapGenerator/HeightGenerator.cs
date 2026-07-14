@@ -211,9 +211,76 @@ namespace Project.Gameplay.Map.Generator
         {
             if (grid == null || config == null) return;
             ApplySpawnFriendlyPeakSuppression(grid, config);
+            ApplyRiverCorridorBankSoftening(grid, config);
             RecalculateLandSlopes(grid, config);
             if (config.debugLogs)
-                Debug.Log("Final terrain pass (post-hidrología): supresión de picos + slopes Land.");
+                Debug.Log("Final terrain pass (post-hidrología): picos + corredor fluvial + slopes Land.");
+        }
+
+        /// <summary>
+        /// Baja Land/Mountain junto a River/Water para que el macro no deje crestas en la orilla
+        /// (protege arroyos/tributarios sin tocar el floor del carve frozen).
+        /// </summary>
+        public static void ApplyRiverCorridorBankSoftening(GridSystem grid, MapGenConfig config)
+        {
+            if (grid == null || config == null)
+                return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            const int reach = 5;
+            float waterH = config.waterHeight01;
+            int softened = 0;
+
+            for (int x = 0; x < w; x++)
+            {
+                for (int z = 0; z < h; z++)
+                {
+                    ref var cell = ref grid.GetCell(x, z);
+                    if (cell.type != CellType.Land && cell.type != CellType.Mountain)
+                        continue;
+
+                    int d = MinChebyshevToRiverOrWater(grid, x, z, reach);
+                    if (d > reach)
+                        continue;
+
+                    float t = 1f - d / (float)reach;
+                    // Talud más largo hacia la orilla (menos “cajón”).
+                    float cap = waterH + Mathf.Lerp(0.14f, 0.055f, t);
+                    if (cell.height01 <= cap)
+                        continue;
+
+                    float pull = 0.5f + 0.4f * t;
+                    cell.height01 = Mathf.Lerp(cell.height01, cap, pull);
+                    softened++;
+                }
+            }
+
+            if (config.debugLogs)
+                Debug.Log($"[TerrainRelief] riverCorridorSoftened={softened} reach={reach}");
+        }
+
+        static int MinChebyshevToRiverOrWater(GridSystem grid, int x, int z, int maxReach)
+        {
+            int best = maxReach + 1;
+            for (int dz = -maxReach; dz <= maxReach; dz++)
+            {
+                for (int dx = -maxReach; dx <= maxReach; dx++)
+                {
+                    int cheb = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz));
+                    if (cheb >= best)
+                        continue;
+                    int nx = x + dx;
+                    int nz = z + dz;
+                    if ((uint)nx >= (uint)grid.Width || (uint)nz >= (uint)grid.Height)
+                        continue;
+                    var t = grid.GetCell(nx, nz).type;
+                    if (t == CellType.River || t == CellType.Water)
+                        best = cheb;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>Recalcula pendiente en tierra (no agua/río). Tras cambios de height01 (macro, refine, carve).</summary>
@@ -242,7 +309,8 @@ namespace Project.Gameplay.Map.Generator
 
         /// <summary>
         /// Tras el macro relief, recorta picos cerca de márgenes jugables y agua para proteger
-        /// zonas candidatas de spawn/ciudad sin eliminar el relieve central del mapa.
+        /// zonas candidatas de spawn/ciudad. Orillas de agua vuelven a tope bajo (evita crestas
+        /// que rompen HeadwaterFeeder); el centro del mapa conserva más relieve si macro está ON.
         /// </summary>
         public static void ApplySpawnFriendlyPeakSuppression(GridSystem grid, MapGenConfig config)
         {
@@ -254,6 +322,9 @@ namespace Project.Gameplay.Map.Generator
             int margin = Mathf.Clamp(config.macroMountainSpawnAvoidanceMarginCells, 4, Mathf.Max(4, Mathf.Min(w, h) / 2));
             int floodplainCells = Mathf.Max(config.cityWaterBufferCells + 2, 5);
             float waterH = config.waterHeight01;
+            bool macroOn = config.macroTerrainEnabled &&
+                (config.macroMountainMassCount > 0 || config.macroPlateauCount > 0);
+            float centerCap = macroOn ? 0.92f : 0.84f;
 
             for (int x = 0; x < w; x++)
             {
@@ -266,7 +337,8 @@ namespace Project.Gameplay.Map.Generator
                     float edge01 = EvaluateEdgeFactor(x, z, w, h, margin);
                     float water01 = EvaluateWaterDistanceFactor(grid, x, z, floodplainCells);
                     float allow01 = edge01 * water01;
-                    float localCap = Mathf.Lerp(waterH + 0.09f, 0.84f, allow01);
+                    // Orilla: tope bajo (como pre-macro) para no dejar islas en arroyos.
+                    float localCap = Mathf.Lerp(waterH + 0.09f, centerCap, allow01);
                     if (cell.height01 <= localCap)
                         continue;
 

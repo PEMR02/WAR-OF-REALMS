@@ -1001,6 +1001,8 @@ namespace Project.Gameplay.Map.Generator
             var swThin = WaterGenPerfDiag.Active ? System.Diagnostics.Stopwatch.StartNew() : null;
             if (!config.useCrossingAssetFords)
                 ApplyFunctionalRiverFordsFromThinZones(grid, config);
+            if (config != null && config.uwpLakeFirstHydrologyPipeline && config.uwpLakeFirstSupplementalEnabled)
+                UwpLakeFirstSupplementalHydrologyBuilder.ClearFordsAlongSupplementalRivers(grid);
             if (swThin != null)
                 WaterGenPerfDiag.MsThinZoneFords = swThin.Elapsed.TotalMilliseconds;
 

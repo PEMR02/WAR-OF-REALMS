@@ -1,0 +1,81 @@
+HeadwaterFeeder — notas de estabilización (carve vs mesh)
+
+Guía operativa completa: LAKE_FIRST_WATER_SYSTEM_TUTORIAL.md
+Seed de referencia OK: 424242 (2026-07-14)
+
+Estado visual objetivo: OK — sin islas/charcos, orilla blanca fina, unión Y limpia, vados OK.
+
+--------------------------------------------------------------------------------
+PROBLEMA RECURRENTE
+--------------------------------------------------------------------------------
+Síntoma: mesh discontinuo (“charcos”), tramos solo foam blanco, o el terreno
+“se come” el headwater (markers del path visibles, agua ausente).
+
+Causa A (histórica): celdas DENTRO del mesh pero FUERA de la máscara de carve
+→ islas de terreno.
+
+Causa B (2026-07-14): flatFloor=false (perfil V/U) bajo el ribbon.
+Solo el núcleo a profundidad plena → terreno alto bajo el agua.
+
+Causa C (2026-07-14): carve body demasiado estrecho (~1.08 celdas) aunque flatFloor=true
+→ stamp no cubre el ribbon → charcos / foam-only.
+
+--------------------------------------------------------------------------------
+CONTRATO HEADWATER (NO ROMPER)
+--------------------------------------------------------------------------------
+1. Canal = mesh + carve juntos bajo el ribbon.
+2. Bandeja plana continua (uniformFlatChannelFloor = true) bajo el mesh.
+3. Mesh ligeramente > carve (MeshOverCarveMul ≈ 1.3) → foam fino.
+4. Carve body half ≥ ~1.45–1.55 celdas; stamp mid ~0.95–0.98× meshHalf.
+5. Lecho bedDepthWorld headwater ≥ ~0.40 world.
+6. Valle visual en orillas EXTERIORES = bankFalloff, NO flatFloor=false bajo ribbon.
+
+GO jerarquía: Water_RiverSurface_HeadwaterFeeder_{index}
+
+--------------------------------------------------------------------------------
+INLAND “LOCO” / BLOB
+--------------------------------------------------------------------------------
+Causa A: meandro ×2 en prepare + otro en resolve + pin dentro del main.
+Causa B (2026-07-14 seed 424242): mismo ancho spill (~half 8–9 world) + short path
+          + forceSpillJoin/pin → blob/U + gizmos amarillos tipo “círculos”.
+Fix A: un solo meandro en prepare; resolve no remandra inland.
+Fix B: inland sin pin de confluencia; first-entry suave; cap half ≤ ~2.45 celdas;
+       boosts de orilla/junta más bajos que spill.
+GO: Water_RiverSurface_InlandFeeder_{index}
+
+--------------------------------------------------------------------------------
+INLANDFEEDER — REGLAS DE PRODUCTO (2026-07-14)
+--------------------------------------------------------------------------------
+Qué es: arroyo inland → main (relleno de red). NO spill, NO vado, NO stub.
+Recorrido: del routing fill-pass (como inland-tributary clásico), SIN meandro
+         organic Lake-First (causaba colita de chancho / S apretada).
+Validación: path≥40 celdas, span Chebyshev≥32, count ≤ 1.75·span+10,
+            windiness centerline ≤ 1.42, span world centerline ≥ 22 celdas.
+Ancho: más fino que spill (cap half ≤ 1.85 celdas); taper suave en origen.
+GO: Water_RiverSurface_InlandFeeder_{index}
+--------------------------------------------------------------------------------
+
+
+VADOS FANTASMA (2026-07-14): placement/thin/mandatory marcaban riverFord en
+Inland/Headwater sin ribbon continuo → rejilla en “seco”.
+Fix: fordCells=null en supplemental; skip mandatory suplemental;
+     ClearFordsAlongSupplementalRivers tras thin-zones (sin tocar junta main).
+
+Headwater gancho U (prev): first-entry receptor + snap; sin tuck/append;
+     reject join_near_receiver_main_mouth; inland corto sin meandro loco.
+Headwater→Inland: join solo mid-body (along 32–68%, sep ≥10 a ambos tips);
+     ángulo T 55–125°; straighten mouth approach (sin colita).
+Inland→Main carve: bedDepth ≈ main (1.05×); boost mask join tras Cap.
+Inland↔Headwater foam: post-Cap SyncMeshOverCarve (Ceil stamp) + widen T mid-body.
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ANTI-PATRONES
+--------------------------------------------------------------------------------
+- flatFloor=false en Headwater Play Lake First.
+- Encoger carve body “para arroyo fino” sin cubrir mesh.
+- Apilar meandros inland.
+- Confiar en log flatFloor=1 del MeshBuilder (hardcoded).
+
+Ver también: LAKE_FIRST_WATER_SYSTEM_TUTORIAL.md (principal)
+             TRIBUTARY_JOIN_TUNING_TUTORIAL.md §5 / §5b

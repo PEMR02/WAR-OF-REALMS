@@ -50,12 +50,16 @@ namespace PMG.UnifiedWorldPipeline
             ApplySoftCarves(cfg);
             cfg.shoreSmoothRadiusCells = 18;
             cfg.shoreSmoothStrength = 0.48f;
-            cfg.sandShoreCells = Mathf.Clamp(cfg.sandShoreCells, 3, 4);
+            // Orilla/cuenca visual: permitir 3–7 (antes max 4 aplastaba sandShoreCells=5 del terrain profile).
+            cfg.sandShoreCells = Mathf.Clamp(cfg.sandShoreCells, 3, 7);
             cfg.unifiedWaterTerrainBankLipWorld = Mathf.Max(cfg.unifiedWaterTerrainBankLipWorld, 0.028f);
             cfg.unifiedWaterTerrainBandCells = Mathf.Max(cfg.unifiedWaterTerrainBandCells, 1.85f);
             cfg.unifiedWaterShoreTerrainOffsetWorld = Mathf.Max(cfg.unifiedWaterShoreTerrainOffsetWorld, 0.022f);
             cfg.unifiedWaterTerrainEdgeSubmergeWorld = Mathf.Max(cfg.unifiedWaterTerrainEdgeSubmergeWorld, 0.052f);
-            UwpTerrainProfileModule.ApplyShallowerWaterBedCaps(cfg);
+            // En Play RTS (ignoreLobbyCaps) no aplastar camas: el perfil RTS las restaura, pero
+            // pisar aquí deja un frame inconsistente y confunde audits intermedios.
+            if (!cfg.ignoreLobbyHydrologyCaps)
+                UwpTerrainProfileModule.ApplyShallowerWaterBedCaps(cfg);
         }
 
         public static void ApplySoftCarves(MapGenConfig cfg)

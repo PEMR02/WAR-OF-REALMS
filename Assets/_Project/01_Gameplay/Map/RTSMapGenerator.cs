@@ -61,7 +61,7 @@ namespace Project.Gameplay.Map
         [Range(-1f, 1f)] public float waterHeightRelative = -1f;
         public float maxSlope = 15f;
         [Tooltip("Altura máxima del relieve. Valores bajos = terreno más plano (estilo AoE2).")]
-        public float heightMultiplier = 8f;
+        public float heightMultiplier = 16f;
         [Range(0.0001f, 0.05f)] public float noiseScale = 0.02f;
         [Range(1, 6)] public int noiseOctaves = 3;
         [Range(0f, 1f)] public float noisePersistence = 0.5f;
@@ -72,7 +72,7 @@ namespace Project.Gameplay.Map
 
         [Header("Terrain Textures (opcional, estilo AoE2)")]
         [Tooltip("Activa para pintar el terreno por altura. Si lo activas sin asignar layers puede afectar el NavMesh/movimiento.")]
-        public bool paintTerrainByHeight = false;
+        public bool paintTerrainByHeight = true;
         [Tooltip("Asigna Terrain Layers para pintar por altura (solo si paintTerrainByHeight está activado).")]
         public TerrainLayer grassLayer;
         public TerrainLayer dirtLayer;
@@ -93,13 +93,20 @@ namespace Project.Gameplay.Map
         [Tooltip("% del terreno que será roca (zonas altas). Ej: 20 = 20% rock.")]
         [Range(0, 100)] public int rockPercent = 20;
         [Tooltip("Ancho de transición entre capas (0.02–0.15 típico).")]
-        [Range(0.02f, 0.25f)] public float textureBlendWidth = 0.08f;
+        [Range(0.02f, 0.25f)] public float textureBlendWidth = 0.045f;
+        [Tooltip("0 = blend suave; 1 = bordes más crujientes entre grass/dirt/rock.")]
+        [Range(0f, 1f)] public float terrainBlendSharpness = 0.55f;
+        [Tooltip("Segunda capa de hierba (más seca). Si null, TerrainExporter intenta Grass_02.png en editor.")]
+        public TerrainLayer grassDryLayer;
+        [Range(0f, 1f)] public float grassDryBlendStrength = 0.38f;
 
         [Header("Arena (orillas de lagos y ríos)")]
         [Tooltip("Terrain Layer para arena/sand en las orillas. Opcional.")]
         public TerrainLayer sandLayer;
         [Tooltip("Ancho de la franja de arena desde la orilla (en celdas del grid).")]
-        [Range(1, 6)] public int sandShoreCells = 3;
+        [Range(1, 8)] public int sandShoreCells = 5;
+        [Tooltip("Ruido del borde de arena (orilla menos halo perfecto).")]
+        [Range(0f, 2.5f)] public float sandEdgeNoiseStrength = 1.35f;
 
         [Header("NavMesh (opcional)")]
         public NavMeshSurface navMeshSurface;
@@ -159,8 +166,8 @@ namespace Project.Gameplay.Map
         [Header("Lobby (UI pre-partida)")]
         [Tooltip("Tamaño de celda en unidades mundo empujado al Match en runtime (>0). Tiene prioridad sobre el default legacy.")]
         [Min(0f)] public float mapCellSizeWorld = 3f;
-        [Tooltip("Masas montañosas macro (0–4 en lobby). Se aplica al MapGen tras compilar el match.")]
-        [Range(0, 12)] public int lobbyMacroMountainMasses = 2;
+        [Tooltip("Masas montañosas macro (0–12; lobby stepper). Se aplica al MapGen tras compilar el match.")]
+        [Range(0, 12)] public int lobbyMacroMountainMasses = 4;
 
         [Tooltip("Índice de arquetipo de mapa aplicado desde el lobby (0=Continental … 3=Drylands).")]
         [HideInInspector] public int lobbyMapArchetypeIndex;
@@ -256,11 +263,11 @@ namespace Project.Gameplay.Map
 
         [Header("Recursos en el resto del mapa")]
         [Tooltip("Árboles a repartir por todo el mapa (fuera del radio de los spawns).")]
-        public Vector2Int globalTrees = new Vector2Int(80, 120);
+        public Vector2Int globalTrees = new Vector2Int(70, 100);
         [Tooltip("Piedra a repartir por el mapa (fuera de spawns).")]
-        public Vector2Int globalStone = new Vector2Int(8, 14);
+        public Vector2Int globalStone = new Vector2Int(6, 11);
         [Tooltip("Oro a repartir por el mapa (fuera de spawns).")]
-        public Vector2Int globalGold = new Vector2Int(10, 16);
+        public Vector2Int globalGold = new Vector2Int(7, 12);
         [Tooltip("Animales (comida) a repartir por el mapa (fuera de spawns). Requiere Animal Prefab o variantes asignados.")]
         public Vector2Int globalAnimals = new Vector2Int(8, 20);
         [Tooltip("Radio alrededor de cada spawn dentro del cual NO se colocan recursos globales (para no solapar con los del Town Center).")]
@@ -275,14 +282,14 @@ namespace Project.Gameplay.Map
         public int clusterMinSize = 15;
         [Tooltip("Máximo de árboles por bosque.")]
         public int clusterMaxSize = 40;
-        [Tooltip("-1 = 75% en clusters. Si no (0–1), fracción de globalTrees que coloca el colocador en manchas.")]
-        public float globalTreesClusterFraction = -1f;
+        [Tooltip("-1 = 90% en clusters. Si no (0–1), fracción de globalTrees que coloca el colocador en manchas.")]
+        public float globalTreesClusterFraction = 0.9f;
         [Tooltip("Si true, árboles globales solo donde el alphamap del terreno favorece la capa hierba [0].")]
         public bool preferGlobalTreesOnGrassAlphamap;
 
         [Header("Clusters piedra / oro globales")]
         [Tooltip("Fracción de nodos globalStone/globalGold colocados en manchas; el resto se reparte disperso si falta sitio.")]
-        [Range(0.4f, 1f)] public float globalStoneGoldClusterFraction = 0.82f;
+        [Range(0.4f, 1f)] public float globalStoneGoldClusterFraction = 0.92f;
         [Tooltip("Tamaño de cada mancha (min–max nodos).")]
         public Vector2Int globalMineralClusterSize = new Vector2Int(2, 6);
         [Tooltip("Radio aproximado en celdas del grid; menor = vetas más compactas.")]
@@ -652,6 +659,8 @@ namespace Project.Gameplay.Map
             target.climate.dirtLayer = dirtLayer;
             target.climate.rockLayer = rockLayer;
             target.climate.sandLayer = sandLayer;
+            target.climate.grassDryLayer = grassDryLayer;
+            target.climate.grassDryBlendStrength = grassDryBlendStrength;
             target.climate.grassTileSize = grassTileSize;
             target.climate.dirtTileSize = dirtTileSize;
             target.climate.rockTileSize = rockTileSize;
@@ -660,6 +669,8 @@ namespace Project.Gameplay.Map
             target.climate.dirtPercent = dirtPercent;
             target.climate.rockPercent = rockPercent;
             target.climate.textureBlendWidth = textureBlendWidth;
+            target.climate.terrainBlendSharpness = terrainBlendSharpness;
+            target.climate.sandEdgeNoiseStrength = sandEdgeNoiseStrength;
             target.players.playerCount = playerCount;
             target.players.spawnEdgePadding = spawnEdgePadding;
             target.players.minPlayerDistance2p = minPlayerDistance2p;
@@ -941,6 +952,8 @@ namespace Project.Gameplay.Map
             dirtLayer = cfg.climate.dirtLayer;
             rockLayer = cfg.climate.rockLayer;
             sandLayer = cfg.climate.sandLayer;
+            grassDryLayer = cfg.climate.grassDryLayer;
+            grassDryBlendStrength = cfg.climate.grassDryBlendStrength;
             grassTileSize = cfg.climate.grassTileSize;
             dirtTileSize = cfg.climate.dirtTileSize;
             rockTileSize = cfg.climate.rockTileSize;
@@ -949,6 +962,8 @@ namespace Project.Gameplay.Map
             dirtPercent = cfg.climate.dirtPercent;
             rockPercent = cfg.climate.rockPercent;
             textureBlendWidth = cfg.climate.textureBlendWidth;
+            terrainBlendSharpness = cfg.climate.terrainBlendSharpness;
+            sandEdgeNoiseStrength = cfg.climate.sandEdgeNoiseStrength;
             playerCount = Mathf.Clamp(cfg.players.playerCount, 1, 4);
             EnsureLobbyPlayerSlotsArray();
             if (cfg.players.slots != null && cfg.players.slots.Count > 0)
@@ -1470,6 +1485,8 @@ namespace Project.Gameplay.Map
             MapResourcePlacer.PlaceFromDefinitiveGrid(generatedGrid, this, runtime.Resources, _townCenterPositions, minDistFromTc);
             MapResourcePlacer.PlaceGlobalOnly(_spawns, this, runtime.Resources);
             ReleaseTownCenterReservations();
+
+            InfiniGrassPostGenBootstrap.TryApplyAfterMapGeneration(terrain, generatedGrid);
 
             // Notificar cámara RTS (si existe) para que actualice bounds al tamaño del mapa generado.
             var camCtrl = FindFirstObjectByType<Project.Gameplay.RTSCameraController>();

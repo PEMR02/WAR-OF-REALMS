@@ -56,7 +56,7 @@ namespace Project.Gameplay.Map.Generator
             int minSepLake = ResolveLakeSpillSeparationCells(config, minDim);
             int minJoinSpacing = Mathf.Clamp(config.inlandFeederMinConfluenceSpacingCells, 8, 32);
             int attempt = 0;
-            int maxAttempts = Mathf.Clamp(target * 20, 12, 64);
+            int maxAttempts = Mathf.Clamp(target * 36, 24, 96);
 
             while (accepted < target && attempt < maxAttempts)
             {
@@ -162,7 +162,8 @@ namespace Project.Gameplay.Map.Generator
                     UwpTributaryOriginKind.InlandFeeder,
                     path,
                     centerline,
-                    fordCells,
+                    // Sin fords de placement: vados fantasma en seco / sin ribbon continuo.
+                    null,
                     riverOccupiedCells,
                     ref riverOccAabbValid,
                     ref riverOccMinX,
@@ -232,6 +233,68 @@ namespace Project.Gameplay.Map.Generator
             LogSummary(config, graph);
         }
 
+        /// <summary>
+        /// Inland/Headwater: revoca riverFord en cauce suplemental (placement/thin-zone).
+        /// Llamar DESPUÉS de ApplyFunctionalRiverFordsFromThinZones.
+        /// No toca vados del main cerca de la confluencia.
+        /// </summary>
+        public static void ClearFordsAlongSupplementalRivers(GridSystem grid)
+        {
+            if (grid?.RiverCenterlinesCellSpace == null)
+                return;
+
+            int w = grid.Width;
+            int h = grid.Height;
+            const int clearR = 1;
+            var mainLine = grid.RiverCenterlinesCellSpace.Count > 0
+                ? grid.RiverCenterlinesCellSpace[0]
+                : null;
+
+            for (int ri = 1; ri < grid.RiverCenterlinesCellSpace.Count; ri++)
+            {
+                if (!UwpTributaryOriginUtility.IsSupplemental(grid, ri))
+                    continue;
+                var line = grid.RiverCenterlinesCellSpace[ri];
+                if (line == null || line.Count < 2)
+                    continue;
+                for (int i = 0; i < line.Count; i++)
+                {
+                    int cx = Mathf.Clamp(Mathf.FloorToInt(line[i].x), 0, w - 1);
+                    int cz = Mathf.Clamp(Mathf.FloorToInt(line[i].y), 0, h - 1);
+                    for (int dz = -clearR; dz <= clearR; dz++)
+                    for (int dx = -clearR; dx <= clearR; dx++)
+                    {
+                        int x = cx + dx;
+                        int z = cz + dz;
+                        if (!grid.InBoundsCell(x, z))
+                            continue;
+                        // Conservar fords del troncal en la junta.
+                        if (mainLine != null && MinDistToCenterlineCells(mainLine, x, z) <= 2.25f)
+                            continue;
+                        ref var cell = ref grid.GetCell(x, z);
+                        if (cell.type == CellType.River && cell.riverFord)
+                            cell.riverFord = false;
+                    }
+                }
+            }
+        }
+
+        static float MinDistToCenterlineCells(List<Vector2> line, int x, int z)
+        {
+            if (line == null || line.Count == 0)
+                return float.MaxValue;
+            Vector2 p = new Vector2(x + 0.5f, z + 0.5f);
+            float best = float.MaxValue;
+            for (int i = 0; i < line.Count; i++)
+            {
+                float d = (line[i] - p).sqrMagnitude;
+                if (d < best)
+                    best = d;
+            }
+
+            return Mathf.Sqrt(best);
+        }
+
         static void BuildHeadwaterFeeders(
             GridSystem grid,
             MapGenConfig config,
@@ -259,11 +322,20 @@ namespace Project.Gameplay.Map.Generator
                 return;
             }
 
+            // Preferir solo InlandFeeder en el primer pase: rotar a spill agota candidatos cerca del lago.
+            var inlandOnly = new List<int>(2);
+            for (int i = 0; i < receivers.Count; i++)
+            {
+                if (UwpTributaryOriginUtility.IsInlandFeeder(grid, receivers[i]))
+                    inlandOnly.Add(receivers[i]);
+            }
+
             int minJoinSpacing = Mathf.Clamp(config.inlandFeederMinConfluenceSpacingCells, 10, 28);
             int accepted = 0;
             int rejected = 0;
             int attempt = 0;
             int maxAttempts = Mathf.Clamp(target * 28, 20, 96);
+            var primaryReceivers = inlandOnly.Count > 0 ? inlandOnly : receivers;
 
             RunHeadwaterPlacementPass(
                 grid,
@@ -278,7 +350,7 @@ namespace Project.Gameplay.Map.Generator
                 ref riverOccMinZ,
                 ref riverOccMaxZ,
                 graph,
-                receivers,
+                primaryReceivers,
                 minJoinSpacing,
                 target,
                 maxAttempts,
@@ -289,7 +361,36 @@ namespace Project.Gameplay.Map.Generator
 
             if (accepted < target)
             {
-                int fallbackAttempts = Mathf.Clamp(target * 20, 12, 48);
+                int fallbackAttempts = Mathf.Clamp(target * 28, 16, 64);
+                // Fallback relaxed: inland primero otra vez; si falla, todos los receptores.
+                var fallbackReceivers = inlandOnly.Count > 0 ? inlandOnly : receivers;
+                RunHeadwaterPlacementPass(
+                    grid,
+                    config,
+                    rng,
+                    ref waterCells,
+                    claimedJoins,
+                    riverOccupiedCells,
+                    ref riverOccAabbValid,
+                    ref riverOccMinX,
+                    ref riverOccMaxX,
+                    ref riverOccMinZ,
+                    ref riverOccMaxZ,
+                    graph,
+                    fallbackReceivers,
+                    Mathf.Max(8, (minJoinSpacing * 2) / 3),
+                    target,
+                    fallbackAttempts,
+                    relaxedAngle: true,
+                    ref accepted,
+                    ref rejected,
+                    ref attempt);
+            }
+
+            if (accepted < target && inlandOnly.Count > 0 && receivers.Count > inlandOnly.Count)
+            {
+                // Último recurso: spill receptors con ángulo relajado.
+                int spillAttempts = Mathf.Clamp(target * 16, 12, 40);
                 RunHeadwaterPlacementPass(
                     grid,
                     config,
@@ -304,13 +405,45 @@ namespace Project.Gameplay.Map.Generator
                     ref riverOccMaxZ,
                     graph,
                     receivers,
-                    minJoinSpacing,
+                    Mathf.Max(8, (minJoinSpacing * 2) / 3),
                     target,
-                    fallbackAttempts,
+                    spillAttempts,
                     relaxedAngle: true,
                     ref accepted,
                     ref rejected,
                     ref attempt);
+            }
+
+            // Inland corto → BuildConfluenceCandidatesForReceiver suele devolver 0 (no_candidates).
+            if (accepted < target)
+            {
+                for (int i = 0; i < inlandOnly.Count && accepted < target; i++)
+                {
+                    if (TryEmergencyHeadwaterOntoReceiver(
+                            grid,
+                            config,
+                            rng,
+                            inlandOnly[i],
+                            claimedJoins,
+                            riverOccupiedCells,
+                            ref riverOccAabbValid,
+                            ref riverOccMinX,
+                            ref riverOccMaxX,
+                            ref riverOccMinZ,
+                            ref riverOccMaxZ,
+                            graph,
+                            ref waterCells,
+                            out string emergencyFail))
+                    {
+                        accepted++;
+                    }
+                    else
+                    {
+                        rejected++;
+                        graph.SupplementalReport.RejectLines.Add(
+                            $"headwater attempt=emergency relaxed=1 reason={emergencyFail ?? "emergency_failed"}");
+                    }
+                }
             }
 
             graph.SupplementalReport.HeadwaterFeedersAccepted = accepted;
@@ -399,7 +532,7 @@ namespace Project.Gameplay.Map.Generator
                     UwpTributaryOriginKind.HeadwaterFeeder,
                     path,
                     centerline,
-                    fordCells,
+                    null,
                     riverOccupiedCells,
                     ref riverOccAabbValid,
                     ref riverOccMinX,
@@ -478,6 +611,221 @@ namespace Project.Gameplay.Map.Generator
             return Mathf.Min(Mathf.Max(0, desire), remaining);
         }
 
+        /// <summary>
+        /// Fallback cuando InlandFeeder es corto y BuildConfluenceCandidatesForReceiver → no_candidates.
+        /// Muestrea el cuerpo del receptor y traza un feeder corto en tierra hacia él.
+        /// </summary>
+        static bool TryEmergencyHeadwaterOntoReceiver(
+            GridSystem grid,
+            MapGenConfig config,
+            IRng rng,
+            int receiverRi,
+            HashSet<long> claimedJoins,
+            HashSet<long> riverOccupiedCells,
+            ref bool riverOccAabbValid,
+            ref int riverOccMinX,
+            ref int riverOccMaxX,
+            ref int riverOccMinZ,
+            ref int riverOccMaxZ,
+            UwpWaterGraph graph,
+            ref int waterCells,
+            out string fail)
+        {
+            fail = null;
+            if (grid?.RiverCenterlinesCellSpace == null || config == null || rng == null)
+            {
+                fail = "emergency_null";
+                return false;
+            }
+
+            if (receiverRi <= 0 || receiverRi >= grid.RiverCenterlinesCellSpace.Count)
+            {
+                fail = "emergency_bad_receiver";
+                return false;
+            }
+
+            int slotIndex = grid.RiverCenterlinesCellSpace.Count;
+            if (slotIndex >= config.riverCount)
+            {
+                fail = "emergency_no_slot";
+                return false;
+            }
+
+            var recv = grid.RiverCenterlinesCellSpace[receiverRi];
+            if (recv == null || recv.Count < 6)
+            {
+                fail = "emergency_recv_short";
+                return false;
+            }
+
+            int w = grid.Width;
+            int h = grid.Height;
+            // Cuerpo medio: ~45–55% a lo largo (T centrica, no punta).
+            int minFromEnds = Mathf.Max(4, Mathf.RoundToInt(recv.Count * 0.28f));
+            int joinIdx = Mathf.Clamp(
+                Mathf.RoundToInt(recv.Count * 0.48f),
+                minFromEnds,
+                recv.Count - 1 - minFromEnds);
+            for (int tryOff = 0; tryOff < 10; tryOff++)
+            {
+                int idx = Mathf.Clamp(
+                    joinIdx + ((tryOff % 2 == 0) ? tryOff / 2 : -(tryOff / 2 + 1)),
+                    minFromEnds,
+                    recv.Count - 1 - minFromEnds);
+                Vector2 jp = recv[idx];
+                var joinCell = new Vector2Int(
+                    Mathf.Clamp(Mathf.FloorToInt(jp.x), 0, w - 1),
+                    Mathf.Clamp(Mathf.FloorToInt(jp.y), 0, h - 1));
+
+                if (!JoinIsOnReceiverMidBody(grid, receiverRi, joinCell, relaxedAngle: true))
+                    continue;
+                bool joinBusy = false;
+                foreach (long pk in claimedJoins)
+                {
+                    int jx = (int)(pk >> 32);
+                    int jz = (int)(uint)pk;
+                    if (Chebyshev(joinCell, new Vector2Int(jx, jz)) < 6)
+                    {
+                        joinBusy = true;
+                        break;
+                    }
+                }
+
+                if (joinBusy)
+                    continue;
+                if (CrossesLakeBody(new List<Vector2Int> { joinCell }, grid))
+                    continue;
+                if (MinDistJoinToLakeMouthOrBody(grid, joinCell) < 8)
+                    continue;
+
+                Vector2 down = RiverConfluenceUtility.ReceiverDownstreamAt(recv, idx);
+                if (down.sqrMagnitude < 1e-6f)
+                    down = Vector2.right;
+                down.Normalize();
+                Vector2 side = new Vector2(-down.y, down.x);
+                if (rng.NextFloat() < 0.5f)
+                    side = -side;
+
+                int reach = Mathf.Clamp(12 + rng.NextInt(0, 10), 12, 28);
+                Vector2Int source = new Vector2Int(
+                    Mathf.Clamp(joinCell.x + Mathf.RoundToInt(side.x * reach), 1, w - 2),
+                    Mathf.Clamp(joinCell.y + Mathf.RoundToInt(side.y * reach), 1, h - 2));
+
+                if (!TryBuildEmergencyHeadwaterPath(grid, source, joinCell, out List<Vector2Int> path) ||
+                    path == null || path.Count < 6)
+                    continue;
+
+                if (CrossesLakeBody(path, grid))
+                    continue;
+
+                var centerline = new List<Vector2>(path.Count);
+                for (int p = 0; p < path.Count; p++)
+                    centerline.Add(new Vector2(path[p].x + 0.5f, path[p].y + 0.5f));
+                UwpTributaryOriginUtility.PinEndpointConfluence(centerline, joinCell);
+
+                var fordCells = new List<Vector2Int>(0);
+                int added = WaterGenerator.ApplySupplementalValidatedTributary(
+                    grid,
+                    config,
+                    rng,
+                    slotIndex,
+                    UwpTributaryOriginKind.HeadwaterFeeder,
+                    path,
+                    centerline,
+                    fordCells,
+                    riverOccupiedCells,
+                    ref riverOccAabbValid,
+                    ref riverOccMinX,
+                    ref riverOccMaxX,
+                    ref riverOccMinZ,
+                    ref riverOccMaxZ,
+                    receiverRi);
+
+                if (added <= 0)
+                {
+                    fail = "emergency_raster_failed";
+                    continue;
+                }
+
+                waterCells += added;
+                claimedJoins.Add(PackCell(joinCell.x, joinCell.y));
+                graph.FinalCenterlineByRiverIndex[slotIndex] = new List<Vector2>(centerline);
+                graph.Tributaries.Add(new UwpTributaryGraphEdge
+                {
+                    RiverIndex = slotIndex,
+                    LakeComponentIndex = -1,
+                    MainRiverConfluenceCell = joinCell,
+                    CenterlineCells = new List<Vector2>(centerline),
+                    PathCells = new List<Vector2Int>(path),
+                    Accepted = true,
+                    ConnectivityValid = true,
+                });
+
+                RiverConfluenceUtility.TryRegisterFromPlacement(
+                    grid,
+                    config,
+                    slotIndex,
+                    path,
+                    centerline,
+                    joinCell,
+                    "headwater_feeder_emergency_inland",
+                    receiverRi);
+
+                if (config.debugLogs || config.debugHydrologyNetwork || config.uwpOwnedVisualPolicy)
+                {
+                    Debug.Log(
+                        $"[LakeFirstSupplemental] kind=HeadwaterFeeder riverIndex={slotIndex} receiver={receiverRi} " +
+                        $"relaxed=1 source=({path[0].x},{path[0].y}) join=({joinCell.x},{joinCell.y}) " +
+                        $"accepted=1 mode=emergency_inland seed={config.seed}");
+                }
+
+                fail = null;
+                return true;
+            }
+
+            fail = fail ?? "emergency_no_join";
+            return false;
+        }
+
+        static bool TryBuildEmergencyHeadwaterPath(
+            GridSystem grid,
+            Vector2Int source,
+            Vector2Int join,
+            out List<Vector2Int> path)
+        {
+            path = null;
+            if (grid == null)
+                return false;
+
+            path = new List<Vector2Int>(48);
+            int x = source.x;
+            int y = source.y;
+            path.Add(new Vector2Int(x, y));
+            int guard = 0;
+            while ((x != join.x || y != join.y) && guard++ < 128)
+            {
+                int dx = join.x == x ? 0 : (join.x > x ? 1 : -1);
+                int dy = join.y == y ? 0 : (join.y > y ? 1 : -1);
+                if (Mathf.Abs(join.x - x) >= Mathf.Abs(join.y - y))
+                    x += dx;
+                else
+                    y += dy;
+                x = Mathf.Clamp(x, 0, grid.Width - 1);
+                y = Mathf.Clamp(y, 0, grid.Height - 1);
+                var next = new Vector2Int(x, y);
+                if (path[path.Count - 1] != next)
+                    path.Add(next);
+                if (grid.LakeBodyCellsPacked != null &&
+                    grid.LakeBodyCellsPacked.Contains(PackCell(x, y)))
+                    return false;
+            }
+
+            if (path.Count > 0 && path[path.Count - 1] != join)
+                path.Add(join);
+
+            return path.Count >= 6;
+        }
+
         static List<int> CollectHeadwaterReceiverRiverIndices(GridSystem grid)
         {
             var receivers = new List<int>(4);
@@ -515,7 +863,7 @@ namespace Project.Gameplay.Map.Generator
         {
             joinCell = default;
             reject = null;
-            if (grid == null || path == null || path.Count < 8)
+            if (grid == null || path == null || path.Count < (relaxedAngle ? 6 : 8))
             {
                 reject = "path_too_short";
                 return false;
@@ -544,21 +892,45 @@ namespace Project.Gameplay.Map.Generator
             }
 
             int minLakeSep = ResolveHeadwaterMinSeparationFromLakeCells(config, Mathf.Min(grid.Width, grid.Height));
+            // Sin InlandFeeder, el receptor suele ser LakeSpill: sep estricta ≈ nunca hay sitio.
+            // Relajar distancia a lago; spill más, inland aún más (join lejos de boca lago).
+            bool receiverIsSpill = UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, receiverRiverIndex);
+            bool receiverIsInland = UwpTributaryOriginUtility.IsInlandFeeder(grid, receiverRiverIndex);
+            if (receiverIsSpill)
+                minLakeSep = Mathf.Max(10, (minLakeSep * 2) / 3);
+            else if (receiverIsInland)
+                minLakeSep = Mathf.Max(8, (minLakeSep * 1) / 2);
+            if (relaxedAngle)
+                minLakeSep = Mathf.Max(6, (minLakeSep * 2) / 3);
+
             if (MinDistJoinToLakeMouthOrBody(grid, joinCell) < minLakeSep)
             {
                 reject = "join_near_lake_mouth";
                 return false;
             }
 
-            if (MinChebyshevToAnyLakeBodyCell(grid, path[0], minLakeSep) < Mathf.Max(10, minLakeSep * 2 / 3))
+            int sourceLakeSep = Mathf.Max(8, minLakeSep * 2 / 3);
+            if (relaxedAngle)
+                sourceLakeSep = Mathf.Max(6, sourceLakeSep * 2 / 3);
+            if (MinChebyshevToAnyLakeBodyCell(grid, path[0], minLakeSep) < sourceLakeSep)
             {
                 reject = "source_near_lake";
                 return false;
             }
 
-            if (JoinTooCloseToLakeEndOfReceiver(grid, receiverRiverIndex, joinCell, minLakeSep))
+            // Solo relevante cuando el receptor es un spill (cabeza hacia el lago).
+            if (receiverIsSpill &&
+                JoinTooCloseToLakeEndOfReceiver(grid, receiverRiverIndex, joinCell, minLakeSep))
             {
                 reject = "join_near_lake_spill_head";
+                return false;
+            }
+
+            // Inland: T en el cuerpo (≈30–70%). Unir en la punta → V / “nariz” (imgs).
+            if (receiverIsInland &&
+                !JoinIsOnReceiverMidBody(grid, receiverRiverIndex, joinCell, relaxedAngle))
+            {
+                reject = "join_not_on_receiver_midbody";
                 return false;
             }
 
@@ -687,6 +1059,146 @@ namespace Project.Gameplay.Map.Generator
             return along01 < 0.30f;
         }
 
+        /// <summary>
+        /// Headwater→Inland: join solo en el tramo central del receptor (evita punta/V).
+        /// </summary>
+        static bool JoinIsOnReceiverMidBody(
+            GridSystem grid,
+            int receiverRiverIndex,
+            Vector2Int joinCell,
+            bool relaxedAngle)
+        {
+            if (grid?.RiverCenterlinesCellSpace == null ||
+                receiverRiverIndex <= 0 ||
+                receiverRiverIndex >= grid.RiverCenterlinesCellSpace.Count)
+                return false;
+
+            var line = grid.RiverCenterlinesCellSpace[receiverRiverIndex];
+            if (line == null || line.Count < 8)
+                return false;
+
+            int idx = ClosestCenterlineIndex(line, joinCell);
+            float along01 = idx / (float)(line.Count - 1);
+            // Estricto: 32–68%. Relajado: 26–74% (sigue lejos de ambos extremos).
+            float lo = relaxedAngle ? 0.26f : 0.32f;
+            float hi = relaxedAngle ? 0.74f : 0.68f;
+            if (along01 < lo || along01 > hi)
+                return false;
+
+            // Margen Chebyshev a ambos extremos del inland.
+            Vector2Int tip0 = new Vector2Int(
+                Mathf.FloorToInt(line[0].x), Mathf.FloorToInt(line[0].y));
+            Vector2Int tip1 = new Vector2Int(
+                Mathf.FloorToInt(line[line.Count - 1].x), Mathf.FloorToInt(line[line.Count - 1].y));
+            int minTipSep = relaxedAngle ? 8 : 10;
+            if (Chebyshev(joinCell, tip0) < minTipSep || Chebyshev(joinCell, tip1) < minTipSep)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Rechaza joins de headwater cerca de la boca del receptor con el main
+        /// (fuerza unión a mitad de cuerpo → T limpia, sin slide al troncal).
+        /// </summary>
+        static bool JoinTooCloseToReceiverMainMouth(
+            GridSystem grid,
+            int receiverRiverIndex,
+            Vector2Int joinCell,
+            int minSepCells)
+        {
+            if (grid == null || receiverRiverIndex <= 0 || minSepCells <= 0)
+                return false;
+
+            Vector2Int mouth = default;
+            bool haveMouth = false;
+            if (grid.LakeFirstWaterGraph?.Tributaries != null)
+            {
+                for (int i = 0; i < grid.LakeFirstWaterGraph.Tributaries.Count; i++)
+                {
+                    var trib = grid.LakeFirstWaterGraph.Tributaries[i];
+                    if (!trib.Accepted || trib.RiverIndex != receiverRiverIndex)
+                        continue;
+                    mouth = trib.MainRiverConfluenceCell;
+                    haveMouth = true;
+                    break;
+                }
+            }
+
+            if (!haveMouth &&
+                grid.RiverCenterlinesCellSpace != null &&
+                receiverRiverIndex < grid.RiverCenterlinesCellSpace.Count)
+            {
+                var line = grid.RiverCenterlinesCellSpace[receiverRiverIndex];
+                if (line != null && line.Count >= 2)
+                {
+                    // Extremo más cercano al main (índice 0).
+                    var mainLine = grid.RiverCenterlinesCellSpace[0];
+                    if (mainLine != null && mainLine.Count >= 2)
+                    {
+                        Vector2 a = line[0];
+                        Vector2 b = line[line.Count - 1];
+                        float da = DistanceSqToPolylineCellSpaceStatic(a, mainLine);
+                        float db = DistanceSqToPolylineCellSpaceStatic(b, mainLine);
+                        Vector2 mout = da <= db ? a : b;
+                        mouth = new Vector2Int(Mathf.FloorToInt(mout.x), Mathf.FloorToInt(mout.y));
+                        haveMouth = true;
+                    }
+                }
+            }
+
+            if (!haveMouth)
+                return false;
+
+            if (Chebyshev(joinCell, mouth) < minSepCells)
+                return true;
+
+            // También rechazar tramo final 25% hacia la boca del main.
+            if (grid.RiverCenterlinesCellSpace != null &&
+                receiverRiverIndex < grid.RiverCenterlinesCellSpace.Count)
+            {
+                var line = grid.RiverCenterlinesCellSpace[receiverRiverIndex];
+                if (line != null && line.Count >= 6)
+                {
+                    int idx = ClosestCenterlineIndex(line, joinCell);
+                    float along01 = idx / (float)(line.Count - 1);
+                    Vector2 end0 = line[0];
+                    Vector2 end1 = line[line.Count - 1];
+                    float d0 = (end0 - new Vector2(mouth.x + 0.5f, mouth.y + 0.5f)).sqrMagnitude;
+                    float d1 = (end1 - new Vector2(mouth.x + 0.5f, mouth.y + 0.5f)).sqrMagnitude;
+                    bool mouthAtEnd = d1 <= d0;
+                    if (mouthAtEnd && along01 > 0.75f)
+                        return true;
+                    if (!mouthAtEnd && along01 < 0.25f)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static float DistanceSqToPolylineCellSpaceStatic(Vector2 p, List<Vector2> line)
+        {
+            if (line == null || line.Count == 0)
+                return float.MaxValue;
+            if (line.Count == 1)
+                return (p - line[0]).sqrMagnitude;
+            float best = float.MaxValue;
+            for (int i = 0; i < line.Count - 1; i++)
+            {
+                Vector2 a = line[i];
+                Vector2 b = line[i + 1];
+                Vector2 ab = b - a;
+                float lenSq = ab.sqrMagnitude;
+                Vector2 q = lenSq < 1e-8f ? a : a + ab * Mathf.Clamp01(Vector2.Dot(p - a, ab) / lenSq);
+                float d = (p - q).sqrMagnitude;
+                if (d < best)
+                    best = d;
+            }
+
+            return best;
+        }
+
         static bool PassesHeadwaterJoinAngle(
             GridSystem grid,
             MapGenConfig config,
@@ -721,11 +1233,28 @@ namespace Project.Gameplay.Map.Generator
                 ? RiverDendriticUtility.IsJoinAngleLooseAcceptable(config, joinAngleDeg, isParallel, isTJunction)
                 : RiverDendriticUtility.IsJoinAngleAcceptable(config, joinAngleDeg, out isParallel, out isTJunction);
 
+            // Cabeza→inland: preferir T (~55–125°), evita Y aguda / colita en orilla.
+            if (angleOk && UwpTributaryOriginUtility.IsInlandFeeder(grid, receiverRiverIndex))
+            {
+                float lo = relaxedAngle ? 48f : 55f;
+                float hi = relaxedAngle ? 132f : 125f;
+                if (joinAngleDeg < lo || joinAngleDeg > hi)
+                {
+                    reject = "join_angle_not_t_to_inland";
+                    return false;
+                }
+            }
+
             if (!angleOk && !relaxedAngle)
             {
                 // Primera pasada: permitir ventana loose si el preferido falla (sin esperar fallback).
                 angleOk = RiverDendriticUtility.IsJoinAngleLooseAcceptable(
                     config, joinAngleDeg, isParallel, isTJunction);
+                if (angleOk && UwpTributaryOriginUtility.IsInlandFeeder(grid, receiverRiverIndex))
+                {
+                    if (joinAngleDeg < 48f || joinAngleDeg > 132f)
+                        angleOk = false;
+                }
             }
 
             if (!angleOk)
@@ -856,7 +1385,10 @@ namespace Project.Gameplay.Map.Generator
         {
             joinCell = default;
             reject = null;
-            if (grid == null || path == null || path.Count < 14)
+            // Reglas InlandFeeder: recorrido útil inland→main (no “colita” corta).
+            const int MinInlandPathCells = 40;
+            const int MinInlandSpanChebyshev = 32;
+            if (grid == null || path == null || path.Count < MinInlandPathCells)
             {
                 reject = "path_too_short";
                 return false;
@@ -866,6 +1398,21 @@ namespace Project.Gameplay.Map.Generator
                 joinCell = RiverRouteGenerator.LastTributaryConfluencePlan.ConfluenceCell;
             else
                 joinCell = path[path.Count - 1];
+
+            int span = Chebyshev(path[0], joinCell);
+            if (span < MinInlandSpanChebyshev)
+            {
+                reject = "path_span_short";
+                return false;
+            }
+
+            // Path con demasiadas celdas para el span = zigzag tipo cola.
+            float maxCellsForSpan = span * 1.75f + 10f;
+            if (path.Count > maxCellsForSpan)
+            {
+                reject = "path_too_windy";
+                return false;
+            }
 
             foreach (long pk in claimedJoins)
             {
@@ -1060,14 +1607,39 @@ namespace Project.Gameplay.Map.Generator
                 Debug.LogWarning(
                     $"[LakeFirstSupplemental] seed={config.seed} headwater none accepted " +
                     $"(target={r.HeadwaterFeederTarget} rejected={r.HeadwaterFeedersRejected})");
+                var tally = new System.Collections.Generic.Dictionary<string, int>(16);
                 int shown = 0;
-                for (int i = r.RejectLines.Count - 1; i >= 0 && shown < 8; i--)
+                for (int i = r.RejectLines.Count - 1; i >= 0; i--)
                 {
                     string line = r.RejectLines[i];
                     if (string.IsNullOrEmpty(line) || line.IndexOf("headwater", System.StringComparison.Ordinal) < 0)
                         continue;
-                    Debug.LogWarning($"[LakeFirstSupplemental] reject[{shown}] {line}");
-                    shown++;
+                    string reason = line;
+                    int ri = line.LastIndexOf("reason=", System.StringComparison.Ordinal);
+                    if (ri >= 0)
+                        reason = line.Substring(ri + 7);
+                    if (!tally.TryGetValue(reason, out int c))
+                        c = 0;
+                    tally[reason] = c + 1;
+                    if (shown < 8)
+                    {
+                        Debug.LogWarning($"[LakeFirstSupplemental] reject[{shown}] {line}");
+                        shown++;
+                    }
+                }
+
+                if (tally.Count > 0)
+                {
+                    var parts = new System.Text.StringBuilder(128);
+                    foreach (var kv in tally)
+                    {
+                        if (parts.Length > 0)
+                            parts.Append(' ');
+                        parts.Append(kv.Key).Append('=').Append(kv.Value);
+                    }
+
+                    Debug.LogWarning(
+                        $"[LakeFirstSupplemental] seed={config.seed} headwaterRejectTally {parts}");
                 }
             }
         }
