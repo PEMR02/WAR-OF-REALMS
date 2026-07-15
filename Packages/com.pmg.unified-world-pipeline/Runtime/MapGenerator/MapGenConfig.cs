@@ -105,9 +105,10 @@ namespace Project.Gameplay.Map.Generator
         [Range(6, 64)] public int inlandFeederSourceDecorStoneCount = 10;
         [Tooltip("HeadwaterFeeder: -1 = auto; 0 = desactivar cauces cortos trib→trib.")]
         public int headwaterFeederTargetCount = -1;
+        [Tooltip("LakeSpill (lake-tributary): -1 = auto / sin tope tipado; N = máx. tributarios lago→main. 0 = no spill.")]
+        public int lakeSpillTargetCount = -1;
         [Tooltip("Gizmo overlay: main, lake outlet, tributario, confluencia y carve path del pipeline lake-first.")]
-        public bool debugDrawLakeFirstHydrologyOverlay = false;
-        [Tooltip("Auditoría boca lago→tributario: gizmos terreno vs floorH, máscara y log [TributaryCarveMouthAudit].")]
+        public bool debugDrawLakeFirstHydrologyOverlay = false;        [Tooltip("Auditoría boca lago→tributario: gizmos terreno vs floorH, máscara y log [TributaryCarveMouthAudit].")]
         public bool debugDrawTributaryCarveAudit = false;
         [Tooltip("lakeCount/maxLakeCells del autor sin caps lobby ni mapa 256.")]
         public bool ignoreLobbyHydrologyCaps = false;

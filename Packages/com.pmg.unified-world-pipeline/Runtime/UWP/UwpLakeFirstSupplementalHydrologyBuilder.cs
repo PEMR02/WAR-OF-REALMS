@@ -36,10 +36,10 @@ namespace Project.Gameplay.Map.Generator
             int tribBudget = Mathf.Max(0, config.riverCount - 1);
             int lakeSpillCount = CountAcceptedLakeSpillTributaries(graph, grid);
             int missingTribSlots = Mathf.Max(0, tribBudget - lakeSpillCount);
-            // Reservar al menos 1 slot para HeadwaterFeeder si el mapa lo pide; inland no se come el cupo.
+            // Reservar al menos N slots para Headwater según desire tipado; inland no se come el cupo.
             int headwaterDesire = ResolveHeadwaterDesire(config, minDim);
             int headwaterReserve = headwaterDesire > 0 && missingTribSlots > 0
-                ? Mathf.Min(1, missingTribSlots)
+                ? Mathf.Min(headwaterDesire, missingTribSlots)
                 : 0;
             int inlandSlots = Mathf.Max(0, missingTribSlots - headwaterReserve);
             int target = Mathf.Min(
@@ -90,7 +90,11 @@ namespace Project.Gameplay.Map.Generator
                 if (UwpLakeFirstHydrologyBuilder.TryFindOrRegisterNearbyUnownedLake(
                         grid, config, path, nearLakeCells, out int nearLakeIdx))
                 {
-                    if (UwpLakeFirstHydrologyBuilder.TryPromoteSpillForUnownedLake(
+                    int spillCap = UwpLakeFirstHydrologyBuilder.ResolveLakeSpillCap(
+                        config, Mathf.Max(0, config.riverCount - 1));
+                    int spillNow = CountAcceptedLakeSpillTributaries(graph, grid);
+                    if (spillNow < spillCap &&
+                        UwpLakeFirstHydrologyBuilder.TryPromoteSpillForUnownedLake(
                             grid,
                             config,
                             rng,
@@ -112,15 +116,22 @@ namespace Project.Gameplay.Map.Generator
                                 $"[LakeFirstSupplemental] inland→LakeSpill promote lake={nearLakeIdx} " +
                                 $"seed={config.seed} (inland path discarded)");
                         }
+
+                        continue;
+                    }
+
+                    // Cupo spill lleno o promote falló: no quemar el intento;
+                    // intentar colocar inland (o fail por PassesInlandFeederValidation).
+                    if (spillNow >= spillCap)
+                    {
+                        graph.SupplementalReport.RejectLines.Add(
+                            $"attempt={attempt} reason=near_unowned_lake_spill_cap_fallback_inland lake={nearLakeIdx} spill={spillNow}/{spillCap}");
                     }
                     else
                     {
-                        rejected++;
                         graph.SupplementalReport.RejectLines.Add(
-                            $"attempt={attempt} reason=near_unowned_lake_spill_failed lake={nearLakeIdx}");
+                            $"attempt={attempt} reason=near_unowned_lake_spill_failed_fallback_inland lake={nearLakeIdx}");
                     }
-
-                    continue;
                 }
 
                 if (!PassesInlandFeederValidation(
@@ -718,6 +729,12 @@ namespace Project.Gameplay.Map.Generator
                 if (CrossesLakeBody(path, grid))
                     continue;
 
+                if (HeadwaterPathTouchesMainRiver(grid, path, joinCell))
+                    continue;
+
+                if (JoinTooCloseToReceiverMainMouth(grid, receiverRi, joinCell, 12))
+                    continue;
+
                 var centerline = new List<Vector2>(path.Count);
                 for (int p = 0; p < path.Count; p++)
                     centerline.Add(new Vector2(path[p].x + 0.5f, path[p].y + 0.5f));
@@ -818,6 +835,12 @@ namespace Project.Gameplay.Map.Generator
                 if (grid.LakeBodyCellsPacked != null &&
                     grid.LakeBodyCellsPacked.Contains(PackCell(x, y)))
                     return false;
+                // No atravesar el Main en emergencia Manhattan.
+                if (grid.RiverCenterlinesCellSpace != null &&
+                    grid.RiverCenterlinesCellSpace.Count > 0 &&
+                    (x != join.x || y != join.y) &&
+                    CellTouchesMainRiverCenterline(grid, new Vector2Int(x, y), maxChebyshev: 0))
+                    return false;
             }
 
             if (path.Count > 0 && path[path.Count - 1] != join)
@@ -891,6 +914,12 @@ namespace Project.Gameplay.Map.Generator
                 return false;
             }
 
+            if (HeadwaterPathTouchesMainRiver(grid, path, joinCell))
+            {
+                reject = "crosses_main_river";
+                return false;
+            }
+
             int minLakeSep = ResolveHeadwaterMinSeparationFromLakeCells(config, Mathf.Min(grid.Width, grid.Height));
             // Sin InlandFeeder, el receptor suele ser LakeSpill: sep estricta ≈ nunca hay sitio.
             // Relajar distancia a lago; spill más, inland aún más (join lejos de boca lago).
@@ -932,6 +961,17 @@ namespace Project.Gameplay.Map.Generator
             {
                 reject = "join_not_on_receiver_midbody";
                 return false;
+            }
+
+            // Evitar slide de headwater hacia la boca inland↔main (overlay del troncal).
+            if (receiverIsInland)
+            {
+                int mouthSep = relaxedAngle ? 10 : 12;
+                if (JoinTooCloseToReceiverMainMouth(grid, receiverRiverIndex, joinCell, mouthSep))
+                {
+                    reject = "join_near_receiver_main_mouth";
+                    return false;
+                }
             }
 
             if (receiverRiverIndex <= 0 || grid.RiverCenterlinesCellSpace == null ||
@@ -1083,6 +1123,13 @@ namespace Project.Gameplay.Map.Generator
             float lo = relaxedAngle ? 0.26f : 0.32f;
             float hi = relaxedAngle ? 0.74f : 0.68f;
             if (along01 < lo || along01 > hi)
+                return false;
+
+            // El tip debe pertenecer al receptor, no al Main adyacente.
+            Vector2 joinF = new Vector2(joinCell.x + 0.5f, joinCell.y + 0.5f);
+            float distSq = DistanceSqToPolylineCellSpaceStatic(joinF, line);
+            float maxDist = relaxedAngle ? 2.35f : 1.85f;
+            if (distSq > maxDist * maxDist)
                 return false;
 
             // Margen Chebyshev a ambos extremos del inland.
@@ -1296,23 +1343,19 @@ namespace Project.Gameplay.Map.Generator
 
         static int CountAcceptedLakeSpillTributaries(UwpWaterGraph graph, GridSystem grid)
         {
+            // OrigenKinds es la fuente de verdad post-raster (promote puede no
+            // sincronizar graph.Tributaries al instante).
+            int fromKinds = UwpLakeFirstHydrologyBuilder.CountLakeSpillRivers(grid);
+            if (fromKinds > 0)
+                return fromKinds;
+
             int count = 0;
-            if (graph?.Tributaries != null)
+            if (graph?.Tributaries == null)
+                return 0;
+            for (int i = 0; i < graph.Tributaries.Count; i++)
             {
-                for (int i = 0; i < graph.Tributaries.Count; i++)
-                {
-                    var trib = graph.Tributaries[i];
-                    if (trib.Accepted && trib.LakeComponentIndex >= 0)
-                        count++;
-                }
-            }
-
-            if (count > 0 || grid?.RiverOriginKinds == null)
-                return count;
-
-            for (int ri = 1; ri < grid.RiverOriginKinds.Count; ri++)
-            {
-                if (grid.RiverOriginKinds[ri] == UwpTributaryOriginKind.LakeSpill)
+                var trib = graph.Tributaries[i];
+                if (trib.Accepted && trib.LakeComponentIndex >= 0)
                     count++;
             }
 
@@ -1543,6 +1586,52 @@ namespace Project.Gameplay.Map.Generator
             for (int i = 0; i < limit; i++)
             {
                 if (grid.LakeBodyCellsPacked.Contains(PackCell(path[i].x, path[i].y)))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Headwater no debe pisar/cruzar el Main antes del join (T solo al receptor inland/spill).
+        /// Última celda (join) se excluye.
+        /// </summary>
+        static bool HeadwaterPathTouchesMainRiver(
+            GridSystem grid,
+            List<Vector2Int> path,
+            Vector2Int joinCell)
+        {
+            if (grid?.RiverCenterlinesCellSpace == null ||
+                grid.RiverCenterlinesCellSpace.Count == 0 ||
+                path == null ||
+                path.Count < 3)
+                return false;
+
+            int limit = Mathf.Max(0, path.Count - 1);
+            for (int i = 0; i < limit; i++)
+            {
+                var c = path[i];
+                if (c.x == joinCell.x && c.y == joinCell.y)
+                    continue;
+                // Radio 1: pisa corredor inmediato del troncal (overlay visual).
+                if (CellTouchesMainRiverCenterline(grid, c, maxChebyshev: 1))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool CellTouchesMainRiverCenterline(GridSystem grid, Vector2Int cell, int maxChebyshev)
+        {
+            var main = grid.RiverCenterlinesCellSpace[0];
+            if (main == null || main.Count < 2)
+                return false;
+
+            for (int i = 0; i < main.Count; i++)
+            {
+                int mx = Mathf.FloorToInt(main[i].x);
+                int mz = Mathf.FloorToInt(main[i].y);
+                if (Chebyshev(cell, new Vector2Int(mx, mz)) <= maxChebyshev)
                     return true;
             }
 

@@ -601,7 +601,7 @@ namespace Project.Gameplay.Map.Generator
             LastTributaryConfluencePlanValid = false;
             int w = grid.Width;
             int h = grid.Height;
-            // Headwater: permitir cruzar corredor ocupado ligero; el filtro de join ya evita against-current.
+            // Headwater: no cruzar corredor de ríos ocupados (incluye Main).
             if (!TryPlaceTributaryProceduralHybrid(
                     grid,
                     config,
@@ -610,7 +610,7 @@ namespace Project.Gameplay.Map.Generator
                     rng,
                     riverSlot,
                     riverAttempt,
-                    avoidCrossingCorridor: false,
+                    avoidCrossingCorridor: true,
                     occupiedRiverCells,
                     logRoute: false,
                     out _,

@@ -296,10 +296,16 @@ namespace Project.Gameplay.Map
         public float globalMineralClusterRadiusCells = 3.2f;
 
         [Header("Agua (preset / generador definitivo)")]
-        [Tooltip("Número de ríos (usado por el generador cuando no hay MapGenConfig asignado o se crea desde preset).")]
+        [Tooltip("Número de ríos (main + spill + inland + headwater). Se recalcula desde cupos tipados.")]
         public int riverCount = 3;
         [Tooltip("Número de lagos.")]
         public int lakeCount = 2;
+        [Tooltip("Target LakeSpill (lago→main). -1 = auto por tamaño Lake First.")]
+        public int lakeSpillTargetCount = -1;
+        [Tooltip("Target InlandFeeder. -1 = auto.")]
+        public int inlandFeederTargetCount = -1;
+        [Tooltip("Target HeadwaterFeeder. -1 = auto.")]
+        public int headwaterFeederTargetCount = -1;
         [Tooltip("Máximo de celdas por lago (flood fill).")]
         public int maxLakeCells = 800;
 
@@ -515,6 +521,9 @@ namespace Project.Gameplay.Map
             if (runtimeMatch == null || !preferSceneHydrologyOverrides) return;
             runtimeMatch.water.riverCount = Mathf.Clamp(riverCount, 0, 8);
             runtimeMatch.water.lakeCount = Mathf.Clamp(lakeCount, 0, 12);
+            runtimeMatch.water.lakeSpillTargetCount = lakeSpillTargetCount;
+            runtimeMatch.water.inlandFeederTargetCount = inlandFeederTargetCount;
+            runtimeMatch.water.headwaterFeederTargetCount = headwaterFeederTargetCount;
             runtimeMatch.water.maxLakeCells = Mathf.Max(50, maxLakeCells);
             if (runtimeMatch.useHighLevelAlphaConfig)
             {
@@ -585,6 +594,9 @@ namespace Project.Gameplay.Map
             target.water.waterHeightRelative = waterHeightRelative;
             target.water.riverCount = riverCount;
             target.water.lakeCount = lakeCount;
+            target.water.lakeSpillTargetCount = lakeSpillTargetCount;
+            target.water.inlandFeederTargetCount = inlandFeederTargetCount;
+            target.water.headwaterFeederTargetCount = headwaterFeederTargetCount;
             target.water.maxLakeCells = maxLakeCells;
             target.water.sandShoreCells = sandShoreCells;
             target.water.surfaceOffset = waterSurfaceOffset;
@@ -882,6 +894,9 @@ namespace Project.Gameplay.Map
             waterHeightRelative = cfg.water.baseHeightNormalized;
             riverCount = cfg.water.riverCount;
             lakeCount = cfg.water.lakeCount;
+            lakeSpillTargetCount = cfg.water.lakeSpillTargetCount;
+            inlandFeederTargetCount = cfg.water.inlandFeederTargetCount;
+            headwaterFeederTargetCount = cfg.water.headwaterFeederTargetCount;
             maxLakeCells = cfg.water.maxLakeCells;
             sandShoreCells = cfg.water.sandShoreCells;
             waterSurfaceOffset = cfg.water.surfaceOffset;

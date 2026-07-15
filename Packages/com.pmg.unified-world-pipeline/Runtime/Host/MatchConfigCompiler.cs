@@ -269,6 +269,9 @@ namespace Project.Gameplay.Map.Generation
             config.regionNoiseScale = match.geography.noiseScale;
             config.riverCount = Mathf.Clamp(match.water.riverCount, 0, 8);
             config.lakeCount = Mathf.Clamp(match.water.lakeCount, 0, 12);
+            config.lakeSpillTargetCount = match.water.lakeSpillTargetCount;
+            config.inlandFeederTargetCount = match.water.inlandFeederTargetCount;
+            config.headwaterFeederTargetCount = match.water.headwaterFeederTargetCount;
             config.maxLakeCells = Mathf.Max(100, match.water.maxLakeCells);
             if (config.lakeCount > 0)
                 config.maxLakeCells = Mathf.Max(config.maxLakeCells, config.riverCount > 0 ? 480 : 320);

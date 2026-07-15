@@ -3638,19 +3638,24 @@ namespace Project.Gameplay.Map.Generator
                 meshHalf = Mathf.Max(meshHalf, mh);
             else if (TryGetUwpTributaryCarveHalfWidthWorld(grid, config, riverIndex, srcIdx, out float ch))
                 meshHalf = Mathf.Max(meshHalf, ch);
-            float mainHalf = Mathf.Max(0.01f, config.riverVisualRibbonFullWidthCellsMain * 0.5f * cellSize);
 
-            float hubWorld = Mathf.Max(meshHalf * 1.12f, mainHalf * 0.42f) + cellSize * 0.18f;
-            int hubRadius = Mathf.Max(2, Mathf.CeilToInt(hubWorld / Mathf.Max(0.01f, cellSize)));
+            // Contrato Lake First (doc): cuña compacta ≤ foamCeil / mesh×0.98.
+            // No crecer con mainHalf — generaba bandeja blanca sin ribbon.
+            const float meshOverCarve = 1.3f;
+            float foamCeil = meshHalf * (1f / Mathf.Max(1.01f, meshOverCarve));
+            float maxStamp = meshHalf * 0.98f;
+
+            float hubWorld = Mathf.Min(maxStamp, Mathf.Max(meshHalf * 0.92f, foamCeil * 1.05f) + cellSize * 0.08f);
+            int hubRadius = Mathf.Max(1, Mathf.CeilToInt(hubWorld / Mathf.Max(0.01f, cellSize)));
             StampUniformUwpFloorDisk(
                 outH, grid, null, mouth, hubRadius, floorH, fordFloorDelta, fordMul, config,
                 requireMask: false, allowWaterCarve: true, forceFullDepth: true,
                 uniformFlatChannelFloor: true, maxDistWorld: hubWorld);
 
-            float sideOff = meshHalf * 0.55f + cellSize * 0.18f;
-            float sideWorld = Mathf.Max(meshHalf * 1.05f, mainHalf * 0.38f) + cellSize * 0.16f;
-            int sideRadius = Mathf.Max(2, Mathf.CeilToInt(sideWorld / Mathf.Max(0.01f, cellSize)));
-            Vector2 behind = mouth - approach * (meshHalf * 0.22f + cellSize * 0.10f);
+            float sideOff = Mathf.Min(meshHalf * 0.42f + cellSize * 0.10f, maxStamp * 0.55f);
+            float sideWorld = Mathf.Min(maxStamp, Mathf.Max(meshHalf * 0.88f, foamCeil) + cellSize * 0.08f);
+            int sideRadius = Mathf.Max(1, Mathf.CeilToInt(sideWorld / Mathf.Max(0.01f, cellSize)));
+            Vector2 behind = mouth - approach * Mathf.Min(meshHalf * 0.18f + cellSize * 0.08f, maxStamp * 0.35f);
             for (int s = -1; s <= 1; s += 2)
             {
                 Vector2 side = behind + perp * (sideOff * s);
@@ -3660,21 +3665,23 @@ namespace Project.Gameplay.Map.Generator
                     uniformFlatChannelFloor: true, maxDistWorld: sideWorld);
             }
 
-            // Un paso corto hacia el main: cubre esquina Y sin bandeja fuera del mesh.
-            Vector2 intoMain = mouth + approach * (mainHalf * 0.18f + cellSize * 0.10f);
-            float intoWorld = Mathf.Max(meshHalf * 1.05f, mainHalf * 0.32f);
-            int intoRadius = Mathf.Max(2, Mathf.CeilToInt(intoWorld / Mathf.Max(0.01f, cellSize)));
+            // Paso corto hacia el main (solo cubre esquina Y bajo el mesh).
+            float intoStep = Mathf.Min(meshHalf * 0.22f + cellSize * 0.06f, maxStamp * 0.40f);
+            Vector2 intoMain = mouth + approach * intoStep;
+            float intoWorld = Mathf.Min(maxStamp, Mathf.Max(meshHalf * 0.85f, foamCeil));
+            int intoRadius = Mathf.Max(1, Mathf.CeilToInt(intoWorld / Mathf.Max(0.01f, cellSize)));
             StampUniformUwpFloorDisk(
                 outH, grid, null, intoMain, intoRadius, floorH, fordFloorDelta, fordMul, config,
                 requireMask: false, allowWaterCarve: true, forceFullDepth: true,
                 uniformFlatChannelFloor: true, maxDistWorld: intoWorld);
 
-            Vector2 ahead = mouth + approach * (mainHalf * 0.12f);
-            float wingWorld = Mathf.Max(meshHalf * 0.92f, mainHalf * 0.28f);
-            int wingRadius = Mathf.Max(2, Mathf.CeilToInt(wingWorld / Mathf.Max(0.01f, cellSize)));
+            float aheadStep = Mathf.Min(meshHalf * 0.12f, maxStamp * 0.28f);
+            Vector2 ahead = mouth + approach * aheadStep;
+            float wingWorld = Mathf.Min(maxStamp, Mathf.Max(meshHalf * 0.80f, foamCeil * 0.95f));
+            int wingRadius = Mathf.Max(1, Mathf.CeilToInt(wingWorld / Mathf.Max(0.01f, cellSize)));
             for (int s = -1; s <= 1; s += 2)
             {
-                Vector2 wing = ahead + perp * (sideOff * 0.70f * s);
+                Vector2 wing = ahead + perp * (sideOff * 0.55f * s);
                 StampUniformUwpFloorDisk(
                     outH, grid, null, wing, wingRadius, floorH, fordFloorDelta, fordMul, config,
                     requireMask: false, allowWaterCarve: true, forceFullDepth: true,

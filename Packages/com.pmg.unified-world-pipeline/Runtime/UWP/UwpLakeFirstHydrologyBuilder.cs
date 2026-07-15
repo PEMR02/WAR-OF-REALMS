@@ -62,7 +62,14 @@ namespace Project.Gameplay.Map.Generator
             int minFromMainEnds = Mathf.Max(4, config.riverConfluenceMinDistanceFromMainEndpointsCells);
             int maxTribSlots = Mathf.Clamp(targetRiverCount - 1, 0, MaxTributarySlots);
             int nextRiverIndex = 1;
-
+            // Cupo tipado LakeSpill: no comer slots de Inland/Headwater. Tope duro producto ≤2.
+            int spillTarget = ResolveLakeSpillCap(config, maxTribSlots);
+            int inlandDesire = config.inlandFeederTargetCount >= 0 ? Mathf.Max(0, config.inlandFeederTargetCount) : 0;
+            int headwaterDesire = config.headwaterFeederTargetCount >= 0 ? Mathf.Max(0, config.headwaterFeederTargetCount) : 0;
+            int supplementalReserve = Mathf.Min(maxTribSlots, inlandDesire + headwaterDesire);
+            int maxSpillSlots = Mathf.Min(spillTarget, Mathf.Max(0, maxTribSlots - supplementalReserve));
+            int spillsPlaced = 0;
+            int minSpillJoinSep = ResolveLakeSpillMinConfluenceSepCells(config, grid);
             grid.LakeBodyComponents = lakeComponents;
             grid.LakeComponentTributaryOwnerRiverIndex = new List<int>(lakeComponents.Count);
             for (int i = 0; i < lakeComponents.Count; i++)
@@ -132,6 +139,8 @@ namespace Project.Gameplay.Map.Generator
                 {
                     if (nextRiverIndex > maxTribSlots)
                         break;
+                    if (spillsPlaced >= maxSpillSlots)
+                        break;
 
                     int compIdx = tributaryPlacementOrder[ti].compIdx;
                     var comp = lakeComponents[compIdx];
@@ -139,6 +148,7 @@ namespace Project.Gameplay.Map.Generator
                     if (lakeNode.OwnerTributaryRiverIndex >= 0)
                         continue;
 
+                    int beforeIdx = nextRiverIndex;
                     TryPlaceTributaryForLake(
                         grid,
                         config,
@@ -161,7 +171,10 @@ namespace Project.Gameplay.Map.Generator
                         maxTribSlots,
                         lakeNode,
                         graph,
-                        confluenceWindowCells: confluenceWindow);
+                        confluenceWindowCells: confluenceWindow,
+                        minSpillJoinSepCells: minSpillJoinSep);
+                    if (nextRiverIndex > beforeIdx)
+                        spillsPlaced++;
                 }
             }
 
@@ -193,13 +206,18 @@ namespace Project.Gameplay.Map.Generator
             int maxTribSlots,
             UwpLakeGraphNode lakeNode,
             UwpWaterGraph graph,
-            int confluenceWindowCells = 4)
+            int confluenceWindowCells = 4,
+            int minSpillJoinSepCells = -1)
         {
             if (nextRiverIndex > maxTribSlots)
                 return false;
 
+            if (minSpillJoinSepCells < 0)
+                minSpillJoinSepCells = ResolveLakeSpillMinConfluenceSepCells(config, grid);
+
             var confluenceCandidates = CollectConfluenceCandidates(
-                mainCl, outlet, grid, minFromMainEnds, claimedConfluenceCells, rng, compIdx);
+                mainCl, outlet, grid, minFromMainEnds, claimedConfluenceCells, rng, compIdx,
+                minSpillJoinSepCells);
             if (confluenceCandidates.Count == 0)
             {
                 graph.Report.TributaryRejectLines.Add($"comp={compIdx} reason=confluence_no_valid_confluence");
@@ -279,6 +297,39 @@ namespace Project.Gameplay.Map.Generator
                     graph.Tributaries.Add(tribEdge);
                     graph.Report.TributariesRejected++;
                     graph.Report.TributaryRejectLines.Add($"comp={compIdx} reason=connectivity_failed");
+                    continue;
+                }
+
+                if (IsLakeSpillConfluenceTooClose(claimedConfluenceCells, confluence, minSpillJoinSepCells))
+                {
+                    tribEdge.RejectReason = "spill_join_too_close";
+                    tribEdge.Accepted = false;
+                    graph.Tributaries.Add(tribEdge);
+                    graph.Report.TributariesRejected++;
+                    graph.Report.TributaryRejectLines.Add(
+                        $"comp={compIdx} reason=spill_join_too_close cell=({confluence.x},{confluence.y}) minSep={minSpillJoinSepCells}");
+                    continue;
+                }
+
+                if (IsLakeSpillPathShoreHugging(tribEdge.PathCells, comp))
+                {
+                    tribEdge.RejectReason = "spill_shore_hugging";
+                    tribEdge.Accepted = false;
+                    graph.Tributaries.Add(tribEdge);
+                    graph.Report.TributariesRejected++;
+                    graph.Report.TributaryRejectLines.Add(
+                        $"comp={compIdx} reason=spill_shore_hugging outlet=({outlet.x},{outlet.y}) confluence=({confluence.x},{confluence.y})");
+                    continue;
+                }
+
+                if (IsLakeSpillPathMainFlanking(tribEdge.PathCells, mainCl, grid.Width, grid.Height))
+                {
+                    tribEdge.RejectReason = "spill_main_flanking";
+                    tribEdge.Accepted = false;
+                    graph.Tributaries.Add(tribEdge);
+                    graph.Report.TributariesRejected++;
+                    graph.Report.TributaryRejectLines.Add(
+                        $"comp={compIdx} reason=spill_main_flanking outlet=({outlet.x},{outlet.y}) confluence=({confluence.x},{confluence.y})");
                     continue;
                 }
 
@@ -377,6 +428,11 @@ namespace Project.Gameplay.Map.Generator
             if (grid.RiverCenterlinesCellSpace == null || grid.RiverCenterlinesCellSpace.Count == 0)
                 return false;
 
+            int spillCap = ResolveLakeSpillCap(config, Mathf.Clamp(config.riverCount - 1, 0, MaxTributarySlots));
+            int existingSpills = CountLakeSpillRivers(grid);
+            if (existingSpills >= spillCap)
+                return false;
+
             var mainCl = grid.RiverCenterlinesCellSpace[0];
             if (mainCl == null || mainCl.Count < 2)
                 return false;
@@ -398,6 +454,8 @@ namespace Project.Gameplay.Map.Generator
             int minTribCells = Mathf.Max(14, config.riverVisualMinSurfacePieceLengthCells * 2);
             int minFromMainEnds = Mathf.Max(4, config.riverConfluenceMinDistanceFromMainEndpointsCells);
             var claimed = claimedConfluenceCells ?? new HashSet<long>();
+            AppendExistingLakeSpillConfluenceClaims(grid, claimed);
+            int minSpillJoinSep = ResolveLakeSpillMinConfluenceSepCells(config, grid);
 
             return TryPlaceTributaryForLake(
                 grid,
@@ -421,7 +479,78 @@ namespace Project.Gameplay.Map.Generator
                 maxTribSlots,
                 lakeNode,
                 graph,
-                confluenceWindowCells: 10);
+                confluenceWindowCells: 10,
+                minSpillJoinSepCells: minSpillJoinSep);
+        }
+
+        /// <summary>Producto: máx 2 LakeSpill; respeta lakeSpillTargetCount si es menor.</summary>
+        public static int ResolveLakeSpillCap(MapGenConfig config, int maxTribSlots)
+        {
+            const int ProductMaxSpill = 2;
+            int soft = config != null && config.lakeSpillTargetCount >= 0
+                ? Mathf.Max(0, config.lakeSpillTargetCount)
+                : ProductMaxSpill;
+            return Mathf.Min(ProductMaxSpill, soft, Mathf.Max(0, maxTribSlots));
+        }
+
+        public static int ResolveLakeSpillMinConfluenceSepCells(MapGenConfig config, GridSystem grid)
+        {
+            int minDim = 256;
+            if (grid != null)
+                minDim = Mathf.Min(grid.Width, grid.Height);
+            else if (config != null)
+                minDim = Mathf.Min(
+                    config.gridW > 0 ? config.gridW : 256,
+                    config.gridH > 0 ? config.gridH : 256);
+            // ~20 en 256; un poco más en mapas grandes.
+            return Mathf.Clamp(Mathf.RoundToInt(minDim * 0.08f), 16, 28);
+        }
+
+        public static int CountLakeSpillRivers(GridSystem grid)
+        {
+            int n = 0;
+            if (grid?.RiverOriginKinds == null)
+                return 0;
+            for (int i = 1; i < grid.RiverOriginKinds.Count; i++)
+            {
+                if (grid.RiverOriginKinds[i] == UwpTributaryOriginKind.LakeSpill)
+                    n++;
+            }
+
+            return n;
+        }
+
+        static void AppendExistingLakeSpillConfluenceClaims(GridSystem grid, HashSet<long> claimed)
+        {
+            if (grid == null || claimed == null || grid.RiverOriginKinds == null ||
+                grid.RiverCenterlinesCellSpace == null)
+                return;
+            int n = Mathf.Min(grid.RiverOriginKinds.Count, grid.RiverCenterlinesCellSpace.Count);
+            for (int ri = 1; ri < n; ri++)
+            {
+                if (grid.RiverOriginKinds[ri] != UwpTributaryOriginKind.LakeSpill)
+                    continue;
+                var line = grid.RiverCenterlinesCellSpace[ri];
+                if (line == null || line.Count < 2)
+                    continue;
+                Vector2 p = line[line.Count - 1];
+                claimed.Add(PackCell(Mathf.FloorToInt(p.x), Mathf.FloorToInt(p.y)));
+            }
+        }
+
+        static bool IsLakeSpillConfluenceTooClose(HashSet<long> claimed, Vector2Int cell, int minSep)
+        {
+            if (claimed == null || claimed.Count == 0 || minSep <= 0)
+                return false;
+            foreach (long pk in claimed)
+            {
+                int x = (int)(pk >> 32);
+                int z = (int)(pk & 0xffffffffu);
+                if (Chebyshev(cell, new Vector2Int(x, z)) < minSep)
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -630,6 +759,7 @@ namespace Project.Gameplay.Map.Generator
                 ? config.lakeMinChebyshevDistanceFromMainRiverCells
                 : 8;
             int softLakeDist = Mathf.Max(14, Mathf.RoundToInt(minLakeDist * 0.62f));
+            int minLakeLakeSep = ResolveLakeLakeMinSeparationCells(config, grid);
 
             var candidates = new List<(HashSet<long> comp, int cells, int distMain, float score)>();
             for (int i = 0; i < all.Count; i++)
@@ -658,6 +788,8 @@ namespace Project.Gameplay.Map.Generator
                         continue;
                     if (selected.Contains(candidates[i].comp))
                         continue;
+                    if (IsLakeTooCloseToSelected(candidates[i].comp, selected, minLakeLakeSep))
+                        continue;
                     selected.Add(candidates[i].comp);
                 }
             }
@@ -668,11 +800,141 @@ namespace Project.Gameplay.Map.Generator
                 {
                     if (selected.Contains(candidates[i].comp))
                         continue;
+                    if (IsLakeTooCloseToSelected(candidates[i].comp, selected, minLakeLakeSep))
+                        continue;
                     selected.Add(candidates[i].comp);
                 }
             }
 
             return selected;
+        }
+
+        /// <summary>Producto: lagos demasiado cerca → conservar el de mejor score (no wraps spill).</summary>
+        static int ResolveLakeLakeMinSeparationCells(MapGenConfig config, GridSystem grid)
+        {
+            int minDim = 256;
+            if (grid != null)
+                minDim = Mathf.Min(grid.Width, grid.Height);
+            else if (config != null)
+                minDim = Mathf.Min(
+                    config.gridW > 0 ? config.gridW : 256,
+                    config.gridH > 0 ? config.gridH : 256);
+            // ~28 en 256; mapas grandes un poco más.
+            return Mathf.Clamp(Mathf.RoundToInt(minDim * 0.11f), 20, 40);
+        }
+
+        static bool IsLakeTooCloseToSelected(
+            HashSet<long> candidate,
+            List<HashSet<long>> selected,
+            int minSep)
+        {
+            if (candidate == null || selected == null || selected.Count == 0 || minSep <= 1)
+                return false;
+            for (int i = 0; i < selected.Count; i++)
+            {
+                if (LakesCloserThan(candidate, selected[i], minSep))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool LakesCloserThan(HashSet<long> a, HashSet<long> b, int minSep)
+        {
+            if (a == null || b == null || a.Count == 0 || b.Count == 0)
+                return false;
+            // Iterar el set más pequeño; radius Chebyshev < minSep.
+            HashSet<long> small = a.Count <= b.Count ? a : b;
+            HashSet<long> large = a.Count <= b.Count ? b : a;
+            int r = Mathf.Max(1, minSep - 1);
+            foreach (long pk in small)
+            {
+                int x = (int)(pk >> 32);
+                int z = (int)(uint)pk;
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    for (int dz = -r; dz <= r; dz++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz)) >= minSep)
+                            continue;
+                        if (large.Contains(PackCell(x + dx, z + dz)))
+                            return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Spill que contornea la orilla del lago (A* evita el body → path "abrazo").
+        /// Rechaza si demasiada fracción del tramo medio toca vecinos del body.
+        /// </summary>
+        static bool IsLakeSpillPathShoreHugging(List<Vector2Int> path, HashSet<long> lakeComp)
+        {
+            if (path == null || lakeComp == null || path.Count < 10)
+                return false;
+
+            int start = Mathf.Clamp(path.Count / 8, 2, 8);
+            int end = Mathf.Max(start + 1, path.Count - Mathf.Clamp(path.Count / 6, 3, 12));
+            int mid = end - start;
+            if (mid < 6)
+                return false;
+
+            int hug = 0;
+            for (int i = start; i < end; i++)
+            {
+                var c = path[i];
+                bool touch = false;
+                for (int ni = 0; ni < 8 && !touch; ni++)
+                {
+                    int nx = c.x + NeighborDx[ni];
+                    int nz = c.y + NeighborDz[ni];
+                    if (lakeComp.Contains(PackCell(nx, nz)))
+                        touch = true;
+                }
+
+                if (touch)
+                    hug++;
+            }
+
+            float frac = hug / (float)mid;
+            return frac >= 0.38f;
+        }
+
+        /// <summary>
+        /// Spill que corre paralelo al Main (costea) antes de girar 90° a la boca.
+        /// Rechaza paths con demasiadas celdas medias cerca del troncal.
+        /// </summary>
+        static bool IsLakeSpillPathMainFlanking(
+            List<Vector2Int> path,
+            List<Vector2> mainCl,
+            int gw,
+            int gh)
+        {
+            if (path == null || mainCl == null || path.Count < 12 || mainCl.Count < 2)
+                return false;
+
+            int start = Mathf.Clamp(path.Count / 6, 2, 10);
+            int end = Mathf.Max(start + 4, path.Count - Mathf.Clamp(path.Count / 5, 4, 16));
+            int mid = end - start;
+            if (mid < 8)
+                return false;
+
+            const int nearMainCells = 4;
+            int flanking = 0;
+            for (int i = start; i < end; i++)
+            {
+                float d = MinChebyshevPointToMain(
+                    new Vector2(path[i].x + 0.5f, path[i].y + 0.5f),
+                    mainCl,
+                    gw,
+                    gh);
+                if (d <= nearMainCells)
+                    flanking++;
+            }
+
+            return flanking / (float)mid >= 0.42f;
         }
 
         static List<HashSet<long>> BuildLakeBodyComponents(GridSystem grid)
@@ -832,7 +1094,8 @@ namespace Project.Gameplay.Map.Generator
             int minFromEnds,
             HashSet<long> claimed,
             IRng rng,
-            int compIdx)
+            int compIdx,
+            int minSpillJoinSepCells = 0)
         {
             var result = new List<(Vector2Int cell, int mainClIdx, int dist)>();
             if (mainCl == null || mainCl.Count < minFromEnds * 2 + 2 || grid == null)
@@ -851,16 +1114,19 @@ namespace Project.Gameplay.Map.Generator
                 int cx = Mathf.Clamp(Mathf.FloorToInt(p.x), 0, w - 1);
                 int cz = Mathf.Clamp(Mathf.FloorToInt(p.y), 0, h - 1);
                 long pk = PackCell(cx, cz);
-                if (claimed.Contains(pk))
+                if (claimed != null && claimed.Contains(pk))
+                    continue;
+                var cell = new Vector2Int(cx, cz);
+                if (IsLakeSpillConfluenceTooClose(claimed, cell, minSpillJoinSepCells))
                     continue;
 
-                int dist = Chebyshev(outlet, new Vector2Int(cx, cz));
+                int dist = Chebyshev(outlet, cell);
                 if (dist < minDist || dist > maxDist)
                     continue;
                 if (!IsOnMainRiverCell(cx, cz, mainCl))
                     continue;
 
-                result.Add((new Vector2Int(cx, cz), idx, dist));
+                result.Add((cell, idx, dist));
             }
 
             result.Sort((a, b) =>

@@ -118,6 +118,12 @@ namespace Project.Gameplay.Map
             [Range(-1f, 1f)] public float waterHeightRelative = -1f;
             public int riverCount = 3;
             public int lakeCount = 2;
+            [Tooltip("LakeSpill target (-1 = auto por tamaño en Lake First).")]
+            public int lakeSpillTargetCount = -1;
+            [Tooltip("InlandFeeder target (-1 = auto).")]
+            public int inlandFeederTargetCount = -1;
+            [Tooltip("HeadwaterFeeder target (-1 = auto).")]
+            public int headwaterFeederTargetCount = -1;
             public int maxLakeCells = 800;
             [Tooltip("Radio base del cauce en celdas (más ancho = menos “línea” de 1 celda).")]
             [Range(0, 6)] public int riverWidthRadiusCells = 2;

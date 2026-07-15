@@ -36,7 +36,7 @@ namespace Project.Gameplay.Map
         InputField _seedField;
         MapPreviewOverlayMode _overlayMode = MapPreviewOverlayMode.Terrain;
 
-        Text _mtnValueLabel, _riverValueLabel, _lakeValueLabel, _waterValueLabel;
+        Text _mtnValueLabel, _riverValueLabel, _lakeValueLabel, _spillValueLabel, _inlandValueLabel, _headwaterValueLabel, _waterValueLabel;
         int _waterPercentUi = 24;
 
         int _mapSizeIndex = 1;
@@ -275,6 +275,7 @@ namespace Project.Gameplay.Map
                     _mapSizeIndex = idx;
                     RefreshMapaChipVisuals();
                     PushLayoutFromUi();
+                    ApplyTypedHydrologyPresetForCurrentMapSize();
                     RefreshSummary();
                 });
             }
@@ -348,7 +349,7 @@ namespace Project.Gameplay.Map
         {
             AddSectionTitle(parent, "Terreno e hidrología");
             AddIntStepper(parent, "Montañas", 0, 12,
-                () => _gen != null ? _gen.lobbyMacroMountainMasses : 2,
+                () => _gen != null ? _gen.lobbyMacroMountainMasses : 4,
                 v =>
                 {
                     if (_gen != null)
@@ -359,19 +360,7 @@ namespace Project.Gameplay.Map
                 },
                 v => $"{v}",
                 out _mtnValueLabel);
-            AddIntStepper(parent, "Ríos", 0, 8,
-                () => _gen != null ? _gen.riverCount : 3,
-                v =>
-                {
-                    if (_gen != null)
-                    {
-                        _gen.riverCount = v;
-                        _gen.lobbyHydrologyDirty = true;
-                    }
-                },
-                v => $"{v}",
-                out _riverValueLabel);
-            AddIntStepper(parent, "Lagos", 0, 12,
+            AddIntStepper(parent, "Lagos", 0, 6,
                 () => _gen != null ? _gen.lakeCount : 2,
                 v =>
                 {
@@ -379,11 +368,53 @@ namespace Project.Gameplay.Map
                     {
                         _gen.lakeCount = v;
                         _gen.lobbyHydrologyDirty = true;
+                        SyncRiverCountFromTypedTargets();
                     }
                 },
                 v => $"{v}",
                 out _lakeValueLabel);
-            _waterPercentUi = _gen != null && _gen.waterHeightRelative >= 0f && _gen.waterHeightRelative <= 1f
+            AddIntStepper(parent, "Lake-trib", 0, 4,
+                () => _gen != null ? Mathf.Max(0, _gen.lakeSpillTargetCount) : 1,
+                v =>
+                {
+                    if (_gen != null)
+                    {
+                        _gen.lakeSpillTargetCount = v;
+                        _gen.lobbyHydrologyDirty = true;
+                        SyncRiverCountFromTypedTargets();
+                    }
+                },
+                v => $"{v}",
+                out _spillValueLabel);
+            AddIntStepper(parent, "Inland", 0, 4,
+                () => _gen != null ? Mathf.Max(0, _gen.inlandFeederTargetCount) : 1,
+                v =>
+                {
+                    if (_gen != null)
+                    {
+                        _gen.inlandFeederTargetCount = v;
+                        _gen.lobbyHydrologyDirty = true;
+                        SyncRiverCountFromTypedTargets();
+                    }
+                },
+                v => $"{v}",
+                out _inlandValueLabel);
+            AddIntStepper(parent, "Headwater", 0, 4,
+                () => _gen != null ? Mathf.Max(0, _gen.headwaterFeederTargetCount) : 1,
+                v =>
+                {
+                    if (_gen != null)
+                    {
+                        _gen.headwaterFeederTargetCount = v;
+                        _gen.lobbyHydrologyDirty = true;
+                        SyncRiverCountFromTypedTargets();
+                    }
+                },
+                v => $"{v}",
+                out _headwaterValueLabel);
+            AddLabel(parent, "MainRiver = 1 (fijo). Total ríos = 1+tribs (auto).");
+            // Mantener label oculto de compat si Refresh lo usa.
+            _riverValueLabel = null;            _waterPercentUi = _gen != null && _gen.waterHeightRelative >= 0f && _gen.waterHeightRelative <= 1f
                 ? Mathf.RoundToInt(_gen.waterHeightRelative * 100f)
                 : 24;
             AddIntStepper(parent, "Agua base %", 0, 100,
@@ -975,6 +1006,10 @@ namespace Project.Gameplay.Map
             _animalsOn = _gen.globalAnimals.y > 0;
 
             _gen.EnsureLobbyPlayerSlotsArray();
+            if (_gen.lakeSpillTargetCount < 0 ||
+                _gen.inlandFeederTargetCount < 0 ||
+                _gen.headwaterFeederTargetCount < 0)
+                ApplyTypedHydrologyPresetForCurrentMapSize();
             RefreshSliderLabels();
             RefreshMapaChipVisuals();
             RefreshPlayerSlotUi();
@@ -987,10 +1022,55 @@ namespace Project.Gameplay.Map
         {
             if (_gen == null) return;
             if (_mtnValueLabel != null) _mtnValueLabel.text = $"{_gen.lobbyMacroMountainMasses} masas";
-            if (_riverValueLabel != null) _riverValueLabel.text = $"{_gen.riverCount} ríos";
-            if (_lakeValueLabel != null) _lakeValueLabel.text = $"{_gen.lakeCount} lagos";
             float n = _waterPercentUi / 100f;
             if (_waterValueLabel != null) _waterValueLabel.text = $"{n:0.00} norm.";
+            RefreshHydrologyStepperLabels();
+        }
+
+        void ApplyTypedHydrologyPresetForCurrentMapSize()
+        {
+            if (_gen == null)
+                return;
+            int w = MapSizes[Mathf.Clamp(_mapSizeIndex, 0, MapSizes.Length - 1)];
+            UwpLakeFirstPlayPipeline.ApplyTypedHydrologyQuotaPresetToCounts(
+                w,
+                out int lakes,
+                out int spill,
+                out int inland,
+                out int headwater,
+                out int rivers);
+            _gen.lakeCount = lakes;
+            _gen.lakeSpillTargetCount = spill;
+            _gen.inlandFeederTargetCount = inland;
+            _gen.headwaterFeederTargetCount = headwater;
+            _gen.riverCount = rivers;
+            _gen.lobbyHydrologyDirty = true;
+            RefreshHydrologyStepperLabels();
+        }
+
+        void SyncRiverCountFromTypedTargets()
+        {
+            if (_gen == null)
+                return;
+            int spill = Mathf.Max(0, _gen.lakeSpillTargetCount);
+            int inland = Mathf.Max(0, _gen.inlandFeederTargetCount);
+            int hw = Mathf.Max(0, _gen.headwaterFeederTargetCount);
+            _gen.riverCount = Mathf.Clamp(
+                UwpLakeFirstPlayPipeline.ResolveRiverCountFromTypedQuotas(spill, inland, hw),
+                1,
+                8);
+            RefreshHydrologyStepperLabels();
+        }
+
+        void RefreshHydrologyStepperLabels()
+        {
+            if (_gen == null)
+                return;
+            if (_lakeValueLabel != null) _lakeValueLabel.text = $"{_gen.lakeCount}";
+            if (_spillValueLabel != null) _spillValueLabel.text = $"{Mathf.Max(0, _gen.lakeSpillTargetCount)}";
+            if (_inlandValueLabel != null) _inlandValueLabel.text = $"{Mathf.Max(0, _gen.inlandFeederTargetCount)}";
+            if (_headwaterValueLabel != null) _headwaterValueLabel.text = $"{Mathf.Max(0, _gen.headwaterFeederTargetCount)}";
+            if (_riverValueLabel != null) _riverValueLabel.text = $"{_gen.riverCount} ríos";
         }
 
         void RefreshSummary()
@@ -1009,8 +1089,11 @@ namespace Project.Gameplay.Map
                 $"Pipeline\t{RiverPipelineShortLabel(_gen.riverWaterPlayPipeline)}\n" +
                 $"Mapa\t{w} × {w}\n" +
                 $"Plazas\t{pc} ({humans} humanos · {ais} IA)\n" +
-                $"Ríos\t{_gen.riverCount}\n" +
+                $"Ríos\t{_gen.riverCount} (1 main + spill/inland/hw)\n" +
                 $"Lagos\t{_gen.lakeCount}\n" +
+                $"Lake-trib\t{Mathf.Max(0, _gen.lakeSpillTargetCount)}\n" +
+                $"Inland\t{Mathf.Max(0, _gen.inlandFeederTargetCount)}\n" +
+                $"Headwater\t{Mathf.Max(0, _gen.headwaterFeederTargetCount)}\n" +
                 $"Montañas (macro)\t{_gen.lobbyMacroMountainMasses}\n" +
                 $"Pipeline\t{RiverPipelineShortLabel(_gen.riverWaterPlayPipeline)}\n" +
                 $"Celda\t{LobbyWorldCellSizeMeters:0.0} m (fija)";

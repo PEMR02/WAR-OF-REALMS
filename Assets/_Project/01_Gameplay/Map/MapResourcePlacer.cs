@@ -501,7 +501,7 @@ namespace Project.Gameplay.Map
             int placed = 0;
             float clusterFrac = s.globalTreesClusterFraction >= 0f && s.globalTreesClusterFraction <= 1f
                 ? s.globalTreesClusterFraction
-                : 0.75f;
+                : 0.90f;
             int inClusters = Mathf.RoundToInt(treesTarget * clusterFrac);
 
             // Radio del cluster en celdas: alta densidad = radio pequeño (árboles muy juntos), baja = radio mayor

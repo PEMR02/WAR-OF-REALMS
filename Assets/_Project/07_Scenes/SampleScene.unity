@@ -696,43 +696,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 63770598}
   m_CullTransparentMesh: 1
---- !u!84 &101316212
-RenderTexture:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_Name: Minimap_RT
-  m_ImageContentsHash:
-    serializedVersion: 2
-    Hash: 00000000000000000000000000000000
-  m_IsAlphaChannelOptional: 0
-  serializedVersion: 6
-  m_Width: 256
-  m_Height: 256
-  m_AntiAliasing: 1
-  m_MipCount: -1
-  m_DepthStencilFormat: 90
-  m_ColorFormat: 4
-  m_MipMap: 0
-  m_GenerateMips: 0
-  m_SRGB: 1
-  m_UseDynamicScale: 0
-  m_UseDynamicScaleExplicit: 0
-  m_BindMS: 0
-  m_EnableCompatibleFormat: 1
-  m_EnableRandomWrite: 0
-  m_TextureSettings:
-    serializedVersion: 2
-    m_FilterMode: 1
-    m_Aniso: 0
-    m_MipBias: 0
-    m_WrapU: 1
-    m_WrapV: 1
-    m_WrapW: 1
-  m_Dimension: 2
-  m_VolumeDepth: 1
-  m_ShadowSamplingMode: 2
 --- !u!1 &119155224
 GameObject:
   m_ObjectHideFlags: 0
@@ -975,7 +938,7 @@ Camera:
     serializedVersion: 2
     m_Bits: 4294963147
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 101316212}
+  m_TargetTexture: {fileID: 689907308}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 0
@@ -1905,12 +1868,12 @@ MonoBehaviour:
   waterHeight: 1
   waterHeightRelative: -1
   maxSlope: 60
-  heightMultiplier: 8
+  heightMultiplier: 16
   noiseScale: 0.05
   noiseOctaves: 4
   noisePersistence: 0.5
   noiseLacunarity: 2
-  terrainFlatness: 0.479
+  terrainFlatness: 0.52
   alignTerrainToGrid: 1
   paintTerrainByHeight: 1
   grassLayer: {fileID: 8574412962073106934, guid: 7fcfde19b99458c49955249ce1f9571d, type: 2}
@@ -1923,9 +1886,13 @@ MonoBehaviour:
   grassPercent: 65
   dirtPercent: 20
   rockPercent: 15
-  textureBlendWidth: 0.05
+  textureBlendWidth: 0.045
+  terrainBlendSharpness: 0.55
+  grassDryLayer: {fileID: 0}
+  grassDryBlendStrength: 0.38
   sandLayer: {fileID: 8574412962073106934, guid: 346b4fb63c81fc541ab6344cf6661c3c, type: 2}
-  sandShoreCells: 3
+  sandShoreCells: 5
+  sandEdgeNoiseStrength: 1.35
   navMeshSurface: {fileID: 316680946}
   rebuildNavMeshOnGenerate: 1
   navMeshPostBakeSampleRadius: 48
@@ -1955,7 +1922,10 @@ MonoBehaviour:
   waterLayerOverride: 1
   selectionOutlineConfig: {fileID: 11400000, guid: a7f2c8e1b4d9e3468f0a2b5c3d6e9f1a, type: 2}
   mapCellSizeWorld: 2.5
-  lobbyMacroMountainMasses: 2
+  lobbyMacroMountainMasses: 4
+  lobbyMapArchetypeIndex: 0
+  lobbyHydrologyDirty: 0
+  lobbyTerrainDirty: 0
   startingVillagerPrefab: {fileID: 155500, guid: e3f5ce5af5638a44f8da5267d7ff2b4a, type: 3}
   startingVillagerUnitSO: {fileID: 11400000, guid: 7f3a2c1d9e8b4a56c0d1e2f3a4b5c6d7, type: 2}
   lobbySpawnPatternUi: 1
@@ -2027,20 +1997,20 @@ MonoBehaviour:
   goldSafe: {x: 6, y: 8}
   stoneSafe: {x: 12, y: 18}
   goldFar: {x: 8, y: 12}
-  globalTrees: {x: 1000, y: 1200}
-  globalStone: {x: 300, y: 400}
-  globalGold: {x: 80, y: 100}
+  globalTrees: {x: 720, y: 920}
+  globalStone: {x: 160, y: 220}
+  globalGold: {x: 48, y: 70}
   globalAnimals: {x: 8, y: 20}
   globalExcludeRadius: 20
   forestClustering: 1
-  clusterDensity: 0.4
+  clusterDensity: 0.72
   clusterMinSize: 40
   clusterMaxSize: 200
-  globalTreesClusterFraction: -1
+  globalTreesClusterFraction: 0.9
   preferGlobalTreesOnGrassAlphamap: 1
-  globalStoneGoldClusterFraction: 0.82
-  globalMineralClusterSize: {x: 2, y: 6}
-  globalMineralClusterRadiusCells: 3.2
+  globalStoneGoldClusterFraction: 0.92
+  globalMineralClusterSize: {x: 3, y: 6}
+  globalMineralClusterRadiusCells: 2.6
   riverCount: 4
   lakeCount: 3
   maxLakeCells: 1000
@@ -2890,6 +2860,7 @@ GameObject:
   m_Component:
   - component: {fileID: 381507880}
   - component: {fileID: 381507879}
+  - component: {fileID: 381507881}
   m_Layer: 0
   m_Name: VegetationScatter
   m_TagString: Untagged
@@ -2937,9 +2908,1736 @@ Transform:
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 1483585781}
+  - {fileID: 1738307523}
+  - {fileID: 1442730800}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &381507881
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 381507878}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 03faa39ed50bfdd48b3359491f78c8c5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Artngame.INfiniDy.InfiniGRASSManager
+  enableAbove64KMesh: 0
+  addPresetBrushes: 1
+  UseTabs: 1
+  currentTab: 0
+  basicAdvancedToggle: 0
+  leftMousePaint: 0
+  UpdateMaterials: 1
+  ApplyPresets: 1
+  noThreading: 0
+  Min_Height: -600
+  Max_Height: 6000
+  Vary_Height: 0
+  Height_control: 0
+  Min_Slope: 0
+  Max_Slope: 90
+  Vary_Slope: 0
+  Slope_control: 0
+  ShaderBasedInteract: 1
+  ShaderBInteractSpeed: 2
+  resetPlayer: 0
+  recheckPlayer: 0
+  resetInteractor: 0
+  applyInteractor: 0
+  Apply_LOD_to_all: 0
+  Interactor: {fileID: 0}
+  play_mode_grass_holder: {fileID: 0}
+  Editor_holder: {fileID: 0}
+  Scale_grabbed: 1
+  ScaleMin_grabbed: 1
+  ScalePerTypes: 0
+  ScalePerType: []
+  GrabSettingsMassPlace: 0
+  BrushSettings:
+  - min_scale: 0.22000001
+    max_scale: 0.33
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 9
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.22000001
+    max_scale: 0.44000003
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 9
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.44000003
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 10
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.55
+    max_scale: 0.82500005
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 15
+    Max_spread: 20
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.55
+    max_scale: 0.66
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 10
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.275
+    max_scale: 0.55
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 10
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.33
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 10
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.275
+    max_scale: 0.82500005
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 8
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.66
+    max_scale: 0.715
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 6
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.82500005
+    max_scale: 0.82500005
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 7
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.22000001
+    max_scale: 0.55
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 9
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 80
+    LOD_distance1: 120
+    LOD_distance2: 520
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.275
+    max_scale: 0.82500005
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 7
+    Max_spread: 9
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  - min_scale: 0.385
+    max_scale: 0.495
+    Min_density: 1
+    Max_density: 5
+    Min_spread: 4
+    Max_spread: 5
+    SpecularPower: 0
+    Cutoff_distance: 530
+    LOD_distance: 520
+    LOD_distance1: 523
+    LOD_distance2: 527
+    AmplifyWind: 0
+    WindTurbulence: 0
+    min_grass_patch_dist: 1
+    Stop_Motion_distance: 0
+    Override_density: 1
+    Override_spread: 1
+    MinAvoidDist: 0
+    MinScaleAvoidDist: 0
+    SphereCastRadius: 50
+    Grass_Fade_distance: 470
+    Collider_scale: 1
+    rayCastDist: 10
+    InteractionSpeed: 1
+    InteractSpeedThres: 0.5
+    Interaction_thres: 20
+    Max_tree_dist: 450
+    Disable_after_growth: 0
+    WhenCombinerFull: 1
+    Eliminate_original_mesh: 0
+    Interaction_offset: 2
+    RandRotMin: -360
+    RandRotMax: 360
+    RandomRot: 0
+    GroupByObject: 1
+    ParentToObject: 0
+    MoveWithObject: 0
+    AvoidOwnColl: 1
+    AdaptOnTerrain: 0
+    Max_interactive_group_members: 6
+    Max_static_group_members: 9
+    Interactive: 0
+    GridOnNormal: 1
+    enableAbove64KMesh: 0
+  GradualGrowth: 0
+  GradualRecreate: 0
+  UseDistFromPlayer: 1
+  EnableDist: 600
+  BrushTypePerSplat: 
+  SubTypePerSplat: 
+  MassPlantAreaCornerA: {fileID: 0}
+  MassPlantAreaCornerB: {fileID: 0}
+  MassPlantDensity: 10
+  WorldScale: 20
+  prev_WorldScale: 20
+  prev_brush: 0
+  prev_cam_pos: {x: 0, y: 0, z: 0}
+  AdaptOnTerrain: 0
+  AdaptOnColor: 0
+  currentTerrain: {fileID: 0}
+  Tdata: {fileID: 0}
+  Tpos: {x: 0, y: 0, z: 0}
+  ScalePerTexture: []
+  RandomRot: 0
+  RandRotMin: -360
+  RandRotMax: 360
+  GroupByObject: 1
+  ParentToObject: 0
+  MoveWithObject: 0
+  AvoidOwnColl: 1
+  PaintonTag: 0
+  Tag_based_player: 0
+  Tag_based_player_prev: 0
+  Player_tag: Player
+  Player_tag_prev: Player
+  UnGrown: 0
+  DynamicCombiners: []
+  StaticCombiners: []
+  Enable_real_time_paint: 0
+  Enable_real_time_erase: 0
+  SphereCastRadius: 15
+  MassErase: 0
+  Erasing: 0
+  Looking: 0
+  ActivateHelp: 1
+  Fences: []
+  WindTurbulence: 1
+  GridOnNormal: 1
+  rayCastDist: 10
+  MinAvoidDist: 2
+  MinScaleAvoidDist: 4
+  InteractionSpeed: 1
+  InteractSpeedThres: 0.5
+  Interaction_thres: 20
+  Max_tree_dist: 450
+  applyPerfToAll: 0
+  Disable_after_growth: 0
+  WhenCombinerFull: 1
+  Eliminate_original_mesh: 0
+  Interaction_offset: 1
+  CleanUp: 1
+  MinBranches: 2
+  enable_colliders_editor: 1
+  enable_colliders_playmode: 1
+  Min_density: 1
+  Max_density: 5
+  Min_spread: 1
+  Max_spread: 5
+  Override_density: 0
+  Override_spread: 0
+  Preview_wind: 0
+  Grow_speed: 2
+  Editor_view_dist: 300
+  autoSetEditorViewDist: 1
+  Grass_painting: 0
+  Rock_painting: 0
+  Fence_painting: 0
+  Collider_scale: 1
+  Gizmo_scale: 2
+  windzone: {fileID: 0}
+  windzoneScript: {fileID: 0}
+  AmplifyWind: 1
+  GizmosOn: 1
+  EditorCollidersOn: 0
+  ShaderWind: 1
+  TintGrass: 0
+  TintPower: 0
+  TintFrequency: 0.1
+  tintColor: {r: 1, g: 1, b: 1, a: 1}
+  SpecularPower: 1
+  Max_interactive_group_members: 6
+  Max_static_group_members: 9
+  LOD_distance: 350
+  LOD_distance1: 430
+  LOD_distance2: 460
+  Cutoff_distance: 530
+  Interactive: 0
+  ApplyInteractive: 0
+  apply_to_all: 0
+  Grass_selector: 0
+  min_grass_patch_dist: 2
+  fence_scale: 1
+  min_scale: 0.5
+  max_scale: 1
+  Fence_poles: []
+  Fence_poles_tmp: []
+  Fence_poles_midA: []
+  Fence_poles_midA_tmp: []
+  Grasses: []
+  GrassesType: 
+  GrassPrefab: {fileID: 178718, guid: 8a104f8347768eb4497e22a371131820, type: 3}
+  player: {fileID: 0}
+  FencesHolder: {fileID: 1483585779}
+  RocksHolder: {fileID: 1738307521}
+  GrassHolder: {fileID: 1442730799}
+  GrassBatchHolder: {fileID: 1218181778}
+  Grass_Fade_distance: 500
+  Stop_Motion_distance: 15
+  GrassMaterials:
+  - {fileID: 2100000, guid: a622bf7f5d739ce4db16f71493a2d6da, type: 2}
+  - {fileID: 2100000, guid: 1a08e3db6b21d7d4fa5ad4aee6ed84a3, type: 2}
+  - {fileID: 2100000, guid: cc88c7b9dcf4ddb47ae7df875429f62a, type: 2}
+  - {fileID: 2100000, guid: 5e287f6009544e649863e7d1b56bcacb, type: 2}
+  - {fileID: 2100000, guid: 7a8bdc44402110e43b11a158cd672d64, type: 2}
+  - {fileID: 2100000, guid: 1a08e3db6b21d7d4fa5ad4aee6ed84a3, type: 2}
+  - {fileID: 2100000, guid: 4c276d4214a53124b89446e18a715278, type: 2}
+  - {fileID: 2100000, guid: 0f4d15fc57fc7514fb81dcf2552d0321, type: 2}
+  - {fileID: 2100000, guid: 96545901bb4cae64896168b0da76046c, type: 2}
+  - {fileID: 2100000, guid: 7f8c137ecc94cd141b25addddbc78aa3, type: 2}
+  - {fileID: 2100000, guid: 95ade423b67fdac4d82f1edaf46bfc8a, type: 2}
+  - {fileID: 2100000, guid: 91c75bc0e58384240a1af3f54cf72670, type: 2}
+  - {fileID: 2100000, guid: 5c7bd0cf41da9164daa9fbe8f92b4253, type: 2}
+  - {fileID: 2100000, guid: 072c20f840b1f2b409a43478cad775d8, type: 2}
+  - {fileID: 2100000, guid: 398ed578035f043469a5ceaaa263a0fd, type: 2}
+  - {fileID: 2100000, guid: e277847a77a003c4aa0ae148f3995352, type: 2}
+  - {fileID: 2100000, guid: 0637116e0a842504f88b20fc31c60abb, type: 2}
+  - {fileID: 2100000, guid: 74a3c32b8e95f9341b886dafd110d5c9, type: 2}
+  - {fileID: 2100000, guid: 93621515cfb08af4a858d29e92a29071, type: 2}
+  - {fileID: 2100000, guid: fadd9028662e3a44ea6819d98ac9842a, type: 2}
+  - {fileID: 2100000, guid: f8fd533eab43a3c48af50b987bae9613, type: 2}
+  - {fileID: 2100000, guid: 721aa82a3b7c0874db5f4814a54f7a42, type: 2}
+  - {fileID: 2100000, guid: 8626db9cadf4de84babb95cc139e1d27, type: 2}
+  - {fileID: 2100000, guid: 5eff95b951ee9bc4884421d78b4a978f, type: 2}
+  - {fileID: 2100000, guid: 0b3c85d84efaa9949ac31e62eaf18ce1, type: 2}
+  - {fileID: 2100000, guid: df4241be6e3e8634fbcf4e7896d84f21, type: 2}
+  - {fileID: 2100000, guid: 4fc517885d733c046a6748fb9ba5b35a, type: 2}
+  - {fileID: 2100000, guid: d5fcff06221515f4c8f6452391020ec1, type: 2}
+  - {fileID: 2100000, guid: 3fef6da2bac883341b9af73b120ef7ba, type: 2}
+  - {fileID: 2100000, guid: 46dbcbb00e0598344a092df01c390005, type: 2}
+  - {fileID: 2100000, guid: d5f6dd75c24bade42810fda3e58d9df6, type: 2}
+  - {fileID: 2100000, guid: 0a68cc4c549a60047a847f6c096c7e39, type: 2}
+  ExtraGrassMaterials: []
+  Overide_seg_detail: 
+  GrassPrefabs:
+  - {fileID: 178718, guid: 8a104f8347768eb4497e22a371131820, type: 3}
+  - {fileID: 146500, guid: 73a4e9ce01d6c3647b9728109290e4c3, type: 3}
+  - {fileID: 178718, guid: 697d964167b23e74baa841657ba296da, type: 3}
+  - {fileID: 178718, guid: fe8a5696ad74e8e4aa2fcacf431c0c7d, type: 3}
+  - {fileID: 146500, guid: d333860a476a7a5419e84ca95b6dd934, type: 3}
+  - {fileID: 146500, guid: 3f6b4fbd91d7a5d47a269dd5b94406e5, type: 3}
+  - {fileID: 178718, guid: ec806ffb0ffcc5146b8cd59754090161, type: 3}
+  - {fileID: 146500, guid: 68aa6653a2babca4b97d19fc7a57660e, type: 3}
+  - {fileID: 178718, guid: 0260e8572ac597a4ab2a88eba994faac, type: 3}
+  - {fileID: 178718, guid: 9dde28915350cca4b9d305eb51eb0a99, type: 3}
+  - {fileID: 178718, guid: 3be2f94b0cb3784418bb87c11083de38, type: 3}
+  - {fileID: 178718, guid: 8e9ce46210db6874c84a516b0aa460ea, type: 3}
+  - {fileID: 178718, guid: a12116941f84a9b459150a56b1b9f94f, type: 3}
+  - {fileID: 146500, guid: d35c0e3bc36809f418b20cb3100c0015, type: 3}
+  - {fileID: 178718, guid: 2276685c8b28af141a2b6b3a2bd72d1f, type: 3}
+  - {fileID: 178718, guid: 6edfb8ddd7643d647967731132d34e8e, type: 3}
+  - {fileID: 178718, guid: d27ae3ee1ab57c24582a1050b5f02a24, type: 3}
+  - {fileID: 178718, guid: d699d433853a7fb49b667935bb140849, type: 3}
+  - {fileID: 178718, guid: d9f08b2f51b8237408dfc6b05363620c, type: 3}
+  - {fileID: 178718, guid: 9fc57c82f7e86e44587c1164fbbbd95d, type: 3}
+  - {fileID: 178718, guid: 080ffbdf177cba047844830bd278b8ea, type: 3}
+  - {fileID: 178718, guid: 2dcb3b4823d0647468f6f59fded193fb, type: 3}
+  - {fileID: 146500, guid: e311bd974283ce34fabe507170d91d94, type: 3}
+  - {fileID: 146500, guid: c505569f425548540bee346feee3a912, type: 3}
+  - {fileID: 146500, guid: 9a093371d5b558946829e28b5aaae5f0, type: 3}
+  - {fileID: 178718, guid: d17d59480766e574688071934eafe189, type: 3}
+  - {fileID: 178718, guid: 7e64fe58ca37a684a8cd370f54fc7bff, type: 3}
+  - {fileID: 178718, guid: fcd6b0d232d05b54799c8123fbc0ae55, type: 3}
+  - {fileID: 146500, guid: 7e0dd265ac77e224796629667e98fcfd, type: 3}
+  - {fileID: 146500, guid: 426a9df2862ff2444ab86dfcc3bd4369, type: 3}
+  - {fileID: 146500, guid: 2ce81474e002db343852562351502e3b, type: 3}
+  - {fileID: 146500, guid: aa2890685d6dd6645b9c8c8a4b0d84f3, type: 3}
+  GrassPrefabsIcons:
+  - {fileID: 2800000, guid: 42cf3abcf567c80489f56d6f684ef6b7, type: 3}
+  - {fileID: 2800000, guid: c7422633c33e6644ba42ef0eca2d42bd, type: 3}
+  - {fileID: 2800000, guid: 5cb2c0bbebe913a4280d04d539dd8c6f, type: 3}
+  - {fileID: 2800000, guid: 549654bd6a246fa429f0800633c39184, type: 3}
+  - {fileID: 2800000, guid: 15ad8f732f6a7f54094f8eddb9dbfd7d, type: 3}
+  - {fileID: 2800000, guid: 7a84179269a25e041afbb46dba97f82f, type: 3}
+  - {fileID: 2800000, guid: 2beb0fa812e180340a3c1aafb6fda7ac, type: 3}
+  - {fileID: 2800000, guid: 845787417cbd79940af26c08130bbf10, type: 3}
+  - {fileID: 2800000, guid: f53528d83980c3e43857ce828235bb5f, type: 3}
+  - {fileID: 2800000, guid: f82a6bc346ab7bc4fa0b068c8d436375, type: 3}
+  - {fileID: 2800000, guid: 270c38afdd9975746b34c16688506969, type: 3}
+  - {fileID: 2800000, guid: 003ed828ad5dc0340add9a7ed3b05f1a, type: 3}
+  - {fileID: 2800000, guid: 75da25617301e364ca9f2efca03b24bc, type: 3}
+  - {fileID: 2800000, guid: 16ffc8c1e1b571a4eb5a86f5bffbd0eb, type: 3}
+  - {fileID: 2800000, guid: f4fa252db7a540d44b8521263d04bb56, type: 3}
+  - {fileID: 2800000, guid: 785c6a1c7f803be498c14fe062075f4a, type: 3}
+  - {fileID: 2800000, guid: 0c37ee78bc72b2f42bf9f455f6c38091, type: 3}
+  - {fileID: 2800000, guid: 4e546c918aa325442a90ea786fb42c58, type: 3}
+  - {fileID: 2800000, guid: ab2ec062b18fc6445b4999c2c36e6055, type: 3}
+  - {fileID: 2800000, guid: 8a189d6af0f01794781ac89a755b12ed, type: 3}
+  - {fileID: 2800000, guid: d65f6c4db55f68146a95d9ef650c5f4e, type: 3}
+  - {fileID: 2800000, guid: 9345c6cfae814d34e8ebd8a4614a4b4d, type: 3}
+  - {fileID: 2800000, guid: 317a01c0c84f5174a8fed84f3c56609f, type: 3}
+  - {fileID: 2800000, guid: 27e208066d54ca143940279fe3bd86e2, type: 3}
+  - {fileID: 2800000, guid: 3f0acc672844b93489ed85de1754f023, type: 3}
+  - {fileID: 2800000, guid: dd17160937fc46845b1703a5cb829efb, type: 3}
+  - {fileID: 2800000, guid: 4a40076e601d9664e966c327c89bb875, type: 3}
+  - {fileID: 2800000, guid: 81c5cda441fa47e45b8d4061a321cbcc, type: 3}
+  - {fileID: 2800000, guid: 9df581114a2e97b47a5bc5bca5f85ff6, type: 3}
+  - {fileID: 2800000, guid: 979ff93b5e1ddde4a9e68a4ea71ec622, type: 3}
+  - {fileID: 2800000, guid: a1c9b57e363cfcd419a8c10eae4936b4, type: 3}
+  - {fileID: 2800000, guid: 4d5fce7e31f407940ae99200a5b4c608, type: 3}
+  RocksPrefabsIcons:
+  - {fileID: 2800000, guid: d5fbe04b6db65f54c81bd98e17f300ab, type: 3}
+  - {fileID: 2800000, guid: f536a8bce41f884489262f27f8fd2034, type: 3}
+  - {fileID: 2800000, guid: cc4f695299a2c704d9995600cbebcf03, type: 3}
+  FencePrefabsIcons:
+  - {fileID: 2800000, guid: f3ae205f71bf4bc4bbb48a3e2fbd7eca, type: 3}
+  - {fileID: 2800000, guid: bf312040dcec9a34a86f8f0e43d0c2ec, type: 3}
+  - {fileID: 2800000, guid: 579930fac33fa3f4b86c67179cc01735, type: 3}
+  - {fileID: 2800000, guid: 0ede9851f150edf468d4c9c4ada23167, type: 3}
+  GrassPrefabsNames:
+  - Medium grass (Transparent)
+  - Medium grass (Vertex)
+  - Red flowers
+  - Wheet
+  - Long grass (Vertex)
+  - Pointy grass (Vertex)
+  - White Flowers
+  - Curved grass (Vertex)
+  - Low grass (Transparent)
+  - Vines (Transparent)
+  - Brown Mushrooms (with LODs)
+  - Red Mushrooms (with LODs)
+  - Ground leaves (Transparent)
+  - Curly grass (Vertex)
+  - Stones (with LODs)
+  - Ground leaf cover (Transparent)
+  - River rocks (with LODs)
+  - Yellow grass (Transparent)
+  - Brown Ground leaves (Transparent)
+  - Moss (Transparent)
+  - Mobile grass - Shader Model 2.0 (Transparent)
+  - Pine tree
+  - Thick tall grass (Transparent - Shader Interactive)
+  - Long vertex colored (Gravity emulation)
+  - Thick tall grass (Transparent)
+  - Twist Pine Tree (with LODs)
+  - Stackable Rocks
+  - Red Tree
+  - Distant forest (Toon)
+  - Distant forest (Realistic Pine)
+  - Circular Wind Grass
+  - Daisy
+  RockPrefabs:
+  - {fileID: 146648, guid: 71109c883b2d7cc43ae3970233299679, type: 3}
+  - {fileID: 186950, guid: 8afa48dbb69c1c249847082114aa0263, type: 3}
+  - {fileID: 186950, guid: 9a07d24a236026944b99c843353f3919, type: 3}
+  FencePrefabs:
+  - {fileID: 105420, guid: 3118177511a0d9a46a18a750ea50f405, type: 3}
+  - {fileID: 105420, guid: 01608192fd63abb478438ceda40e34f6, type: 3}
+  - {fileID: 105420, guid: ad985306684b1a84cbed4d2a71362e93, type: 3}
+  - {fileID: 105420, guid: b910596589ea66e4e8e91c994ed14973, type: 3}
+  FenceMidPrefabs:
+  - {fileID: 105420, guid: e71a527f158e3514baa21eafe86fd7f9, type: 3}
+  - {fileID: 105420, guid: 877401b3899db2a44a8737fa2adf4ef3, type: 3}
+  - {fileID: 105420, guid: b19976a5eccaea345b434d6716845953, type: 3}
+  - {fileID: 105420, guid: b19976a5eccaea345b434d6716845953, type: 3}
 --- !u!1 &394607406
 GameObject:
   m_ObjectHideFlags: 0
@@ -5492,6 +7190,43 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 680710871}
   m_CullTransparentMesh: 1
+--- !u!84 &689907308
+RenderTexture:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Minimap_RT
+  m_ImageContentsHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_IsAlphaChannelOptional: 0
+  serializedVersion: 6
+  m_Width: 256
+  m_Height: 256
+  m_AntiAliasing: 1
+  m_MipCount: -1
+  m_DepthStencilFormat: 90
+  m_ColorFormat: 4
+  m_MipMap: 0
+  m_GenerateMips: 0
+  m_SRGB: 1
+  m_UseDynamicScale: 0
+  m_UseDynamicScaleExplicit: 0
+  m_BindMS: 0
+  m_EnableCompatibleFormat: 1
+  m_EnableRandomWrite: 0
+  m_TextureSettings:
+    serializedVersion: 2
+    m_FilterMode: 1
+    m_Aniso: 0
+    m_MipBias: 0
+    m_WrapU: 1
+    m_WrapV: 1
+    m_WrapW: 1
+  m_Dimension: 2
+  m_VolumeDepth: 1
+  m_ShadowSamplingMode: 2
 --- !u!1 &738470343
 GameObject:
   m_ObjectHideFlags: 0
@@ -10031,7 +11766,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 101316212}
+  m_Texture: {fileID: 689907308}
   m_UVRect:
     serializedVersion: 2
     x: 0
@@ -10793,6 +12528,37 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1196237047}
   m_CullTransparentMesh: 1
+--- !u!1 &1218181778
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1218181779}
+  m_Layer: 0
+  m_Name: GrassBatchHolder
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1218181779
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1218181778}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1240009320
 GameObject:
   m_ObjectHideFlags: 0
@@ -12092,6 +13858,37 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1436890079}
   m_CullTransparentMesh: 1
+--- !u!1 &1442730799
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1442730800}
+  m_Layer: 0
+  m_Name: Grass Holder
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1442730800
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1442730799}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 381507880}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1457218321
 GameObject:
   m_ObjectHideFlags: 0
@@ -12167,6 +13964,107 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1457218321}
   m_CullTransparentMesh: 1
+--- !u!1 &1483585779
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1483585781}
+  - component: {fileID: 1483585780}
+  m_Layer: 0
+  m_Name: Fences Holder
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1483585780
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1483585779}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5cf0270b0c7c90f43a526251cc4b6af1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Artngame.INfiniDy.ControlCombineChildrenINfiniDyGrass
+  changeLayer: 0
+  layerID: 0
+  enableAbove64KMesh: 0
+  realtime: 1
+  FollowObject: 0
+  ObjectPosInit: 0
+  look_at_direction: 0
+  GrassManager: {fileID: 0}
+  MinTranslation: 0.3
+  MinRotation: 0.3
+  Registered_initial_position: {x: 0, y: 0, z: 0}
+  Registered_initial_rotation: {x: 0, y: 0, z: 0, w: 0}
+  Registered_initial_scale: {x: 0, y: 0, z: 0}
+  Registered_paint_positions: []
+  Updated_Registered_paint_positions: []
+  Registered_paint_rotations: []
+  got_LOD_dist: 0
+  Tag_based_player: 0
+  Player_tag: Player
+  Type: 0
+  PaintedOn: {fileID: 0}
+  Save_Name: InfiniTree1
+  Save_Dir: Assets/InfiniTREE/savedMesh/
+  Added_item_count: 0
+  Added_items: []
+  Added_items_handles: []
+  Max_items: 0
+  Deactivate_hero_dist: 360
+  Deactivate_hero_offset: 5
+  Deactivate_hero_distCUT: 580
+  Deactivate_hero_dist1: 460
+  Deactivate_hero_dist2: 520
+  DeactivateLOD: 0
+  LODMaterial: {fileID: 0}
+  generateTriangleStrips: 1
+  Auto_Disable: 1
+  skip_every_N_frame: 0
+  Multithreaded: 0
+  MTmethod2: 0
+  is_moving: 0
+  doing_batching: 0
+  MakeActive: 1
+  Self_dynamic_enable: 0
+  Self_dynamic_check_rot: 0
+  Self_dynamic_check_scale: 0
+  is_active: 0
+  player: {fileID: 0}
+  Min_dist: 0.2
+  stop_self_dyn_after: 0
+  Decombine: 0
+  Decombined: 0
+  Erase_tree: 0
+  Erase_Tree_IDs: 
+  batching_initialized: 0
+  LODed: 0
+  started: 0
+  LOD_Level: 0
+--- !u!4 &1483585781
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1483585779}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 381507880}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1505489621
 GameObject:
   m_ObjectHideFlags: 0
@@ -13201,6 +15099,107 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1700703644}
   m_CullTransparentMesh: 1
+--- !u!1 &1738307521
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1738307523}
+  - component: {fileID: 1738307522}
+  m_Layer: 0
+  m_Name: Rocks Holder
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1738307522
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1738307521}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5cf0270b0c7c90f43a526251cc4b6af1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Artngame.INfiniDy.ControlCombineChildrenINfiniDyGrass
+  changeLayer: 0
+  layerID: 0
+  enableAbove64KMesh: 0
+  realtime: 1
+  FollowObject: 0
+  ObjectPosInit: 0
+  look_at_direction: 0
+  GrassManager: {fileID: 0}
+  MinTranslation: 0.3
+  MinRotation: 0.3
+  Registered_initial_position: {x: 0, y: 0, z: 0}
+  Registered_initial_rotation: {x: 0, y: 0, z: 0, w: 0}
+  Registered_initial_scale: {x: 0, y: 0, z: 0}
+  Registered_paint_positions: []
+  Updated_Registered_paint_positions: []
+  Registered_paint_rotations: []
+  got_LOD_dist: 0
+  Tag_based_player: 0
+  Player_tag: Player
+  Type: 0
+  PaintedOn: {fileID: 0}
+  Save_Name: InfiniTree1
+  Save_Dir: Assets/InfiniTREE/savedMesh/
+  Added_item_count: 0
+  Added_items: []
+  Added_items_handles: []
+  Max_items: 0
+  Deactivate_hero_dist: 360
+  Deactivate_hero_offset: 5
+  Deactivate_hero_distCUT: 580
+  Deactivate_hero_dist1: 460
+  Deactivate_hero_dist2: 520
+  DeactivateLOD: 0
+  LODMaterial: {fileID: 0}
+  generateTriangleStrips: 1
+  Auto_Disable: 1
+  skip_every_N_frame: 0
+  Multithreaded: 0
+  MTmethod2: 0
+  is_moving: 0
+  doing_batching: 0
+  MakeActive: 1
+  Self_dynamic_enable: 0
+  Self_dynamic_check_rot: 0
+  Self_dynamic_check_scale: 0
+  is_active: 0
+  player: {fileID: 0}
+  Min_dist: 0.2
+  stop_self_dyn_after: 0
+  Decombine: 0
+  Decombined: 0
+  Erase_tree: 0
+  Erase_Tree_IDs: 
+  batching_initialized: 0
+  LODed: 0
+  started: 0
+  LOD_Level: 0
+--- !u!4 &1738307523
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1738307521}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 381507880}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1749519466
 GameObject:
   m_ObjectHideFlags: 0
@@ -16258,3 +18257,4 @@ SceneRoots:
   - {fileID: 190079955}
   - {fileID: 513342318}
   - {fileID: 381507880}
+  - {fileID: 1218181779}

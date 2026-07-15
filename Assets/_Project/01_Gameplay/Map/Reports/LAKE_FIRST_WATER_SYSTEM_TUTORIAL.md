@@ -16,7 +16,22 @@ Documentos hermanos:
 
 ---
 
-## 0. Lectura rápida (30 s)
+## 0b. Cupos tipados por tamaño de mapa (lobby)
+
+| Grid | Lagos | LakeSpill (máx) | Inland | Headwater | `riverCount` |
+|------|------:|----------------:|-------:|----------:|-------------:|
+| 192 | 2 | 1 | 1 | 1 | **4** |
+| 256 | 3 | 2 | 2 | 1 | **6** |
+| 320 | 3 | 2 | 2 | 2 | **7** |
+| 384 | 3 | 2 | 2 | 2 | **7** |
+
+- MainRiver siempre = 1 (no configurable).
+- **LakeSpill ≤ 2** en todos los tamaños (calidad de juntas / evitar 2 spills a la misma boca).
+- Targets **blandos**: solo se aceptan si pasan validación.
+- Spill no come slots de inland/headwater (`lakeSpillTargetCount` + reserva).
+- Implementación: `UwpLakeFirstPlayPipeline.ResolveTypedHydrologyQuotas` / lobby steppers.
+
+---
 
 1. El **borde blanco** del material de río = intersección mesh de agua ∩ terreno tallado (carve).  
    Si falta blanco → mesh no toca el banco (mesh estrecho, carve ancho `Ceil`, o Y distinto).  
@@ -127,7 +142,7 @@ Archivo: `Packages/.../MapGenerator/RiverSurfaceMeshBuilder.cs`
 |-------------------|--------------------|
 | Cap ancho inland | `LakeFirstInlandMeshMaxHalfCells` (≈ **1.85**) + `CapLakeFirstInlandFeederHalfWidths` |
 | Tras Cap: mesh < stamp Ceil | **`SyncLakeFirstInlandMeshOverCarveAfterCap`** (obligatorio tras Cap) |
-| Foam T Inland↔Headwater | `ApplyLakeFirstInlandHeadwaterJoinMeshWiden` + `LakeFirstInlandHeadwaterJoinMeshMul` (≈ **1.20**) |
+| Foam T Inland↔Headwater | `ApplyLakeFirstInlandHeadwaterJoinMeshWiden` mul≈**1.42** + extraHalf≈0.65 + **2º pase** tras headwater; headwater boca→inland solape fuerte |
 | Headwater boca sin gancho | `StraightenTributaryMouthApproach` + first-entry + snap (sin Tuck/Append ingress) |
 | Headwater mesh≥carve | `SyncLakeFirstHeadwaterMeshToCarveMask` |
 | Spill/Inland → main cuña | `BoostLakeSpillMainJoinCarveMaskToMesh` (también inland tras Cap) |
@@ -180,7 +195,7 @@ Preferir **constantes tipadas** en `RiverSurfaceMeshBuilder` para Lake First ant
 |--|--|
 | **Se ve** | Azul cortado a canto vivo; arena/cesped asoma; “desfase en Y” en la orilla |
 | **Causa real** | Mesh no intersecta el banco (`meshHalf` &lt; radio entero del stamp, o cap sin re-sync) |
-| **Ajuste** | 1) `SyncLakeFirstInlandMeshOverCarveAfterCap` tras Cap<br>2) En T headwater: `ApplyLakeFirstInlandHeadwaterJoinMeshWiden`<br>3) No bajar `MeshOverCarveMul` por debajo ~1.2 |
+| **Ajuste** | 1) `SyncLakeFirstInlandMeshOverCarveAfterCap` tras Cap<br>2) En T headwater: `ApplyLakeFirstInlandHeadwaterJoinMeshWiden` (mul≈1.42) + **2º pase** cuando ya existe mesh headwater<br>3) Headwater→inland: `ApplyLakeFirstHeadwaterReceiverJoinMeshWiden` sin clamp 0.82 si receptor inland<br>4) No bajar `MeshOverCarveMul` por debajo ~1.2 |
 | **Archivo** | `RiverSurfaceMeshBuilder` |
 
 ### B — Charcos / tramos solo foam / path visible sin agua

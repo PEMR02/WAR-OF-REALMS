@@ -4816,29 +4816,80 @@ namespace Project.Gameplay.Map.Generator
                 return;
 
             // Orilla del canal (no el eje): primera vez que el path “toca” el main.
+            // NO usar half visual aquí: radio gordo corta contacto LATERAL (path // main) → quiebre 90°.
+            // El snap post-trim empuja la boca a la orilla visual.
             float entryRadius = Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f);
             float entryRadiusSq = entryRadius * entryRadius;
 
             int enter = -1;
             if (mainEp == cellProcessed.Count - 1)
             {
-                for (int i = 0; i < cellProcessed.Count; i++)
+                if (forceSpillJoin)
                 {
-                    if (DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line) <= entryRadiusSq)
+                    // Spill: boca = mejor acercamiento en el último ~30% (no first-hit mid-path).
+                    int tipStart = Mathf.Clamp(
+                        Mathf.RoundToInt((cellProcessed.Count - 1) * 0.70f),
+                        0,
+                        cellProcessed.Count - 2);
+                    float bestD = float.MaxValue;
+                    int bestI = -1;
+                    for (int i = tipStart; i < cellProcessed.Count; i++)
                     {
-                        enter = i;
-                        break;
+                        float d = DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line);
+                        if (d < bestD)
+                        {
+                            bestD = d;
+                            bestI = i;
+                        }
+                    }
+
+                    if (bestI >= 0 && bestD <= entryRadiusSq)
+                        enter = bestI;
+                }
+                else
+                {
+                    for (int i = 0; i < cellProcessed.Count; i++)
+                    {
+                        if (DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line) <= entryRadiusSq)
+                        {
+                            enter = i;
+                            break;
+                        }
                     }
                 }
             }
             else
             {
-                for (int i = cellProcessed.Count - 1; i >= 0; i--)
+                if (forceSpillJoin)
                 {
-                    if (DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line) <= entryRadiusSq)
+                    int tipEnd = Mathf.Clamp(
+                        Mathf.RoundToInt((cellProcessed.Count - 1) * 0.30f),
+                        1,
+                        cellProcessed.Count - 1);
+                    float bestD = float.MaxValue;
+                    int bestI = -1;
+                    for (int i = tipEnd; i >= 0; i--)
                     {
-                        enter = i;
-                        break;
+                        float d = DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line);
+                        if (d < bestD)
+                        {
+                            bestD = d;
+                            bestI = i;
+                        }
+                    }
+
+                    if (bestI >= 0 && bestD <= entryRadiusSq)
+                        enter = bestI;
+                }
+                else
+                {
+                    for (int i = cellProcessed.Count - 1; i >= 0; i--)
+                    {
+                        if (DistanceSqToPolylineCellSpace(cellProcessed[i], sampler.Line) <= entryRadiusSq)
+                        {
+                            enter = i;
+                            break;
+                        }
                     }
                 }
             }
@@ -4963,6 +5014,29 @@ namespace Project.Gameplay.Map.Generator
             }
         }
 
+        /// <summary>
+        /// Suaviza los últimos puntos hacia la boca sin forzar línea recta (evita cuña blanca 90°).
+        /// </summary>
+        static void SoftenLakeSpillMouthApproach(List<Vector2> line, int approachPts = 5)
+        {
+            if (line == null || line.Count < approachPts + 3)
+                return;
+            approachPts = Mathf.Clamp(approachPts, 3, Mathf.Min(8, line.Count - 3));
+            int tip = line.Count - 1;
+            int anchorIdx = tip - approachPts;
+            Vector2 anchor = line[anchorIdx];
+            Vector2 tipPt = line[tip];
+            if ((tipPt - anchor).sqrMagnitude < 1e-6f)
+                return;
+            for (int k = 1; k < approachPts; k++)
+            {
+                float t = k / (float)approachPts;
+                // Blend suave: conserva algo de la polilínea original (no escalera recta).
+                Vector2 lerped = Vector2.Lerp(anchor, tipPt, t);
+                line[anchorIdx + k] = Vector2.Lerp(line[anchorIdx + k], lerped, 0.55f);
+            }
+        }
+
         /// <summary>Spill/Inland→main: boca exactamente en orilla del corredor (no eje / no pin de confluencia).</summary>
         static void SnapLakeSpillMouthToMainBank(
             GridSystem grid,
@@ -5001,6 +5075,10 @@ namespace Project.Gameplay.Map.Generator
             Vector2 toAxis = bestJoin - mouth;
             float dist = toAxis.magnitude;
             float bankR = Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f);
+            // LakeSpill/Inland: alinear con half visual del Main (ApplyMainMeshOnlyWidthScale ensancha después).
+            if (UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex) ||
+                UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex))
+                bankR = Mathf.Max(bankR, ResolveMainVisualBankRadiusCells(config, sampler));
             if (dist > 1e-4f && dist > bankR)
                 line[mainIdx] = bestJoin - (toAxis / dist) * bankR;
             else if (dist <= bankR && dist > 1e-4f)
@@ -5019,6 +5097,22 @@ namespace Project.Gameplay.Map.Generator
                         line[mainIdx] = bestJoin + outward.normalized * bankR;
                 }
             }
+        }
+
+        /// <summary>
+        /// Orilla efectiva del Main en mundo de celdas tras meshOnlyMul (sampler de carve queda más estrecho).
+        /// </summary>
+        static float ResolveMainVisualBankRadiusCells(MapGenConfig config, MainRiverCorridorSampler sampler)
+        {
+            float samplerBank = sampler.RadiusCells > 0f
+                ? Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f)
+                : 1.2f;
+            if (config == null)
+                return samplerBank;
+            float half = Mathf.Max(0.75f, ResolveRiverRibbonHalfWidthCells(config, 0));
+            float meshMul = Mathf.Clamp(config.riverSurfaceMainMeshOnlyWidthMul, 1f, 2.5f);
+            float visualBank = half * meshMul * 0.92f;
+            return Mathf.Max(samplerBank, visualBank);
         }
 
         /// <summary>Tras first-entry: un solo tip corto hacia el eje del main (sin teleport a confluencia).</summary>
@@ -10291,9 +10385,29 @@ namespace Project.Gameplay.Map.Generator
             bodyRef = Mathf.Clamp(bodyRef, 0, n - 1);
             float bodyW = meshHalfWidths[bodyRef];
 
-            // Target: como confluence trib→main (parentHalf * endMul), acotado para no volver al flare 1.12×recv.
-            float targetJoin = Mathf.Max(bodyW * 1.22f, recvHalf * endMul * 0.68f);
-            targetJoin = Mathf.Clamp(targetJoin, bodyW * 1.14f, recvHalf * 0.82f);
+            // Target: hacia half del receptor (Inland). En T inland↔headwater hace falta
+            // solape fuerte en la cuña (foam); clamp 0.82×recv dejaba esquina sin orilla blanca.
+            bool recvIsInland = UwpTributaryOriginUtility.IsInlandFeeder(grid, recvRi);
+            float recvMeshHalf = recvHalf;
+            if (grid.RiverVisualSurfaces != null &&
+                recvRi >= 0 &&
+                recvRi < grid.RiverVisualSurfaces.Count &&
+                grid.RiverVisualSurfaces[recvRi] != null &&
+                grid.RiverVisualSurfaces[recvRi].HalfWidthsWorld != null &&
+                grid.RiverVisualSurfaces[recvRi].HalfWidthsWorld.Count > 0)
+            {
+                var rw = grid.RiverVisualSurfaces[recvRi].HalfWidthsWorld;
+                int mid = rw.Count / 2;
+                recvMeshHalf = Mathf.Max(recvHalf, rw[Mathf.Clamp(mid, 0, rw.Count - 1)]);
+            }
+
+            float targetJoin = recvIsInland
+                ? Mathf.Max(bodyW * 1.38f, recvMeshHalf * 0.92f, cellSize * LakeFirstHeadwaterCarveJoinMaxCells * LakeFirstHeadwaterMeshOverCarveMul)
+                : Mathf.Max(bodyW * 1.22f, recvHalf * endMul * 0.68f);
+            if (recvIsInland)
+                targetJoin = Mathf.Clamp(targetJoin, bodyW * 1.22f, Mathf.Max(recvMeshHalf * 1.08f, bodyW * 1.55f));
+            else
+                targetJoin = Mathf.Clamp(targetJoin, bodyW * 1.14f, recvHalf * 0.82f);
 
             for (int i = blendStart; i <= blendEnd; i++)
             {
@@ -10331,9 +10445,10 @@ namespace Project.Gameplay.Map.Generator
 
             bool inland = UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex);
             bool lakeSpill = UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
-            // Lake-spill→main: ensanche fuerte en boca (orilla blanca); inland ya tenía boost.
-            float bodyMul = inland ? 1.02f : (lakeSpill ? 1.14f : 1.04f);
-            float endpointMul = inland ? 1.06f : (lakeSpill ? 1.32f : 1.08f);
+            // Spill→main: boca ancha. Inland→main: acercar a spill (evita punta + puente seco);
+            // el Cap global ya estrecha el cuerpo; este target se reafirma post-Cap.
+            float bodyMul = inland ? 1.10f : (lakeSpill ? 1.14f : 1.04f);
+            float endpointMul = inland ? 1.24f : (lakeSpill ? 1.32f : 1.08f);
 
             int n = Mathf.Min(meshHalfWidths.Count, cellPath.Count);
             if (n < 4)
@@ -10353,7 +10468,8 @@ namespace Project.Gameplay.Map.Generator
             float cellSize = Mathf.Max(0.01f, grid != null ? grid.CellSizeWorld : 1f);
             float mainHalf = config.riverVisualRibbonFullWidthCellsMain * 0.5f * cellSize;
             float endMul = Mathf.Clamp(config.riverConfluenceTributaryEndWidthMul, 0.42f, 1.22f);
-            float targetJoin = Mathf.Max(bodyW * endpointMul, mainHalf * endMul * (lakeSpill ? 0.72f : 0.55f));
+            float mainJoinFactor = lakeSpill ? 0.72f : (inland ? 0.68f : 0.55f);
+            float targetJoin = Mathf.Max(bodyW * endpointMul, mainHalf * endMul * mainJoinFactor);
             targetJoin = Mathf.Min(targetJoin, mainHalf * 0.95f);
 
             for (int i = blendStart; i <= blendEnd; i++)
@@ -10424,7 +10540,10 @@ namespace Project.Gameplay.Map.Generator
                     continue;
                 float t = 1f - Mathf.Clamp01(fromJoin / 0.22f);
                 float ratio = Mathf.Lerp(0.94f, 0.985f, Mathf.SmoothStep(0f, 1f, t));
-                maskHalfWidths[i] = Mathf.Max(maskHalfWidths[i], meshHalfWidths[i] * ratio);
+                // Contrato: mask ≤ mesh×0.98 (sin sobre-carve → bandeja blanca).
+                float capped = meshHalfWidths[i] * Mathf.Min(ratio, 0.98f);
+                maskHalfWidths[i] = Mathf.Max(maskHalfWidths[i], capped);
+                maskHalfWidths[i] = Mathf.Min(maskHalfWidths[i], meshHalfWidths[i] * 0.98f);
             }
         }
 
@@ -10433,7 +10552,9 @@ namespace Project.Gameplay.Map.Generator
         /// <summary>Tope world half inland: arroyo, no spill. ~1.85 celdas @ cell=3 → ~5.5m half.</summary>
         const float LakeFirstInlandMeshMaxHalfCells = 1.85f;
         /// <summary>Tras Cap: mesh ≥ Ceil(mask)·cs · OverCarve (evita foam perdido / “desfase Y” en orilla).</summary>
-        const float LakeFirstInlandHeadwaterJoinMeshMul = 1.20f;
+        const float LakeFirstInlandHeadwaterJoinMeshMul = 1.42f;
+        /// <summary>Extra half-cells sobre el body inland en la T (cubre stamp combinado + cuña).</summary>
+        const float LakeFirstInlandHeadwaterJoinExtraHalfCells = 0.65f;
 
         static void CapLakeFirstInlandFeederHalfWidths(
             List<float> meshHalfWidths,
@@ -10535,18 +10656,36 @@ namespace Project.Gameplay.Map.Generator
                 }
 
                 float bodyW = meshHalfWidths[Mathf.Clamp(bestIdx, 0, n - 1)];
+                // Estimación half-mesh headwater en boca: el stamp lateral de la T
+                // ensancha el surco conjunto; el inland debe cubrir esa cuña.
+                float hwMouthHalfEst = cs * LakeFirstHeadwaterCarveJoinMaxCells * LakeFirstHeadwaterMeshOverCarveMul;
+                if (grid.RiverVisualSurfaces != null &&
+                    hi < grid.RiverVisualSurfaces.Count &&
+                    grid.RiverVisualSurfaces[hi] != null &&
+                    grid.RiverVisualSurfaces[hi].HalfWidthsWorld != null &&
+                    grid.RiverVisualSurfaces[hi].HalfWidthsWorld.Count > 0)
+                {
+                    var hwW = grid.RiverVisualSurfaces[hi].HalfWidthsWorld;
+                    hwMouthHalfEst = Mathf.Max(hwMouthHalfEst, hwW[hwW.Count - 1]);
+                }
+
                 float target = Mathf.Max(
                     bodyW * LakeFirstInlandHeadwaterJoinMeshMul,
+                    bodyW + cs * LakeFirstInlandHeadwaterJoinExtraHalfCells,
+                    bodyW * 0.55f + hwMouthHalfEst * 0.95f,
                     cs * (LakeFirstInlandMeshMaxHalfCells * LakeFirstInlandHeadwaterJoinMeshMul));
+
+                // Approach más corto y pico más ancho → cuña T con foam continuo.
+                float localApproach = Mathf.Min(approachWorld, cs * 14f);
 
                 float accL = 0f;
                 for (int i = bestIdx; i >= 0; i--)
                 {
                     if (i < bestIdx)
                         accL += Vector2.Distance(cellPath[i], cellPath[i + 1]);
-                    if (accL > approachWorld)
+                    if (accL > localApproach)
                         break;
-                    float t = 1f - Mathf.Clamp01(accL / Mathf.Max(1e-4f, approachWorld));
+                    float t = 1f - Mathf.Clamp01(accL / Mathf.Max(1e-4f, localApproach));
                     float desired = Mathf.Lerp(bodyW, target, Mathf.SmoothStep(0f, 1f, t));
                     meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], desired);
                 }
@@ -10556,11 +10695,24 @@ namespace Project.Gameplay.Map.Generator
                 {
                     if (i > bestIdx)
                         accR += Vector2.Distance(cellPath[i], cellPath[i - 1]);
-                    if (accR > approachWorld)
+                    if (accR > localApproach)
                         break;
-                    float t = 1f - Mathf.Clamp01(accR / Mathf.Max(1e-4f, approachWorld));
+                    float t = 1f - Mathf.Clamp01(accR / Mathf.Max(1e-4f, localApproach));
                     float desired = Mathf.Lerp(bodyW, target, Mathf.SmoothStep(0f, 1f, t));
                     meshHalfWidths[i] = Mathf.Max(meshHalfWidths[i], desired);
+                }
+
+                // Refuerzo pico local (5 pts): cuña interior asimétrica de la T.
+                const int peak = 5;
+                for (int k = -peak; k <= peak; k++)
+                {
+                    int i = bestIdx + k;
+                    if (i < 0 || i >= n)
+                        continue;
+                    float fall = 1f - Mathf.Abs(k) / (float)peak;
+                    meshHalfWidths[i] = Mathf.Max(
+                        meshHalfWidths[i],
+                        Mathf.Lerp(bodyW, target, Mathf.SmoothStep(0f, 1f, fall)));
                 }
             }
         }
@@ -10709,11 +10861,20 @@ namespace Project.Gameplay.Map.Generator
             {
                 Vector2 toAxis = bestJoin - mouth;
                 float dist = toAxis.magnitude;
-                float bankR = Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f);
+                float bankR = Mathf.Max(
+                    Mathf.Max(sampler.CoreRadiusCells * 1.05f, sampler.RadiusCells * 0.72f),
+                    ResolveMainVisualBankRadiusCells(config, sampler));
                 if (dist > 1e-4f && dist > bankR)
                     line[mainIdx] = bestJoin - (toAxis / dist) * bankR;
                 else if (dist > 1e-4f)
-                    line[mainIdx] = mouth;
+                {
+                    // Ya dentro del half visual: empujar afuera (no dejar mouth dentro de la cinta).
+                    Vector2 fromAxis = mouth - bestJoin;
+                    if (fromAxis.sqrMagnitude > 1e-8f)
+                        line[mainIdx] = bestJoin + fromAxis.normalized * bankR;
+                    else
+                        line[mainIdx] = bestJoin;
+                }
                 else
                     line[mainIdx] = bestJoin;
                 return;
@@ -14516,6 +14677,22 @@ namespace Project.Gameplay.Map.Generator
                         $"culledTris=0 overlapCulledTris={overlapCulled} reason=webfusion_main_core_overlap");
                 }
             }
+            else if (riverIndex > 0 && grid != null && config != null &&
+                     config.uwpOwnedVisualPolicy &&
+                     UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex))
+            {
+                // Cull solo núcleo duro del Main (no orilla visual): cull amplio comía
+                // media cinta del spill → carve blanco sin ribbon (todas las seeds).
+                int trisBeforeCull = tris.Count / 3;
+                int overlapCulled = CullTributaryTrianglesInsideMainRiverSurface(
+                    verts, tris, grid, config, riverIndex, mapOrigin, cellSizeWorld);
+                if (logCap)
+                {
+                    Debug.Log(
+                        $"[RiverSurfaceTriangleCull] riverIndex={riverIndex} trisBefore={trisBeforeCull} trisAfter={tris.Count / 3} " +
+                        $"culledTris=0 overlapCulledTris={overlapCulled} reason=lakefirst_spill_main_core_only");
+                }
+            }
             else if (riverIndex > 0 && IsLakeEmissaryRiverIndex(grid, riverIndex))
             {
                 int trisBeforeCull = tris.Count / 3;
@@ -15744,10 +15921,20 @@ namespace Project.Gameplay.Map.Generator
         {
             if (riverIndex <= 0 || verts == null || tris == null || tris.Count < 6)
                 return 0;
-            if (IsLakeEmissaryRiverIndex(grid, riverIndex))
+            bool lakeSpill = UwpTributaryOriginUtility.UsesLakeSpillVisualTreatment(grid, riverIndex);
+            // Emissary legacy: no cull. LakeSpill Lake First: sí (cinta visual Main).
+            if (IsLakeEmissaryRiverIndex(grid, riverIndex) && !lakeSpill)
                 return 0;
             if (!TryBuildMainRiverCorridorSampler(grid, config, cellSize, out MainRiverCorridorSampler sampler))
                 return 0;
+
+            float cullRadius = sampler.CoreRadiusCells;
+            if (lakeSpill)
+            {
+                // Solo núcleo del troncal (evitar comer la aproximación spill→orilla).
+                cullRadius = Mathf.Max(0.55f, sampler.CoreRadiusCells * 0.82f);
+            }
+            float cullRadiusSq = cullRadius * cullRadius;
 
             float invCs = 1f / Mathf.Max(1e-5f, cellSize);
             int before = tris.Count / 3;
@@ -15766,9 +15953,8 @@ namespace Project.Gameplay.Map.Generator
                 Vector2 pc = (p0 + p1 + p2) / 3f;
                 float distSqCentroid = DistanceSqToPolylineCellSpace(pc, sampler.Line);
 
-                // Solo quitar triángulos cuyo centro cae bajo el núcleo del troncal (solape real).
-                // No recortar la aproximación final: eso dejaba huecos con la línea debug visible.
-                if (distSqCentroid <= sampler.CoreRadiusSq)
+                // Solo quitar triángulos cuyo centro cae bajo el núcleo del troncal.
+                if (distSqCentroid <= cullRadiusSq)
                     continue;
 
                 kept.Add(i0);
@@ -16065,6 +16251,7 @@ namespace Project.Gameplay.Map.Generator
                 TrimEmissaryHookTailIfRegressesFromMain(grid, config, finalCenterline, riverIndex);
                 TrimRiverAtFirstMainCorridorContact(grid, config, finalCenterline, riverIndex, forceSpillJoin: true);
                 SnapLakeSpillMouthToMainBank(grid, config, finalCenterline, riverIndex);
+                SoftenLakeSpillMouthApproach(finalCenterline, approachPts: 5);
                 if (config.uwpOwnedVisualPolicy || config.debugHydrologyNetwork)
                 {
                     Debug.Log(
@@ -16141,12 +16328,16 @@ namespace Project.Gameplay.Map.Generator
                     TrimRiverAtFirstMainCorridorContact(
                         grid, config, finalCenterline, riverIndex, forceSpillJoin: true);
                     SnapLakeSpillMouthToMainBank(grid, config, finalCenterline, riverIndex);
+                    // Sin Straighten: con tip ya en orilla, lerp forzada recreaba cuña blanca / 90°.
+                    SoftenLakeSpillMouthApproach(finalCenterline, approachPts: 5);
                 }
                 else if (inlandFeeder && finalCenterline != null && finalCenterline.Count >= 3)
                 {
                     TrimRiverAtFirstMainCorridorContact(
                         grid, config, finalCenterline, riverIndex, forceSpillJoin: false);
                     SnapLakeSpillMouthToMainBank(grid, config, finalCenterline, riverIndex);
+                    // Tip radial solo mueve 1 vértice → cinta ~90° / punta. Enderezar enfoque como headwater.
+                    StraightenTributaryMouthApproach(finalCenterline, approachPts: 7);
                 }
                 else if (!inlandFeeder && finalCenterline != null && finalCenterline.Count >= 3)
                     TrimTributaryAtClosestMainApproach(grid, config, finalCenterline, riverIndex);
@@ -16204,6 +16395,18 @@ namespace Project.Gameplay.Map.Generator
                     trib.CenterlineCells = new List<Vector2>(finalCenterline);
                     break;
                 }
+            }
+
+            // Spill: tip funcional = orilla (no pin hacia eje). Carve usa FinalCenterline;
+            // alinear RiverCenterlinesCellSpace evita desync residual pin→bandeja blanca.
+            if (lakeSpillFeeder &&
+                grid?.RiverCenterlinesCellSpace != null &&
+                riverIndex > 0 &&
+                riverIndex < grid.RiverCenterlinesCellSpace.Count &&
+                finalCenterline != null &&
+                finalCenterline.Count >= 2)
+            {
+                grid.RiverCenterlinesCellSpace[riverIndex] = new List<Vector2>(finalCenterline);
             }
 
             return true;
@@ -16906,6 +17109,9 @@ namespace Project.Gameplay.Map.Generator
                         if (UwpTributaryOriginUtility.IsInlandFeeder(grid, riverIndex))
                         {
                             CapLakeFirstInlandFeederHalfWidths(meshHalfWidths, maskHalfWidths, cellSize);
+                            // Cap aplana la boca; restaurar ensanche inland→main (mismo patrón que T headwater).
+                            ApplyLakeFirstMainJoinApproachMeshWiden(
+                                grid, meshHalfWidths, cellProcessed, config, riverIndex);
                             BoostLakeSpillMainJoinCarveMaskToMesh(
                                 meshHalfWidths, maskHalfWidths, cellProcessed, grid, config, riverIndex);
                             SyncLakeFirstInlandMeshOverCarveAfterCap(
@@ -16968,6 +17174,30 @@ namespace Project.Gameplay.Map.Generator
                 }
 
                 surfaces.Add(surface);
+            }
+
+            // Inland se construye ANTES que Headwater: sin un 2º pase la T mid-body
+            // no ve half reales del headwater → cuña interior sin foam (seed tip. 177848631).
+            if (lakeFirstPipeline && config.uwpOwnedVisualPolicy && surfaces != null)
+            {
+                grid.RiverVisualSurfaces = surfaces;
+                float csPass = Mathf.Max(0.01f, grid.CellSizeWorld);
+                for (int ri = 1; ri < surfaces.Count; ri++)
+                {
+                    if (!UwpTributaryOriginUtility.IsInlandFeeder(grid, ri))
+                        continue;
+                    var surf = surfaces[ri];
+                    if (surf?.FinalCenterlineCells == null ||
+                        surf.HalfWidthsWorld == null ||
+                        surf.MaskHalfWidthsWorld == null ||
+                        surf.FinalCenterlineCells.Count < 4 ||
+                        surf.HalfWidthsWorld.Count != surf.FinalCenterlineCells.Count)
+                        continue;
+                    ApplyLakeFirstInlandHeadwaterJoinMeshWiden(
+                        grid, surf.HalfWidthsWorld, surf.FinalCenterlineCells, config, ri, csPass);
+                    SyncLakeFirstInlandMeshOverCarveAfterCap(
+                        surf.HalfWidthsWorld, surf.MaskHalfWidthsWorld, csPass);
+                }
             }
 
             int maskBefore = CountMaskTrue(combinedMask, w, h);

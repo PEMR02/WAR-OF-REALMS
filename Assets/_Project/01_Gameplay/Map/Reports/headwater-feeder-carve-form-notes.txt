@@ -66,7 +66,9 @@ Headwater gancho U (prev): first-entry receptor + snap; sin tuck/append;
 Headwater→Inland: join solo mid-body (along 32–68%, sep ≥10 a ambos tips);
      ángulo T 55–125°; straighten mouth approach (sin colita).
 Inland→Main carve: bedDepth ≈ main (1.05×); boost mask join tras Cap.
-Inland↔Headwater foam: post-Cap SyncMeshOverCarve (Ceil stamp) + widen T mid-body.
+Inland↔Headwater foam: post-Cap SyncMeshOverCarve (Ceil stamp) + widen T mid-body
+     mul≈1.42 + 2º pase (inland ve half headwater) + headwater boca solape inland.
+     Seed repro: 177848631 (cuña inferior T sin blanco).
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------

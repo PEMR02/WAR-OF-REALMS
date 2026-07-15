@@ -1,0 +1,28 @@
+Lake First Hydro Batch
+Generated: 2026-07-14 13:13
+count=20 grid~=256x256 pipeline=LakeFirstHydrology
+cols: seed lakes spill inland hw rivers minSpillJoinDist closeSpillPair(<12) notes
+---
+6326234	lakes=4	spill=4	inland=0	hw=0	rivers=5	minJoin=31,0	close=0	dual_spill_ok_sep
+36233	lakes=2	spill=2	inland=2	hw=1	rivers=6	minJoin=32,0	close=0	dual_spill_ok_sep
+123735	lakes=3	spill=3	inland=1	hw=1	rivers=6	minJoin=17,0	close=0	dual_spill_ok_sep
+274851	lakes=2	spill=1	inland=2	hw=1	rivers=5	minJoin=-1,0	close=0	ok
+552933	lakes=2	spill=2	inland=1	hw=1	rivers=5	minJoin=159,0	close=0	dual_spill_ok_sep
+926305	lakes=3	spill=2	inland=1	hw=1	rivers=5	minJoin=49,0	close=0	dual_spill_ok_sep
+1394967	lakes=5	spill=2	inland=2	hw=1	rivers=6	minJoin=60,0	close=0	dual_spill_ok_sep
+4565896	lakes=4	spill=2	inland=2	hw=1	rivers=6	minJoin=112,0	close=0	dual_spill_ok_sep
+2744865	lakes=3	spill=2	inland=1	hw=1	rivers=5	minJoin=118,0	close=0	dual_spill_ok_sep
+3800319	lakes=3	spill=2	inland=2	hw=1	rivers=6	minJoin=14,0	close=0	dual_spill_ok_sep
+104635	lakes=3	spill=3	inland=1	hw=1	rivers=6	minJoin=31,0	close=0	dual_spill_ok_sep
+713765	lakes=4	spill=3	inland=1	hw=1	rivers=6	minJoin=47,0	close=0	dual_spill_ok_sep
+696405	lakes=3	spill=2	inland=2	hw=1	rivers=6	minJoin=77,0	close=0	dual_spill_ok_sep
+1166901	lakes=3	spill=2	inland=2	hw=1	rivers=6	minJoin=2,0	close=1	CLOSE_SPILL_JOIN
+4679718	lakes=2	spill=2	inland=2	hw=1	rivers=6	minJoin=123,0	close=0	dual_spill_ok_sep
+2773875	lakes=3	spill=3	inland=1	hw=1	rivers=6	minJoin=2,0	close=1	CLOSE_SPILL_JOIN
+3720297	lakes=3	spill=1	inland=2	hw=1	rivers=5	minJoin=-1,0	close=0	ok
+5031255	lakes=3	spill=0	inland=2	hw=1	rivers=4	minJoin=-1,0	close=0	ok
+6184095	lakes=3	spill=2	inland=2	hw=1	rivers=6	minJoin=197,0	close=0	dual_spill_ok_sep
+8034069	lakes=3	spill=1	inland=2	hw=1	rivers=5	minJoin=-1,0	close=0	ok
+---
+evaluated=20/20 dualSpillSeeds=16 closeSpillPairs=2
+Interpret: closeSpillPairs = 2 LakeSpill desembocando a <12 celdas (caso '2 ríos en lago'). No corrijáis solo peores 5 sin mirar tasa close/dual.

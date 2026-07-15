@@ -1,0 +1,70 @@
+RTS Map Quality Report
+Contract: v1-worldMeters
+Generated: 2026-07-14 12:43
+UWP profile: applyUwpHydrologyProfile=True
+Rivers/Lakes (scene): 4/3
+Hard pass: 0/20
+
+--- TOP ---
+ 1. seed=36233 total=48,0 hydro=25,0 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,24
+    lipP50=128,4cm lipP90=363,4cm stepP95=57,5cm crossMed=119,5cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; lipP90=363cm; stepP95=58cm; mask≠logical;
+ 2. seed=552933 total=46,0 hydro=23,6 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,16
+    lipP50=127,3cm lipP90=350,9cm stepP95=62,9cm crossMed=205,6cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; confluencias=4; lipP90=351cm; stepP95=63cm; mask≠logical;
+ 3. seed=3720297 total=46,0 hydro=23,6 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,16
+    lipP50=199,5cm lipP90=393,4cm stepP95=54,5cm crossMed=299,3cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; confluencias=4; lipP90=393cm; stepP95=55cm; mask≠logical;
+ 4. seed=713765 total=46,0 hydro=23,6 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,20
+    lipP50=128,3cm lipP90=343,6cm stepP95=54,8cm crossMed=123,6cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; confluencias=4; lipP90=344cm; stepP95=55cm; mask≠logical;
+ 5. seed=2773875 total=46,0 hydro=23,6 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,23
+    lipP50=126,7cm lipP90=347,5cm stepP95=52,0cm crossMed=123,6cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; confluencias=4; lipP90=347cm; stepP95=52cm; mask≠logical;
+ 6. seed=5031255 total=44,1 hydro=22,2 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,21
+    lipP50=199,1cm lipP90=387,5cm stepP95=58,2cm crossMed=206,8cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; confluencias=3; lipP90=388cm; stepP95=58cm; mask≠logical;
+ 7. seed=2744865 total=44,1 hydro=22,2 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,21
+    lipP50=125,9cm lipP90=343,5cm stepP95=57,2cm crossMed=121,5cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; confluencias=3; lipP90=344cm; stepP95=57cm; mask≠logical;
+ 8. seed=4679718 total=44,1 hydro=22,2 carve=6,0 hard=0
+    rivers=6/6 tribs=5 IoU=0,23
+    lipP50=74,1cm lipP90=534,6cm stepP95=61,6cm crossMed=277,4cm
+    waterVisual=2,76m carveCfg=0,140m mainW=7,86c
+    ríos=6; tribs=5; confluencias=3; lipP90=535cm; stepP95=62cm; mask≠logical;
+
+--- ALL (sorted) ---
+  1. seed=36233 total=48,0 hydro=25,0 carve=6,0 rivers=6/6 tribs=5 lipP90=363,4cm stepP95=57,5cm crossMed=119,5cm hard=0
+  2. seed=552933 total=46,0 hydro=23,6 carve=6,0 rivers=6/6 tribs=5 lipP90=350,9cm stepP95=62,9cm crossMed=205,6cm hard=0
+  3. seed=3720297 total=46,0 hydro=23,6 carve=6,0 rivers=6/6 tribs=5 lipP90=393,4cm stepP95=54,5cm crossMed=299,3cm hard=0
+  4. seed=713765 total=46,0 hydro=23,6 carve=6,0 rivers=6/6 tribs=5 lipP90=343,6cm stepP95=54,8cm crossMed=123,6cm hard=0
+  5. seed=2773875 total=46,0 hydro=23,6 carve=6,0 rivers=6/6 tribs=5 lipP90=347,5cm stepP95=52,0cm crossMed=123,6cm hard=0
+  6. seed=5031255 total=44,1 hydro=22,2 carve=6,0 rivers=6/6 tribs=5 lipP90=387,5cm stepP95=58,2cm crossMed=206,8cm hard=0
+  7. seed=2744865 total=44,1 hydro=22,2 carve=6,0 rivers=6/6 tribs=5 lipP90=343,5cm stepP95=57,2cm crossMed=121,5cm hard=0
+  8. seed=4679718 total=44,1 hydro=22,2 carve=6,0 rivers=6/6 tribs=5 lipP90=534,6cm stepP95=61,6cm crossMed=277,4cm hard=0
+  9. seed=4565896 total=42,1 hydro=20,8 carve=6,0 rivers=6/6 tribs=5 lipP90=362,0cm stepP95=53,1cm crossMed=123,6cm hard=0
+ 10. seed=104635 total=42,1 hydro=20,8 carve=6,0 rivers=6/6 tribs=5 lipP90=347,6cm stepP95=67,6cm crossMed=222,3cm hard=0
+ 11. seed=696405 total=42,1 hydro=20,8 carve=6,0 rivers=6/6 tribs=5 lipP90=393,4cm stepP95=44,1cm crossMed=170,0cm hard=0
+ 12. seed=123735 total=41,0 hydro=20,0 carve=6,0 rivers=5/6 tribs=4 lipP90=386,5cm stepP95=67,6cm crossMed=148,9cm hard=0
+ 13. seed=1166901 total=40,9 hydro=25,0 carve=2,7 rivers=6/6 tribs=5 lipP90=369,7cm stepP95=54,2cm crossMed=4,9cm hard=0
+ 14. seed=274851 total=36,9 hydro=22,2 carve=2,7 rivers=6/6 tribs=5 lipP90=358,7cm stepP95=53,6cm crossMed=4,9cm hard=0
+ 15. seed=1394967 total=36,9 hydro=22,2 carve=2,7 rivers=6/6 tribs=5 lipP90=381,7cm stepP95=65,1cm crossMed=4,9cm hard=0
+ 16. seed=6326234 total=35,6 hydro=16,1 carve=6,0 rivers=4/6 tribs=3 lipP90=393,4cm stepP95=54,1cm crossMed=148,9cm hard=0
+ 17. seed=8034069 total=35,6 hydro=16,1 carve=6,0 rivers=4/6 tribs=3 lipP90=384,4cm stepP95=75,4cm crossMed=198,3cm hard=0
+ 18. seed=6184095 total=35,0 hydro=20,8 carve=2,7 rivers=6/6 tribs=5 lipP90=347,5cm stepP95=67,7cm crossMed=4,9cm hard=0
+ 19. seed=926305 total=31,4 hydro=18,2 carve=2,7 rivers=5/6 tribs=4 lipP90=356,2cm stepP95=56,9cm crossMed=4,9cm hard=0
+ 20. seed=3800319 total=29,5 hydro=20,0 carve=0,7 rivers=5/6 tribs=4 lipP90=411,1cm stepP95=60,0cm crossMed=4,2cm hard=0
