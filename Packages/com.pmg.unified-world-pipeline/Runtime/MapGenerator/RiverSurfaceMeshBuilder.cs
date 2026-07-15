@@ -16333,8 +16333,11 @@ namespace Project.Gameplay.Map.Generator
                 }
                 else if (inlandFeeder && finalCenterline != null && finalCenterline.Count >= 3)
                 {
+                    // La confluencia Inland fue validada en la cola. Buscar el mejor contacto
+                    // en el último 30% evita que un meandro del main cerca del origen recorte
+                    // todo el feeder a un solo punto.
                     TrimRiverAtFirstMainCorridorContact(
-                        grid, config, finalCenterline, riverIndex, forceSpillJoin: false);
+                        grid, config, finalCenterline, riverIndex, forceSpillJoin: true);
                     SnapLakeSpillMouthToMainBank(grid, config, finalCenterline, riverIndex);
                     // Tip radial solo mueve 1 vértice → cinta ~90° / punta. Enderezar enfoque como headwater.
                     StraightenTributaryMouthApproach(finalCenterline, approachPts: 7);

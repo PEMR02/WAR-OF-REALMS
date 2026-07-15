@@ -177,6 +177,10 @@ namespace Project.Gameplay.Map.Editor
         static int _hydroBatchOk;
         static int _hydroBatchDualSpill;
         static int _hydroBatchClosePairs;
+        static int _hydroBatchQualityPass;
+        static int _hydroBatchSparsePass;
+        static int _hydroBatchHardFail;
+        static int _hydroBatchQualityStops;
         static string _hydroBatchPath;
 
         public static void StartHydroLakeFirstBatchAsync(RTSMapGenerator rts, int count)
@@ -190,13 +194,17 @@ namespace Project.Gameplay.Map.Editor
             _hydroBatchOk = 0;
             _hydroBatchDualSpill = 0;
             _hydroBatchClosePairs = 0;
+            _hydroBatchQualityPass = 0;
+            _hydroBatchSparsePass = 0;
+            _hydroBatchHardFail = 0;
+            _hydroBatchQualityStops = 0;
             _hydroBatchPath = Path.Combine(ReportDir, "lake-first-hydro-batch-20-post-spill-cap.txt");
             _hydroBatchLines = new List<string>(count + 32)
             {
                 "Lake First Hydro Batch",
                 $"Generated: {System.DateTime.Now:yyyy-MM-dd HH:mm}",
                 $"count={count} grid~={rts.width}x{rts.height} pipeline={rts.riverWaterPlayPipeline}",
-                "cols: seed lakes spill inland hw rivers minSpillJoinDist closeSpillPair(<12) notes",
+                "cols: seed status hardIssues lakes spill inland hw rivers/reference minSpillJoinDist closeSpillPair(<12) qualityStop surface notes",
                 "---"
             };
             _hydroBatchRunning = true;
@@ -267,9 +275,8 @@ namespace Project.Gameplay.Map.Editor
 
                     if (kind == UwpTributaryOriginKind.LakeSpill)
                     {
-                        var line = grid.RiverCenterlinesCellSpace[ri];
-                        if (line != null && line.Count >= 2)
-                            spillEnds.Add(line[line.Count - 1]);
+                        if (TryGetConfluenceCell(grid, ri, out Vector2 join))
+                            spillEnds.Add(join);
                     }
                 }
             }
@@ -307,11 +314,22 @@ namespace Project.Gameplay.Map.Editor
             if (close)
                 _hydroBatchClosePairs++;
 
-            string notes = close ? "CLOSE_SPILL_JOIN" : (spill >= 2 ? "dual_spill_ok_sep" : "ok");
+            HydroQualityAudit audit = AuditHydroQuality(grid, cfg);
+            if (audit.status == "PASS_QUALITY") _hydroBatchQualityPass++;
+            else if (audit.status == "PASS_SPARSE") _hydroBatchSparsePass++;
+            else _hydroBatchHardFail++;
+
+            bool qualityStop = grid?.LakeFirstWaterGraph?.SupplementalReport?.QualityStoppedBeforeForcedFallback == true;
+            if (qualityStop)
+                _hydroBatchQualityStops++;
+
+            string notes = close ? "PREF_CLOSE_SPILL_JOIN" : (spill >= 2 ? "dual_spill_ok_sep" : "ok");
             _hydroBatchLines.Add(
-                $"{seed}\tlakes={lakes}\tspill={spill}\tinland={inland}\thw={hw}\t" +
-                $"rivers={(grid?.RiverCenterlinesCellSpace?.Count ?? 0)}\t" +
-                $"minJoin={(minJoin < 0f ? -1f : minJoin):F1}\tclose={(close ? 1 : 0)}\t{notes}");
+                $"{seed}\tstatus={audit.status}\thard={audit.hardIssues}\t" +
+                $"lakes={lakes}\tspill={spill}\tinland={inland}\thw={hw}\t" +
+                $"rivers={(grid?.RiverCenterlinesCellSpace?.Count ?? 0)}/{cfg.riverCount}\t" +
+                $"minJoin={(minJoin < 0f ? -1f : minJoin):F1}\tclose={(close ? 1 : 0)}\t" +
+                $"qualityStop={(qualityStop ? 1 : 0)}\tsurface={audit.surfaceSummary}\t{notes}");
 
             Object.DestroyImmediate(cfg);
         }
@@ -325,8 +343,10 @@ namespace Project.Gameplay.Map.Editor
             _hydroBatchLines.Add(
                 $"evaluated={_hydroBatchOk}/{_hydroBatchSeeds.Count} dualSpillSeeds={_hydroBatchDualSpill} closeSpillPairs={_hydroBatchClosePairs}");
             _hydroBatchLines.Add(
-                "Interpret: closeSpillPairs = 2 LakeSpill desembocando a <12 celdas (caso '2 ríos en lago'). " +
-                "No corrijáis solo peores 5 sin mirar tasa close/dual.");
+                $"quality: pass={_hydroBatchQualityPass} sparse={_hydroBatchSparsePass} hardFail={_hydroBatchHardFail} qualityStops={_hydroBatchQualityStops}");
+            _hydroBatchLines.Add(
+                "Interpret: PASS_SPARSE es válido: el motor detuvo fallbacks forzados y priorizó integridad. " +
+                "close=1 es preferencia (<12), no hard fail. MeshBuilt/CarveApplied se auditan en generación completa, no en este batch headless.");
 
             File.WriteAllText(_hydroBatchPath, string.Join("\n", _hydroBatchLines) + "\n");
             AssetDatabase.Refresh();
@@ -337,6 +357,7 @@ namespace Project.Gameplay.Map.Editor
 
             Debug.Log(
                 $"[HydroBatch] DONE evaluated={_hydroBatchOk}/{_hydroBatchSeeds.Count} " +
+                $"quality={_hydroBatchQualityPass} sparse={_hydroBatchSparsePass} hardFail={_hydroBatchHardFail} " +
                 $"dualSpill={_hydroBatchDualSpill} closePairs={_hydroBatchClosePairs} → {_hydroBatchPath}");
 
             _hydroBatchRts = null;
@@ -401,6 +422,158 @@ namespace Project.Gameplay.Map.Editor
 
             _hydroBatchRts = null;
             _hydroBatchLines = null;
+        }
+
+        struct HydroQualityAudit
+        {
+            public string status;
+            public string hardIssues;
+            public string surfaceSummary;
+        }
+
+        static HydroQualityAudit AuditHydroQuality(GridSystem grid, MapGenConfig cfg)
+        {
+            var issues = new List<string>(8);
+            int riverCount = grid?.RiverCenterlinesCellSpace?.Count ?? 0;
+            if (grid == null || cfg == null || riverCount == 0)
+                issues.Add("NO_NETWORK");
+
+            bool surfaceOk = grid != null && cfg != null &&
+                RiverSurfaceMeshBuilder.FreezeUwpFinalWaterVisualSurfaceCache(grid, cfg);
+            if (!surfaceOk)
+                issues.Add("SURFACE_CACHE");
+
+            int skipped = 0;
+            for (int ri = 0; ri < riverCount; ri++)
+            {
+                var line = grid.RiverCenterlinesCellSpace[ri];
+                if (line == null || line.Count < 2)
+                {
+                    issues.Add($"R{ri}_CENTERLINE");
+                    continue;
+                }
+
+                bool overlapFound = false;
+                for (int i = 0; i < line.Count && !overlapFound; i++)
+                {
+                    if (!IsFinite(line[i]))
+                    {
+                        issues.Add($"R{ri}_NONFINITE");
+                        break;
+                    }
+
+                    for (int j = 0; j < i - 3; j++)
+                    {
+                        if ((line[i] - line[j]).sqrMagnitude < 0.0225f)
+                        {
+                            issues.Add($"R{ri}_SELF_OVERLAP");
+                            overlapFound = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (ri > 0 && grid.RiverReceiverIds != null && ri < grid.RiverReceiverIds.Count)
+                {
+                    int receiver = grid.RiverReceiverIds[ri];
+                    if (receiver < 0 || receiver >= riverCount || receiver == ri)
+                        issues.Add($"R{ri}_RECEIVER");
+                    else if (!TryGetConfluenceCell(grid, ri, out Vector2 join))
+                        issues.Add($"R{ri}_NO_CONFLUENCE");
+                    // Headless no construye los patches de unión de la malla. El grafo valida
+                    // conectividad aquí; continuidad geométrica se audita en generación completa.
+                }
+
+                if (!surfaceOk || grid.RiverVisualSurfaces == null || ri >= grid.RiverVisualSurfaces.Count)
+                    continue;
+                var surface = grid.RiverVisualSurfaces[ri];
+                if (surface == null)
+                    issues.Add($"R{ri}_NO_SURFACE");
+                else if (surface.Skipped)
+                {
+                    skipped++;
+                    issues.Add($"R{ri}_SURFACE_SKIPPED");
+                }
+                else if (surface.FinalCenterlineCells == null || surface.FinalCenterlineCells.Count < 2 ||
+                         surface.HalfWidthsWorld == null || surface.HalfWidthsWorld.Count != surface.FinalCenterlineCells.Count ||
+                         surface.MaskHalfWidthsWorld == null || surface.MaskHalfWidthsWorld.Count != surface.FinalCenterlineCells.Count)
+                    issues.Add($"R{ri}_SURFACE_SHAPE");
+            }
+
+            bool sparse = cfg != null && riverCount < Mathf.Max(1, cfg.riverCount);
+            return new HydroQualityAudit
+            {
+                status = issues.Count > 0 ? "FAIL_HARD" : (sparse ? "PASS_SPARSE" : "PASS_QUALITY"),
+                hardIssues = issues.Count > 0 ? string.Join(",", issues) : "none",
+                surfaceSummary = surfaceOk ? $"ok(skipped={skipped})" : "cache_fail"
+            };
+        }
+
+        static bool IsFinite(Vector2 p) =>
+            !float.IsNaN(p.x) && !float.IsInfinity(p.x) &&
+            !float.IsNaN(p.y) && !float.IsInfinity(p.y);
+
+        static bool TryGetConfluenceCell(GridSystem grid, int tributaryRiverIndex, out Vector2 join)
+        {
+            join = default;
+            var graph = grid?.LakeFirstWaterGraph;
+            if (graph?.Tributaries != null)
+            {
+                for (int i = 0; i < graph.Tributaries.Count; i++)
+                {
+                    UwpTributaryGraphEdge edge = graph.Tributaries[i];
+                    if (edge == null || !edge.Accepted || !edge.ConnectivityValid ||
+                        edge.RiverIndex != tributaryRiverIndex)
+                        continue;
+                    join = new Vector2(
+                        edge.MainRiverConfluenceCell.x + 0.5f,
+                        edge.MainRiverConfluenceCell.y + 0.5f);
+                    return true;
+                }
+            }
+
+            if (grid?.RiverConfluences == null)
+                return false;
+            for (int i = 0; i < grid.RiverConfluences.Count; i++)
+            {
+                RiverConfluenceNode node = grid.RiverConfluences[i];
+                if (!node.Valid || node.TributaryRiverIndex != tributaryRiverIndex)
+                    continue;
+                join = new Vector2(node.Cell.x + 0.5f, node.Cell.y + 0.5f);
+                return true;
+            }
+            return false;
+        }
+
+        [MenuItem("PMG/Map/RTS/Audit Current Hydro Mesh-Carve", false, 23)]
+        public static void AuditCurrentHydroMeshCarveMenu()
+        {
+            var rts = Object.FindFirstObjectByType<RTSMapGenerator>();
+            GridSystem grid = rts != null ? rts.TryGetLogicalGrid() : null;
+            if (grid?.RiverVisualSurfaces == null || !grid.RiverVisualSurfaceCacheFrozen)
+            {
+                Debug.LogWarning("[HydroRuntimeAudit] DEFERRED: genera el mapa completo antes de auditar mesh/carve.");
+                return;
+            }
+
+            int pass = 0;
+            var failures = new List<string>();
+            for (int ri = 0; ri < grid.RiverVisualSurfaces.Count; ri++)
+            {
+                var s = grid.RiverVisualSurfaces[ri];
+                if (s == null || s.Skipped)
+                {
+                    failures.Add($"R{ri}:surface_missing_or_skipped");
+                    continue;
+                }
+                if (!s.MeshBuilt || !s.CarveApplied || s.LengthMesh <= 0f || s.LengthCarve <= 0f)
+                    failures.Add($"R{ri}:mesh={s.MeshBuilt},carve={s.CarveApplied},Lm={s.LengthMesh:F1},Lc={s.LengthCarve:F1}");
+                else
+                    pass++;
+            }
+
+            string status = failures.Count == 0 ? "PASS_QUALITY" : "FAIL_MESH_CARVE";
+            Debug.Log($"[HydroRuntimeAudit] {status} pass={pass}/{grid.RiverVisualSurfaces.Count} issues={string.Join(";", failures)}");
         }
     }
 }

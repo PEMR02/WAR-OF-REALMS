@@ -4161,6 +4161,26 @@ namespace Project.Gameplay.Map.Generator
 
             UwpTributaryOriginUtility.SetOrigin(grid, riverIdBeforeAdd, UwpTributaryOriginKind.LakeSpill);
 
+            // Lake-first valida esta ruta contra el colector principal. Persistir el receptor
+            // aquí evita que una fase dendrítica posterior lo infiera por proximidad y lo
+            // reasigne accidentalmente a otro tributario.
+            RiverDendriticUtility.EnsureRiverMetadata(grid);
+            const int receiverId = 0;
+            var role = RiverDendriticUtility.RoleForPlacement(
+                riverIdBeforeAdd,
+                receiverId,
+                path.Count,
+                grid.RiverCenterlinesCellSpace[0]?.Count ?? 0);
+            while (grid.RiverDendriticRoles.Count <= riverIdBeforeAdd)
+                grid.RiverDendriticRoles.Add(RiverDendriticRole.SecondaryTributary);
+            while (grid.RiverReceiverIds.Count <= riverIdBeforeAdd)
+                grid.RiverReceiverIds.Add(0);
+            while (grid.RiverWidthRatioToMain.Count <= riverIdBeforeAdd)
+                grid.RiverWidthRatioToMain.Add(1f);
+            grid.RiverDendriticRoles[riverIdBeforeAdd] = role;
+            grid.RiverReceiverIds[riverIdBeforeAdd] = receiverId;
+            grid.RiverWidthRatioToMain[riverIdBeforeAdd] = RiverDendriticUtility.WidthRatioToMain(config, role);
+
             config.riverWidthRadiusCells = visualRiverRadiusCells;
             return added;
         }

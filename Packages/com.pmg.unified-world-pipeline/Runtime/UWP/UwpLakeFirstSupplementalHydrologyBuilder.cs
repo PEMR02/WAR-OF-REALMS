@@ -398,6 +398,22 @@ namespace Project.Gameplay.Map.Generator
                     ref attempt);
             }
 
+            // El target es referencial: tras agotar Inland estricto y relajado no degradar
+            // la topología solo para completar el contador.
+            if (accepted < target && config.uwpHydrologyQualityFirst)
+            {
+                graph.SupplementalReport.QualityStoppedBeforeForcedFallback = true;
+                graph.SupplementalReport.QualityStopReason = inlandOnly.Count > 0
+                    ? "headwater_no_quality_inland_candidate"
+                    : "headwater_no_quality_receiver_candidate";
+                graph.SupplementalReport.RejectLines.Add(
+                    $"headwater quality_stop accepted={accepted} target={target} " +
+                    $"reason={graph.SupplementalReport.QualityStopReason}");
+                graph.SupplementalReport.HeadwaterFeedersAccepted = accepted;
+                graph.SupplementalReport.HeadwaterFeedersRejected = rejected;
+                return;
+            }
+
             if (accepted < target && inlandOnly.Count > 0 && receivers.Count > inlandOnly.Count)
             {
                 // Último recurso: spill receptors con ángulo relajado.
@@ -1693,6 +1709,14 @@ namespace Project.Gameplay.Map.Generator
                 $"headwaterRejected={r.HeadwaterFeedersRejected}");
             if (r.HeadwaterFeederTarget > 0 && r.HeadwaterFeedersAccepted == 0)
             {
+                if (r.QualityStoppedBeforeForcedFallback)
+                {
+                    Debug.Log(
+                        $"[LakeFirstSupplemental] seed={config.seed} quality stop " +
+                        $"accepted=0 target={r.HeadwaterFeederTarget} reason={r.QualityStopReason}");
+                    return;
+                }
+
                 Debug.LogWarning(
                     $"[LakeFirstSupplemental] seed={config.seed} headwater none accepted " +
                     $"(target={r.HeadwaterFeederTarget} rejected={r.HeadwaterFeedersRejected})");

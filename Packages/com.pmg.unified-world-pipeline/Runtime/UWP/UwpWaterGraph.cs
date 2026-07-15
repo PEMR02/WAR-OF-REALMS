@@ -190,6 +190,8 @@ namespace Project.Gameplay.Map.Generator
         public int HeadwaterFeederTarget;
         public int HeadwaterFeedersAccepted;
         public int HeadwaterFeedersRejected;
+        public bool QualityStoppedBeforeForcedFallback;
+        public string QualityStopReason;
         public readonly List<string> RejectLines = new List<string>();
     }
 }

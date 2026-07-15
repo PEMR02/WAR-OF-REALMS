@@ -105,6 +105,8 @@ namespace Project.Gameplay.Map.Generator
         [Range(6, 64)] public int inlandFeederSourceDecorStoneCount = 10;
         [Tooltip("HeadwaterFeeder: -1 = auto; 0 = desactivar cauces cortos trib→trib.")]
         public int headwaterFeederTargetCount = -1;
+        [Tooltip("Quality-first: el conteo es referencial. Si los pases normal/relajado sobre Inland no encuentran una unión válida, conserva una red menor en vez de forzar receptores LakeSpill o rutas de emergencia.")]
+        public bool uwpHydrologyQualityFirst = true;
         [Tooltip("LakeSpill (lake-tributary): -1 = auto / sin tope tipado; N = máx. tributarios lago→main. 0 = no spill.")]
         public int lakeSpillTargetCount = -1;
         [Tooltip("Gizmo overlay: main, lake outlet, tributario, confluencia y carve path del pipeline lake-first.")]
